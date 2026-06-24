@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.3.2 */ 
+/* --- Hold Course --- v0.4.0 */ 
 'use strict';
 
 const {
@@ -9,6 +9,7 @@ const {
   Notice,
   Menu,
   setIcon,
+  FuzzySuggestModal,
 } = require('obsidian');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -143,6 +144,18 @@ function formatDateLong(isoDate) {
   if (!isoDate) return '';
   const d = new Date(isoDate + 'T12:00:00');
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function resourceStatusLabel(status) {
+  if (status === 'done') return 'Done';
+  if (status === 'in-progress') return 'In Progress';
+  return 'Unread';
+}
+
+function cycleResourceStatus(status) {
+  if (status === 'unread') return 'in-progress';
+  if (status === 'in-progress') return 'done';
+  return 'unread';
 }
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
@@ -379,6 +392,42 @@ class HoldCoursePlugin extends Plugin {
     const cls = this.findClass(semesterId, classId);
     return cls ? (cls.exams || []).find(e => e.id === examId) : null;
   }
+
+  // ─── Resource helpers ──────────────────────────────────────────────────────
+
+  addResource(semesterId, data) {
+    const sem = this.data.semesters.find(s => s.id === semesterId);
+    if (!sem) return null;
+    if (!sem.resources) sem.resources = [];
+    const resource = {
+      id: generateId(),
+      title: data.title.trim(),
+      author: (data.author || '').trim(),
+      type: (data.type || '').trim(),
+      classIds: data.classIds || [],
+      status: data.status || 'unread',
+      vaultLink: (data.vaultLink || '').trim(),
+      url: (data.url || '').trim(),
+      notes: '',
+    };
+    sem.resources.push(resource);
+    return resource;
+  }
+
+  updateResource(semesterId, resourceId, updates) {
+    const resource = this.findResource(semesterId, resourceId);
+    if (resource) Object.assign(resource, updates);
+  }
+
+  deleteResource(semesterId, resourceId) {
+    const sem = this.data.semesters.find(s => s.id === semesterId);
+    if (sem) sem.resources = (sem.resources || []).filter(r => r.id !== resourceId);
+  }
+
+  findResource(semesterId, resourceId) {
+    const sem = this.data.semesters.find(s => s.id === semesterId);
+    return sem ? (sem.resources || []).find(r => r.id === resourceId) : null;
+  }
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -392,6 +441,7 @@ class HoldCourseView extends ItemView {
     this.currentLectureId = null;
     this.currentAssignmentId = null;
     this.currentExamId = null;
+    this.currentResourceId = null;
     this.currentTab = 'Lectures';
     // Track open dropdown cleanup
     this._semDropEl = null;
@@ -405,7 +455,7 @@ class HoldCourseView extends ItemView {
   async onOpen() { this.render(); }
   async onClose() { this._closeSemDrop(); }
 
-  navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null) {
+  navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null, resourceId = null) {
     // Reset tab when moving to a different class
     if (screen === 'class' && classId !== this.currentClassId) {
       this.currentTab = 'Lectures';
@@ -415,6 +465,7 @@ class HoldCourseView extends ItemView {
     this.currentLectureId = lectureId;
     this.currentAssignmentId = assignmentId;
     this.currentExamId = examId;
+    this.currentResourceId = resourceId;
     this.render();
   }
 
@@ -441,6 +492,7 @@ class HoldCourseView extends ItemView {
       case 'lecture':      this._renderLectureDetail(content); break;
       case 'assignment':   this._renderAssignmentDetail(content); break;
       case 'exam':         this._renderExamDetail(content); break;
+      case 'resource':     this._renderResourceDetail(content); break;
       case 'assignments':  this._renderAssignmentsStub(content); break;
       case 'calendar':     this._renderCalendarStub(content); break;
       default:             this._renderDashboard(content);
@@ -544,6 +596,22 @@ class HoldCourseView extends ItemView {
         });
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
         bc.createSpan({ cls: 'hc-bc-link', text: 'Exam' });
+      }
+    }
+
+    if (this.screen === 'resource' && this.currentClassId && this.currentResourceId) {
+      const cls = sem.classes.find(c => c.id === this.currentClassId);
+      if (cls) {
+        bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
+        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: cls.code });
+        clsBtn.style.color = getColor(cls.colorIndex).accent;
+        clsBtn.style.fontWeight = '500';
+        clsBtn.addEventListener('click', () => {
+          this.currentTab = 'Library';
+          this.navigate('class', cls.id);
+        });
+        bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
+        bc.createSpan({ cls: 'hc-bc-link', text: 'Resource' });
       }
     }
   }
@@ -865,11 +933,8 @@ class HoldCourseView extends ItemView {
       this._renderAssignmentList(content, sem, cls, color);
     } else if (this.currentTab === 'Exams') {
       this._renderExamList(content, sem, cls, color);
-    } else {
-      const placeholder = content.createDiv('hc-placeholder');
-      const icon = placeholder.createDiv({ cls: 'hc-placeholder-icon' });
-      setIcon(icon, 'construction');
-      placeholder.createDiv({ cls: 'hc-placeholder-text', text: `${this.currentTab} coming in a future build.` });
+    } else if (this.currentTab === 'Library') {
+      this._renderLibraryList(content, sem, cls, color);
     }
   }
 
@@ -1451,6 +1516,231 @@ class HoldCourseView extends ItemView {
     gradeInput.value = exam.grade || '';
     gradeInput.addEventListener('blur', () => {
       exam.grade = gradeInput.value;
+      this.plugin.save();
+    });
+  }
+
+  // ─── Library list ─────────────────────────────────────────────────────────
+
+  _renderLibraryList(content, sem, cls, color) {
+    const resources = [...(sem.resources || [])];
+    const sortKey = sem.librarySort || 'alpha-asc';
+
+    const statusOrder = { 'in-progress': 0, 'unread': 1, 'done': 2 };
+    if (sortKey === 'alpha-asc') {
+      resources.sort((a, b) => a.title.localeCompare(b.title));
+    } else if (sortKey === 'alpha-desc') {
+      resources.sort((a, b) => b.title.localeCompare(a.title));
+    } else if (sortKey === 'status') {
+      resources.sort((a, b) => {
+        const sa = statusOrder[a.status] ?? 1;
+        const sb = statusOrder[b.status] ?? 1;
+        return sa !== sb ? sa - sb : a.title.localeCompare(b.title);
+      });
+    } else if (sortKey === 'class') {
+      resources.sort((a, b) => {
+        const ca = a.classIds[0] ? (sem.classes.find(c => c.id === a.classIds[0])?.code || '\uFFFF') : '\uFFFF';
+        const cb = b.classIds[0] ? (sem.classes.find(c => c.id === b.classIds[0])?.code || '\uFFFF') : '\uFFFF';
+        return ca !== cb ? ca.localeCompare(cb) : a.title.localeCompare(b.title);
+      });
+    }
+
+    const sortLabels = { 'alpha-asc': 'A–Z', 'alpha-desc': 'Z–A', 'status': 'By status', 'class': 'By class' };
+    const sortCycle  = { 'alpha-asc': 'alpha-desc', 'alpha-desc': 'status', 'status': 'class', 'class': 'alpha-asc' };
+    const sortIcons  = { 'alpha-asc': 'arrow-up-narrow-wide', 'alpha-desc': 'arrow-down-narrow-wide', 'status': 'layers', 'class': 'bookmark' };
+
+    const controlRow = content.createDiv('hc-resource-controls');
+
+    const sortBtn = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const sortIcon = sortBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(sortIcon, sortIcons[sortKey]);
+    sortBtn.createSpan({ text: sortLabels[sortKey] });
+    sortBtn.addEventListener('click', () => {
+      sem.librarySort = sortCycle[sortKey];
+      this.plugin.save();
+      this.render();
+    });
+
+    const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
+    const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(addIcon, 'plus');
+    addBtn.createSpan({ text: 'Add resource' });
+    addBtn.addEventListener('click', () => {
+      new AddResourceModal(this.app, this.plugin, sem.id, sem.classes, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+
+    const list = content.createDiv('hc-resource-list');
+
+    if (resources.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'No resources yet. Add your first one above.' });
+    } else {
+      for (const resource of resources) {
+        this._renderLibraryRow(list, resource, sem, cls);
+      }
+    }
+  }
+
+  _renderLibraryRow(container, resource, sem, cls) {
+    const row = container.createDiv('hc-resource-row');
+
+    const main = row.createDiv('hc-resource-main');
+    main.createDiv({ cls: 'hc-resource-title', text: resource.title });
+    if (resource.author) {
+      main.createDiv({ cls: 'hc-resource-author', text: resource.author });
+    }
+
+    const right = row.createDiv('hc-resource-right');
+
+    if (resource.classIds && resource.classIds.length > 0) {
+      const chipsEl = right.createDiv('hc-resource-class-chips');
+      for (const classId of resource.classIds) {
+        const c = sem.classes.find(x => x.id === classId);
+        if (c) {
+          const chip = chipsEl.createSpan({ cls: 'hc-resource-class-chip', text: c.code });
+          chip.style.color = getColor(c.colorIndex).accent;
+          chip.style.background = getColor(c.colorIndex).bg;
+        }
+      }
+    }
+
+    const statusEl = right.createDiv({ cls: `hc-resource-status hc-resource-status--${resource.status || 'unread'}` });
+    statusEl.setText(resourceStatusLabel(resource.status || 'unread'));
+
+    row.addEventListener('click', () => this.navigate('resource', cls.id, null, null, null, resource.id));
+  }
+
+  // ─── Resource detail ──────────────────────────────────────────────────────
+
+  _renderResourceDetail(content) {
+    const sem = this.plugin.getCurrentSemester();
+    if (!sem) { this.navigate('dashboard'); return; }
+    const cls = sem.classes.find(c => c.id === this.currentClassId);
+    if (!cls) { this.navigate('dashboard'); return; }
+    const resource = this.plugin.findResource(sem.id, this.currentResourceId);
+    if (!resource) { this.currentTab = 'Library'; this.navigate('class', cls.id); return; }
+
+    const color = getColor(cls.colorIndex);
+
+    // Back button
+    const backBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
+    const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(backIcon, 'arrow-left');
+    backBtn.createSpan({ text: cls.code });
+    backBtn.addEventListener('click', () => {
+      this.currentTab = 'Library';
+      this.navigate('class', cls.id);
+    });
+
+    // Title
+    content.createDiv({ cls: 'hc-lecture-detail-title', text: resource.title });
+
+    // Author
+    if (resource.author) {
+      content.createDiv({ cls: 'hc-resource-detail-author', text: resource.author });
+    }
+
+    // Actions row
+    const actionsRow = content.createDiv('hc-lecture-detail-actions');
+
+    const statusBtn = actionsRow.createEl('button', { cls: `hc-lecture-status-btn hc-lecture-status-btn--${resource.status || 'unread'}` });
+    statusBtn.setText(resourceStatusLabel(resource.status || 'unread'));
+    statusBtn.addEventListener('click', () => {
+      resource.status = cycleResourceStatus(resource.status || 'unread');
+      this.plugin.save();
+      this.render();
+    });
+
+    const editBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const editIcon = editBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(editIcon, 'pencil');
+    editBtn.createSpan({ text: 'Edit' });
+    editBtn.addEventListener('click', () => {
+      new EditResourceModal(this.app, this.plugin, sem.id, sem.classes, resource, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+
+    const deleteBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm hc-btn--danger' });
+    const deleteIcon = deleteBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(deleteIcon, 'trash-2');
+    deleteBtn.createSpan({ text: 'Delete' });
+    deleteBtn.addEventListener('click', () => {
+      new DeleteResourceModal(this.app, this.plugin, sem.id, resource, () => {
+        this.plugin.save();
+        this.currentTab = 'Library';
+        this.navigate('class', cls.id);
+      }).open();
+    });
+
+    // Classes
+    if (resource.classIds && resource.classIds.length > 0) {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Classes' });
+      const chipsRow = content.createDiv('hc-resource-detail-chips');
+      for (const classId of resource.classIds) {
+        const c = sem.classes.find(x => x.id === classId);
+        if (c) {
+          const chip = chipsRow.createSpan({ cls: 'hc-resource-class-chip', text: c.code });
+          chip.style.color = getColor(c.colorIndex).accent;
+          chip.style.background = getColor(c.colorIndex).bg;
+        }
+      }
+    }
+
+    // Type
+    if (resource.type) {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Type' });
+      content.createDiv({ cls: 'hc-resource-detail-type', text: resource.type });
+    }
+
+    // Sources
+    const hasVault = !!resource.vaultLink;
+    const hasUrl = !!resource.url;
+
+    if (hasVault || hasUrl) {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Sources' });
+      const sourcesEl = content.createDiv('hc-resource-sources');
+
+      if (hasVault) {
+        const vaultRow = sourcesEl.createDiv('hc-resource-source-row');
+        const vaultIcon = vaultRow.createSpan({ cls: 'hc-resource-source-icon' });
+        setIcon(vaultIcon, 'file');
+        const vaultInfo = vaultRow.createDiv('hc-resource-source-info');
+        vaultInfo.createDiv({ cls: 'hc-resource-source-label', text: 'Vault link' });
+        vaultInfo.createDiv({ cls: 'hc-resource-source-path', text: resource.vaultLink });
+        const openIcon = vaultRow.createSpan({ cls: 'hc-resource-source-open' });
+        setIcon(openIcon, 'external-link');
+        vaultRow.addEventListener('click', () => {
+          this.app.workspace.openLinkText(resource.vaultLink, '', false);
+        });
+      }
+
+      if (hasUrl) {
+        const urlRow = sourcesEl.createDiv('hc-resource-source-row');
+        const urlIcon = urlRow.createSpan({ cls: 'hc-resource-source-icon' });
+        setIcon(urlIcon, 'globe');
+        const urlInfo = urlRow.createDiv('hc-resource-source-info');
+        urlInfo.createDiv({ cls: 'hc-resource-source-label', text: 'URL' });
+        urlInfo.createDiv({ cls: 'hc-resource-source-path', text: resource.url });
+        const openIcon = urlRow.createSpan({ cls: 'hc-resource-source-open' });
+        setIcon(openIcon, 'external-link');
+        urlRow.addEventListener('click', () => {
+          window.open(resource.url, '_blank');
+        });
+      }
+    }
+
+    // Notes
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Notes' });
+    const textarea = content.createEl('textarea', { cls: 'hc-lecture-notes' });
+    textarea.value = resource.notes || '';
+    textarea.placeholder = 'Add notes…';
+    textarea.addEventListener('blur', () => {
+      resource.notes = textarea.value;
       this.plugin.save();
     });
   }
@@ -2205,6 +2495,243 @@ class DeleteExamModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
+// ─── Vault file suggester ─────────────────────────────────────────────────────
+
+class VaultLinkSuggestModal extends FuzzySuggestModal {
+  constructor(app, onChoose) {
+    super(app);
+    this.onChoose = onChoose;
+    this.setPlaceholder('Type to search vault files…');
+  }
+
+  getItems() {
+    return this.app.vault.getFiles();
+  }
+
+  getItemText(file) {
+    return file.path;
+  }
+
+  onChooseItem(file, evt) {
+    this.onChoose(file.path);
+  }
+}
+
+// ─── Resource modals ──────────────────────────────────────────────────────────
+
+class AddResourceModal extends Modal {
+  constructor(app, plugin, semesterId, classes, onSave) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.classes = classes;
+    this.onSave = onSave;
+    this.formData = { title: '', author: '', type: '', classIds: [], status: 'unread', vaultLink: '', url: '' };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add resource' });
+
+    new Setting(contentEl).setName('Title').addText(text => {
+      text.setPlaceholder('The Jewish Study Bible').onChange(v => this.formData.title = v);
+      text.inputEl.focus();
+    });
+
+    new Setting(contentEl).setName('Author').addText(text => {
+      text.setPlaceholder('Author name').onChange(v => this.formData.author = v);
+    });
+
+    new Setting(contentEl).setName('Type').addText(text => {
+      text.setPlaceholder('Book, PDF, Handout…').onChange(v => this.formData.type = v);
+    });
+
+    new Setting(contentEl).setName('Status').addDropdown(drop => {
+      drop.addOption('unread', 'Unread');
+      drop.addOption('in-progress', 'In Progress');
+      drop.addOption('done', 'Done');
+      drop.setValue(this.formData.status);
+      drop.onChange(v => this.formData.status = v);
+    });
+
+    if (this.classes.length > 0) {
+      const setting = new Setting(contentEl).setName('Classes');
+      const picker = setting.controlEl.createDiv('hc-days-picker');
+      for (const cls of this.classes) {
+        const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: cls.code, type: 'button' });
+        chip.addEventListener('click', () => {
+          const idx = this.formData.classIds.indexOf(cls.id);
+          if (idx === -1) { this.formData.classIds.push(cls.id); chip.addClass('hc-day-toggle--active'); }
+          else { this.formData.classIds.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
+        });
+      }
+    }
+
+    let vaultLinkEl = null;
+    new Setting(contentEl).setName('Vault link').addText(text => {
+      text.setPlaceholder('path/to/file.md').onChange(v => this.formData.vaultLink = v);
+      vaultLinkEl = text.inputEl;
+    }).addButton(btn => {
+      btn.setButtonText('Browse').onClick(() => {
+        new VaultLinkSuggestModal(this.app, (path) => {
+          this.formData.vaultLink = path;
+          if (vaultLinkEl) vaultLinkEl.value = path;
+        }).open();
+      });
+    });
+
+    new Setting(contentEl).setName('URL').addText(text => {
+      text.setPlaceholder('https://…').onChange(v => this.formData.url = v);
+      text.inputEl.type = 'url';
+    });
+
+    this._renderFooter(contentEl, 'Add resource', () => this._save());
+  }
+
+  _save() {
+    if (!this.formData.title.trim()) { new Notice('Title is required.'); return; }
+    this.plugin.addResource(this.semesterId, this.formData);
+    this.onSave();
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class EditResourceModal extends Modal {
+  constructor(app, plugin, semesterId, classes, resource, onSave) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.classes = classes;
+    this.resource = resource;
+    this.onSave = onSave;
+    this.formData = {
+      title: resource.title || '',
+      author: resource.author || '',
+      type: resource.type || '',
+      classIds: [...(resource.classIds || [])],
+      status: resource.status || 'unread',
+      vaultLink: resource.vaultLink || '',
+      url: resource.url || '',
+    };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit resource' });
+
+    new Setting(contentEl).setName('Title').addText(text => {
+      text.setValue(this.formData.title).onChange(v => this.formData.title = v);
+      text.inputEl.focus();
+    });
+
+    new Setting(contentEl).setName('Author').addText(text => {
+      text.setValue(this.formData.author).onChange(v => this.formData.author = v);
+    });
+
+    new Setting(contentEl).setName('Type').addText(text => {
+      text.setValue(this.formData.type).setPlaceholder('Book, PDF, Handout…').onChange(v => this.formData.type = v);
+    });
+
+    new Setting(contentEl).setName('Status').addDropdown(drop => {
+      drop.addOption('unread', 'Unread');
+      drop.addOption('in-progress', 'In Progress');
+      drop.addOption('done', 'Done');
+      drop.setValue(this.formData.status);
+      drop.onChange(v => this.formData.status = v);
+    });
+
+    if (this.classes.length > 0) {
+      const setting = new Setting(contentEl).setName('Classes');
+      const picker = setting.controlEl.createDiv('hc-days-picker');
+      for (const cls of this.classes) {
+        const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: cls.code, type: 'button' });
+        if (this.formData.classIds.includes(cls.id)) chip.addClass('hc-day-toggle--active');
+        chip.addEventListener('click', () => {
+          const idx = this.formData.classIds.indexOf(cls.id);
+          if (idx === -1) { this.formData.classIds.push(cls.id); chip.addClass('hc-day-toggle--active'); }
+          else { this.formData.classIds.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
+        });
+      }
+    }
+
+    let vaultLinkEl = null;
+    new Setting(contentEl).setName('Vault link').addText(text => {
+      text.setValue(this.formData.vaultLink).setPlaceholder('path/to/file.md').onChange(v => this.formData.vaultLink = v);
+      vaultLinkEl = text.inputEl;
+    }).addButton(btn => {
+      btn.setButtonText('Browse').onClick(() => {
+        new VaultLinkSuggestModal(this.app, (path) => {
+          this.formData.vaultLink = path;
+          if (vaultLinkEl) vaultLinkEl.value = path;
+        }).open();
+      });
+    });
+
+    new Setting(contentEl).setName('URL').addText(text => {
+      text.setValue(this.formData.url).setPlaceholder('https://…').onChange(v => this.formData.url = v);
+      text.inputEl.type = 'url';
+    });
+
+    this._renderFooter(contentEl, 'Save changes', () => this._save());
+  }
+
+  _save() {
+    if (!this.formData.title.trim()) { new Notice('Title is required.'); return; }
+    this.plugin.updateResource(this.semesterId, this.resource.id, {
+      title: this.formData.title.trim(),
+      author: this.formData.author.trim(),
+      type: this.formData.type.trim(),
+      classIds: this.formData.classIds,
+      status: this.formData.status,
+      vaultLink: this.formData.vaultLink.trim(),
+      url: this.formData.url.trim(),
+    });
+    this.onSave();
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class DeleteResourceModal extends Modal {
+  constructor(app, plugin, semesterId, resource, onDelete) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.resource = resource;
+    this.onDelete = onDelete;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Delete resource' });
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: `Delete "${this.resource.title}"? This cannot be undone.`,
+    });
+
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const deleteBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Delete resource' });
+    deleteBtn.addEventListener('click', () => {
+      this.plugin.deleteResource(this.semesterId, this.resource.id);
+      this.onDelete();
+      this.close();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
 // ─── Shared footer — attach after all class definitions ───────────────────────
 
 AddSemesterModal.prototype._renderFooter    = _renderFooter;
@@ -2217,6 +2744,8 @@ EditAssignmentModal.prototype._renderFooter = _renderFooter;
 MoveAssignmentModal.prototype._renderFooter = _renderFooter;
 AddExamModal.prototype._renderFooter        = _renderFooter;
 EditExamModal.prototype._renderFooter       = _renderFooter;
+AddResourceModal.prototype._renderFooter    = _renderFooter;
+EditResourceModal.prototype._renderFooter   = _renderFooter;
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 
