@@ -1,4 +1,4 @@
-/* ─── Hold Course - v0.2.0 ────────────────────────────────────────────────── */
+/* --- Hold Course - v0.3.0 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -7,7 +7,7 @@
   min-height: 100%;
 }
 
-/* ─── Toolbar ─────────────────────────────────────────────────────────────── */
+/* --- Toolbar --------------------------------------------------------------- */
 
 .hc-toolbar {
   display: flex;
@@ -102,14 +102,14 @@
 
 .hc-nav-icon svg { width: 13px; height: 13px; }
 
-/* ─── Content area ────────────────────────────────────────────────────────── */
+/* --- Content area ---------------------------------------------------------- */
 
 .hc-content {
   padding: 20px 20px 48px;
   flex: 1;
 }
 
-/* ─── Dashboard header ────────────────────────────────────────────────────── */
+/* --- Dashboard header ------------------------------------------------------ */
 
 .hc-dash-header {
   display: flex;
@@ -202,7 +202,7 @@
   margin: 4px 0;
 }
 
-/* ─── Today strip ─────────────────────────────────────────────────────────── */
+/* --- Today strip ----------------------------------------------------------- */
 
 .hc-today-strip {
   background: var(--background-secondary);
@@ -251,7 +251,7 @@
   flex-shrink: 0;
 }
 
-/* ─── Section ─────────────────────────────────────────────────────────────── */
+/* --- Section --------------------------------------------------------------- */
 
 .hc-section { margin-bottom: 24px; }
 
@@ -264,7 +264,7 @@
   margin-bottom: 12px;
 }
 
-/* ─── Class grid & cards ──────────────────────────────────────────────────── */
+/* --- Class grid & cards ---------------------------------------------------- */
 
 .hc-class-grid {
   display: grid;
@@ -379,7 +379,7 @@
   margin-top: 2px;
 }
 
-/* ─── Class view ──────────────────────────────────────────────────────────── */
+/* --- Class view ------------------------------------------------------------ */
 
 .hc-class-header {
   padding-bottom: 16px;
@@ -432,7 +432,7 @@
 .hc-class-meta-item a { text-decoration: none; }
 .hc-class-meta-item a:hover { text-decoration: underline; }
 
-/* ─── Tabs ────────────────────────────────────────────────────────────────── */
+/* --- Tabs ------------------------------------------------------------------ */
 
 .hc-tab-row {
   display: flex;
@@ -456,7 +456,7 @@
 .hc-tab:hover { color: var(--text-normal); }
 .hc-tab--active { font-weight: 500; }
 
-/* ─── Buttons ─────────────────────────────────────────────────────────────── */
+/* --- Buttons --------------------------------------------------------------- */
 
 .hc-btn {
   display: inline-flex;
@@ -502,7 +502,7 @@
 
 .hc-btn-icon svg { width: 13px; height: 13px; }
 
-/* ─── Inline icon ─────────────────────────────────────────────────────────── */
+/* --- Inline icon ----------------------------------------------------------- */
 
 .hc-inline-icon {
   display: inline-flex;
@@ -512,7 +512,7 @@
 
 .hc-inline-icon svg { width: 14px; height: 14px; }
 
-/* ─── Empty states ────────────────────────────────────────────────────────── */
+/* --- Empty states ---------------------------------------------------------- */
 
 .hc-empty {
   text-align: center;
@@ -528,7 +528,7 @@
   color: var(--text-muted);
 }
 
-/* ─── Placeholder (stub screens) ──────────────────────────────────────────── */
+/* --- Placeholder (stub screens) -------------------------------------------- */
 
 .hc-placeholder {
   text-align: center;
@@ -553,7 +553,7 @@
   line-height: 1.5;
 }
 
-/* ─── Modals ──────────────────────────────────────────────────────────────── */
+/* --- Modals ---------------------------------------------------------------- */
 
 .hc-modal { padding: 0; }
 
@@ -614,7 +614,7 @@
   border-color: var(--interactive-accent);
 }
 
-/* ─── Lecture list ────────────────────────────────────────────────────────── */
+/* --- Lecture list ---------------------------------------------------------- */
 
 .hc-lecture-controls {
   display: flex;
@@ -719,7 +719,7 @@
   margin-top: 4px;
 }
 
-/* ─── Lecture detail ──────────────────────────────────────────────────────── */
+/* --- Lecture detail -------------------------------------------------------- */
 
 .hc-lecture-back-btn {
   margin-bottom: 20px;
@@ -818,7 +818,7 @@
   color: var(--text-faint);
 }
 
-/* ─── Lecture assignments ─────────────────────────────────────────────────── */
+/* --- Lecture assignments --------------------------------------------------- */
 
 .hc-lecture-assign-list {
   display: flex;
@@ -888,7 +888,7 @@
   font-size: 11px;
 }
 
-/* ─── Assignment list ─────────────────────────────────────────────────────── */
+/* --- Assignment list ------------------------------------------------------- */
 
 .hc-assign-controls {
   display: flex;
@@ -914,9 +914,18 @@
   transition: border-color 0.15s, background 0.1s;
 }
 
+.hc-assign-row--writing {
+  border-left: 3px solid #BA7517;
+  padding-left: 12px;
+}
+
 .hc-assign-row:hover {
   border-color: var(--background-modifier-border-hover);
   background: var(--background-secondary);
+}
+
+.hc-assign-row--writing:hover {
+  border-left-color: #BA7517;
 }
 
 .hc-assign-pill {
@@ -999,7 +1008,7 @@
   margin-top: 4px;
 }
 
-/* ─── Assignment detail ───────────────────────────────────────────────────── */
+/* --- Assignment detail ----------------------------------------------------- */
 
 .hc-assign-detail-title-row {
   display: flex;
@@ -1051,3 +1060,99 @@
 }
 
 .hc-assign-conditional { /* structural container for conditional modal fields */ }
+
+/* --- Exam list -------------------------------------------------------------- */
+
+.hc-exam-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.hc-exam-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.1s;
+}
+
+.hc-exam-row:hover {
+  border-color: var(--background-modifier-border-hover);
+  background: var(--background-secondary);
+}
+
+.hc-exam-date-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  flex-shrink: 0;
+}
+
+.hc-exam-month {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-faint);
+  letter-spacing: 0.05em;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+
+.hc-exam-day {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-normal);
+  line-height: 1;
+}
+
+.hc-exam-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hc-exam-name {
+  font-size: 14px;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-exam-countdown {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 100px;
+  background: var(--background-secondary);
+  width: fit-content;
+}
+
+.hc-exam-countdown--soon {
+  color: #BA7517;
+  background: #FAEEDA;
+}
+
+.hc-exam-countdown--past {
+  color: var(--text-faint);
+}
+
+.hc-exam-done-badge {
+  font-size: 12px;
+  font-weight: 500;
+  color: #3B6D11;
+  background: #EAF3DE;
+  padding: 1px 8px;
+  border-radius: 100px;
+  display: inline-block;
+  width: fit-content;
+}

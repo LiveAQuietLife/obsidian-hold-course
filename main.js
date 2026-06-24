@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.2.0 */ 
+/* --- Hold Course --- v0.3.0 */ 
 'use strict';
 
 const {
@@ -26,7 +26,7 @@ const COLOR_PALETTE = [
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-const ASSIGNMENT_TYPES = ['Reading', 'Writing', 'Quiz', 'Exam', 'Project', 'Discussion', 'Other'];
+const ASSIGNMENT_TYPES = ['Reading', 'Writing', 'Project', 'Discussion', 'Other'];
 
 const ASSIGNMENT_TYPE_STYLE = {
   'Reading':    { color: '#1B6FCC', bg: '#E8F1FC' },
@@ -75,7 +75,7 @@ function getDaysUntil(isoDate) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const target = new Date(isoDate + 'T12:00:00');
-  return Math.round((target - today) / (1000 * 60 * 60 * 24));
+  return Math.floor((target - today) / (1000 * 60 * 60 * 24));
 }
 
 function getDueInfo(isoDate) {
@@ -346,6 +346,39 @@ class HoldCoursePlugin extends Plugin {
     }
     cls.assignments.push(assignment);
   }
+
+  // ─── Exam helpers ──────────────────────────────────────────────────────────
+
+  addExam(semesterId, classId, data) {
+    const cls = this.findClass(semesterId, classId);
+    if (!cls) return null;
+    if (!cls.exams) cls.exams = [];
+    const exam = {
+      id: generateId(),
+      title: data.title.trim(),
+      dueDate: data.dueDate || '',
+      notes: '',
+      grade: '',
+      status: 'not-started',
+    };
+    cls.exams.push(exam);
+    return exam;
+  }
+
+  updateExam(semesterId, classId, examId, updates) {
+    const exam = this.findExam(semesterId, classId, examId);
+    if (exam) Object.assign(exam, updates);
+  }
+
+  deleteExam(semesterId, classId, examId) {
+    const cls = this.findClass(semesterId, classId);
+    if (cls) cls.exams = (cls.exams || []).filter(e => e.id !== examId);
+  }
+
+  findExam(semesterId, classId, examId) {
+    const cls = this.findClass(semesterId, classId);
+    return cls ? (cls.exams || []).find(e => e.id === examId) : null;
+  }
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -358,6 +391,7 @@ class HoldCourseView extends ItemView {
     this.currentClassId = null;
     this.currentLectureId = null;
     this.currentAssignmentId = null;
+    this.currentExamId = null;
     this.currentTab = 'Lectures';
     // Track open dropdown cleanup
     this._semDropEl = null;
@@ -371,7 +405,7 @@ class HoldCourseView extends ItemView {
   async onOpen() { this.render(); }
   async onClose() { this._closeSemDrop(); }
 
-  navigate(screen, classId = null, lectureId = null, assignmentId = null) {
+  navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null) {
     // Reset tab when moving to a different class
     if (screen === 'class' && classId !== this.currentClassId) {
       this.currentTab = 'Lectures';
@@ -380,6 +414,7 @@ class HoldCourseView extends ItemView {
     this.currentClassId = classId;
     this.currentLectureId = lectureId;
     this.currentAssignmentId = assignmentId;
+    this.currentExamId = examId;
     this.render();
   }
 
@@ -405,6 +440,7 @@ class HoldCourseView extends ItemView {
       case 'class':        this._renderClassView(content); break;
       case 'lecture':      this._renderLectureDetail(content); break;
       case 'assignment':   this._renderAssignmentDetail(content); break;
+      case 'exam':         this._renderExamDetail(content); break;
       case 'assignments':  this._renderAssignmentsStub(content); break;
       case 'calendar':     this._renderCalendarStub(content); break;
       default:             this._renderDashboard(content);
@@ -492,6 +528,22 @@ class HoldCourseView extends ItemView {
         });
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
         bc.createSpan({ cls: 'hc-bc-link', text: 'Assignment' });
+      }
+    }
+
+    if (this.screen === 'exam' && this.currentClassId && this.currentExamId) {
+      const cls = sem.classes.find(c => c.id === this.currentClassId);
+      if (cls) {
+        bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
+        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: cls.code });
+        clsBtn.style.color = getColor(cls.colorIndex).accent;
+        clsBtn.style.fontWeight = '500';
+        clsBtn.addEventListener('click', () => {
+          this.currentTab = 'Exams';
+          this.navigate('class', cls.id);
+        });
+        bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
+        bc.createSpan({ cls: 'hc-bc-link', text: 'Exam' });
       }
     }
   }
@@ -813,6 +865,8 @@ class HoldCourseView extends ItemView {
       this._renderLectureList(content, sem, cls, color);
     } else if (this.currentTab === 'Assignments') {
       this._renderAssignmentList(content, sem, cls, color);
+    } else if (this.currentTab === 'Exams') {
+      this._renderExamList(content, sem, cls, color);
     } else {
       const placeholder = content.createDiv('hc-placeholder');
       const icon = placeholder.createDiv({ cls: 'hc-placeholder-icon' });
@@ -1071,6 +1125,7 @@ class HoldCourseView extends ItemView {
     const info = assignment.dueDate ? getDueInfo(assignment.dueDate) : null;
 
     const row = container.createDiv('hc-assign-row');
+    if (assignment.type === 'Writing') row.addClass('hc-assign-row--writing');
 
     // Left: type pill
     const pill = row.createSpan({ cls: 'hc-assign-pill', text: assignment.type || 'Other' });
@@ -1242,6 +1297,165 @@ class HoldCourseView extends ItemView {
         this.plugin.save();
       });
     }
+  }
+
+  // ─── Exam list ────────────────────────────────────────────────────────────
+
+  _renderExamList(content, sem, cls, color) {
+    const exams = [...(cls.exams || [])].sort((a, b) => {
+      if (!a.dueDate && !b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return a.dueDate.localeCompare(b.dueDate);
+    });
+
+    const list = content.createDiv('hc-exam-list');
+
+    if (exams.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'No exams yet. Add your first one below.' });
+    } else {
+      for (const exam of exams) {
+        this._renderExamRow(list, exam, sem, cls);
+      }
+    }
+
+    const addBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-add-btn' });
+    const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(addIcon, 'plus');
+    addBtn.createSpan({ text: 'Add exam' });
+    addBtn.addEventListener('click', () => {
+      new AddExamModal(this.app, this.plugin, sem.id, cls, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+  }
+
+  _renderExamRow(container, exam, sem, cls) {
+    const row = container.createDiv('hc-exam-row');
+
+    // Stacked date block
+    const dateBlock = row.createDiv('hc-exam-date-block');
+    if (exam.dueDate) {
+      const d = new Date(exam.dueDate + 'T12:00:00');
+      dateBlock.createDiv({
+        cls: 'hc-exam-month',
+        text: d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase(),
+      });
+      dateBlock.createDiv({ cls: 'hc-exam-day', text: String(d.getDate()) });
+    } else {
+      dateBlock.createDiv({ cls: 'hc-exam-month', text: '—' });
+    }
+
+    // Name + countdown
+    const info = row.createDiv('hc-exam-info');
+    info.createDiv({ cls: 'hc-exam-name', text: exam.title });
+
+    if (exam.status === 'done') {
+      info.createSpan({ cls: 'hc-exam-done-badge', text: 'Done' });
+    } else if (exam.dueDate) {
+      const diff = getDaysUntil(exam.dueDate);
+      let countdownText = '';
+      if (diff === 0) countdownText = 'Today';
+      else if (diff === 1) countdownText = 'Tomorrow';
+      else if (diff > 0) countdownText = `${diff} days away`;
+      else countdownText = `${Math.abs(diff)} day${Math.abs(diff) === 1 ? '' : 's'} ago`;
+
+      const chip = info.createSpan({ cls: 'hc-exam-countdown' });
+      chip.setText(countdownText);
+      if (diff !== null && diff <= 0) chip.addClass('hc-exam-countdown--past');
+      else if (diff !== null && diff <= 7) chip.addClass('hc-exam-countdown--soon');
+    }
+
+    row.addEventListener('click', () => this.navigate('exam', cls.id, null, null, exam.id));
+  }
+
+  // ─── Exam detail ──────────────────────────────────────────────────────────
+
+  _renderExamDetail(content) {
+    const sem = this.plugin.getCurrentSemester();
+    if (!sem) { this.navigate('dashboard'); return; }
+    const cls = sem.classes.find(c => c.id === this.currentClassId);
+    if (!cls) { this.navigate('dashboard'); return; }
+    const exam = this.plugin.findExam(sem.id, cls.id, this.currentExamId);
+    if (!exam) { this.currentTab = 'Exams'; this.navigate('class', cls.id); return; }
+
+    const color = getColor(cls.colorIndex);
+
+    // Back button
+    const backBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
+    const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(backIcon, 'arrow-left');
+    backBtn.createSpan({ text: cls.code });
+    backBtn.addEventListener('click', () => {
+      this.currentTab = 'Exams';
+      this.navigate('class', cls.id);
+    });
+
+    // Title
+    content.createDiv({ cls: 'hc-lecture-detail-title', text: exam.title });
+
+    // Due date
+    if (exam.dueDate) {
+      content.createDiv({ cls: 'hc-lecture-detail-date', text: formatDateLong(exam.dueDate) });
+    }
+
+    // Actions row
+    const actionsRow = content.createDiv('hc-lecture-detail-actions');
+
+    const doneBtn = actionsRow.createEl('button', {
+      cls: `hc-lecture-status-btn hc-lecture-status-btn--${exam.status === 'done' ? 'done' : 'not-started'}`,
+    });
+    doneBtn.setText(exam.status === 'done' ? 'Done' : 'Mark done');
+    doneBtn.addEventListener('click', () => {
+      exam.status = exam.status === 'done' ? 'not-started' : 'done';
+      this.plugin.save();
+      this.render();
+    });
+
+    const editBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const editIcon = editBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(editIcon, 'pencil');
+    editBtn.createSpan({ text: 'Edit' });
+    editBtn.addEventListener('click', () => {
+      new EditExamModal(this.app, this.plugin, sem.id, cls.id, exam, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+
+    const deleteBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm hc-btn--danger' });
+    const deleteIcon = deleteBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(deleteIcon, 'trash-2');
+    deleteBtn.createSpan({ text: 'Delete' });
+    deleteBtn.addEventListener('click', () => {
+      new DeleteExamModal(this.app, this.plugin, sem.id, cls.id, exam, () => {
+        this.plugin.save();
+        this.currentTab = 'Exams';
+        this.navigate('class', cls.id);
+      }).open();
+    });
+
+    // Notes
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Notes' });
+    const textarea = content.createEl('textarea', { cls: 'hc-lecture-notes' });
+    textarea.value = exam.notes || '';
+    textarea.placeholder = 'Study scope, topics to review, location…';
+    textarea.addEventListener('blur', () => {
+      exam.notes = textarea.value;
+      this.plugin.save();
+    });
+
+    // Grade
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Grade' });
+    const gradeInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+    gradeInput.placeholder = 'e.g. A, 92%, Pass';
+    gradeInput.value = exam.grade || '';
+    gradeInput.addEventListener('blur', () => {
+      exam.grade = gradeInput.value;
+      this.plugin.save();
+    });
   }
 
   // ─── Stub screens ─────────────────────────────────────────────────────────
@@ -1871,6 +2085,129 @@ class MoveAssignmentModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
+// ─── Exam modals ──────────────────────────────────────────────────────────────
+
+class AddExamModal extends Modal {
+  constructor(app, plugin, semesterId, cls, onSave) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.cls = cls;
+    this.onSave = onSave;
+    this.formData = { title: '', dueDate: '' };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add exam' });
+
+    new Setting(contentEl).setName('Title').addText(text => {
+      text.setPlaceholder('e.g. Midterm Exam').onChange(v => this.formData.title = v);
+      text.inputEl.focus();
+    });
+
+    new Setting(contentEl).setName('Due date').addText(text => {
+      text.inputEl.type = 'date';
+      text.inputEl.value = this.formData.dueDate;
+      text.onChange(v => this.formData.dueDate = v);
+    });
+
+    this._renderFooter(contentEl, 'Add exam', () => this._save());
+  }
+
+  _save() {
+    if (!this.formData.title.trim()) { new Notice('Exam title is required.'); return; }
+    this.plugin.addExam(this.semesterId, this.cls.id, this.formData);
+    this.onSave();
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class EditExamModal extends Modal {
+  constructor(app, plugin, semesterId, classId, exam, onSave) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.classId = classId;
+    this.exam = exam;
+    this.onSave = onSave;
+    this.formData = {
+      title: exam.title || '',
+      dueDate: exam.dueDate || '',
+    };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit exam' });
+
+    new Setting(contentEl).setName('Title').addText(text => {
+      text.setValue(this.formData.title).onChange(v => this.formData.title = v);
+      text.inputEl.focus();
+    });
+
+    new Setting(contentEl).setName('Due date').addText(text => {
+      text.inputEl.type = 'date';
+      text.inputEl.value = this.formData.dueDate;
+      text.onChange(v => this.formData.dueDate = v);
+    });
+
+    this._renderFooter(contentEl, 'Save changes', () => this._save());
+  }
+
+  _save() {
+    if (!this.formData.title.trim()) { new Notice('Exam title is required.'); return; }
+    this.plugin.updateExam(this.semesterId, this.classId, this.exam.id, {
+      title: this.formData.title.trim(),
+      dueDate: this.formData.dueDate,
+    });
+    this.onSave();
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class DeleteExamModal extends Modal {
+  constructor(app, plugin, semesterId, classId, exam, onDelete) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.classId = classId;
+    this.exam = exam;
+    this.onDelete = onDelete;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Delete exam' });
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: `Delete "${this.exam.title}"? This cannot be undone.`,
+    });
+
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const deleteBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Delete exam' });
+    deleteBtn.addEventListener('click', () => {
+      this.plugin.deleteExam(this.semesterId, this.classId, this.exam.id);
+      this.onDelete();
+      this.close();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
 // ─── Shared footer — attach after all class definitions ───────────────────────
 
 AddSemesterModal.prototype._renderFooter    = _renderFooter;
@@ -1881,6 +2218,8 @@ EditLectureModal.prototype._renderFooter    = _renderFooter;
 AddAssignmentModal.prototype._renderFooter  = _renderFooter;
 EditAssignmentModal.prototype._renderFooter = _renderFooter;
 MoveAssignmentModal.prototype._renderFooter = _renderFooter;
+AddExamModal.prototype._renderFooter        = _renderFooter;
+EditExamModal.prototype._renderFooter       = _renderFooter;
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 
