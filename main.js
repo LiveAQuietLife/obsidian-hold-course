@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.3.0 */ 
+/* --- Hold Course --- v0.3.2 */ 
 'use strict';
 
 const {
@@ -569,8 +569,6 @@ class HoldCourseView extends ItemView {
     if (sem) {
       const cls = sem.classes;
       const parts = [`${cls.length} ${cls.length === 1 ? 'class' : 'classes'}`];
-      const totalAssigns = getAllAssignments(sem).filter(a => a.status !== 'done').length;
-      if (totalAssigns > 0) parts.push(`${totalAssigns} pending`);
       titleWrap.createDiv({ cls: 'hc-dash-subtitle', text: parts.join(' · ') });
     }
 
@@ -893,21 +891,7 @@ class HoldCourseView extends ItemView {
       this.render();
     });
 
-    // Lecture list
-    const list = content.createDiv('hc-lecture-list');
-
-    if (sorted.length === 0) {
-      const empty = list.createDiv('hc-empty');
-      empty.createDiv({ cls: 'hc-empty-text', text: 'No lectures yet. Add your first one below.' });
-    } else {
-      for (const lec of displayed) {
-        const chronNum = sorted.indexOf(lec) + 1;
-        this._renderLectureRow(list, lec, chronNum, color, sem, cls);
-      }
-    }
-
-    // Add lecture button
-    const addBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-add-btn' });
+    const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
     const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(addIcon, 'plus');
     addBtn.createSpan({ text: 'Add lecture' });
@@ -917,6 +901,19 @@ class HoldCourseView extends ItemView {
         this.render();
       }).open();
     });
+
+    // Lecture list
+    const list = content.createDiv('hc-lecture-list');
+
+    if (sorted.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'No lectures yet. Add your first one above.' });
+    } else {
+      for (const lec of displayed) {
+        const chronNum = sorted.indexOf(lec) + 1;
+        this._renderLectureRow(list, lec, chronNum, color, sem, cls);
+      }
+    }
   }
 
   _renderLectureRow(list, lec, num, color, sem, cls) {
@@ -1080,14 +1077,14 @@ class HoldCourseView extends ItemView {
     // Collect all assignments with lecture context
     const items = [];
     for (const a of (cls.assignments || [])) {
-      items.push({ assignment: a, lectureTitle: null });
+      items.push({ assignment: a, lectureLabel: null });
     }
     const sorted = getLecturesSorted(cls);
-    for (const lec of sorted) {
+    sorted.forEach((lec, i) => {
       for (const a of (lec.assignments || [])) {
-        items.push({ assignment: a, lectureTitle: lec.title });
+        items.push({ assignment: a, lectureLabel: `L${i + 1} — ${lec.title}` });
       }
-    }
+    });
 
     const controlRow = content.createDiv('hc-assign-controls');
     const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
@@ -1114,13 +1111,13 @@ class HoldCourseView extends ItemView {
         if (!b.assignment.dueDate) return -1;
         return a.assignment.dueDate.localeCompare(b.assignment.dueDate);
       });
-      for (const { assignment, lectureTitle } of items) {
-        this._renderAssignmentRow(list, assignment, lectureTitle, sem, cls);
+      for (const { assignment, lectureLabel } of items) {
+        this._renderAssignmentRow(list, assignment, lectureLabel, sem, cls);
       }
     }
   }
 
-  _renderAssignmentRow(container, assignment, lectureTitle, sem, cls) {
+  _renderAssignmentRow(container, assignment, lectureLabel, sem, cls) {
     const typeStyle = ASSIGNMENT_TYPE_STYLE[assignment.type] || ASSIGNMENT_TYPE_STYLE['Other'];
     const info = assignment.dueDate ? getDueInfo(assignment.dueDate) : null;
 
@@ -1137,7 +1134,7 @@ class HoldCourseView extends ItemView {
     mid.createDiv({ cls: 'hc-assign-title', text: assignment.title });
     mid.createDiv({
       cls: 'hc-assign-lecture',
-      text: lectureTitle ? lectureTitle : 'Class-level',
+      text: lectureLabel ? lectureLabel : 'Class-level',
     });
     const statusEl = mid.createDiv({ cls: `hc-assign-status hc-assign-status--${assignment.status}` });
     statusEl.setText(statusLabel(assignment.status));

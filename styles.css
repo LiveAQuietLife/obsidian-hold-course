@@ -1,4 +1,4 @@
-/* --- Hold Course - v0.3.0 -------------------------------------------------- */
+/* --- Hold Course - v0.3.2 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -619,6 +619,7 @@
 .hc-lecture-controls {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   margin-bottom: 12px;
 }
 
