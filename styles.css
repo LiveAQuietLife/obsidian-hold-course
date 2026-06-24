@@ -1,4 +1,4 @@
-/* ─── Hold Course  - v0.1.0  ───────────────────────────────────────────────── */
+/* ─── Hold Course - v0.2.0 ────────────────────────────────────────────────── */
 
 /* Root layout */
 .hc-root {
@@ -710,6 +710,11 @@
 
 .hc-lecture-chevron svg { width: 14px; height: 14px; }
 
+.hc-lecture-assign-count {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .hc-lecture-add-btn {
   margin-top: 4px;
 }
@@ -882,3 +887,167 @@
   color: #E24B4A;
   font-size: 11px;
 }
+
+/* ─── Assignment list ─────────────────────────────────────────────────────── */
+
+.hc-assign-controls {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.hc-assign-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.hc-assign-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.1s;
+}
+
+.hc-assign-row:hover {
+  border-color: var(--background-modifier-border-hover);
+  background: var(--background-secondary);
+}
+
+.hc-assign-pill {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 9px;
+  border-radius: 100px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.hc-assign-pill--lg {
+  font-size: 12px;
+  padding: 3px 11px;
+}
+
+.hc-assign-mid {
+  flex: 1;
+  min-width: 0;
+}
+
+.hc-assign-title {
+  font-size: 14px;
+  color: var(--text-normal);
+  margin-bottom: 2px;
+}
+
+.hc-assign-lecture {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.hc-assign-status {
+  font-size: 12px;
+  display: inline-block;
+}
+
+.hc-assign-status--not-started { color: var(--text-muted); }
+
+.hc-assign-status--in-progress {
+  background: #FAEEDA;
+  color: #BA7517;
+  padding: 1px 8px;
+  border-radius: 100px;
+  font-weight: 500;
+}
+
+.hc-assign-status--done {
+  background: #EAF3DE;
+  color: #3B6D11;
+  padding: 1px 8px;
+  border-radius: 100px;
+  font-weight: 500;
+}
+
+.hc-assign-due {
+  text-align: right;
+  flex-shrink: 0;
+  min-width: 60px;
+}
+
+.hc-assign-due-label {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hc-assign-due-date {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.hc-assign-due-note {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.hc-assign-add-btn {
+  margin-top: 4px;
+}
+
+/* ─── Assignment detail ───────────────────────────────────────────────────── */
+
+.hc-assign-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.hc-assign-detail-lecture {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.hc-assign-detail-due {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.hc-assign-detail-due-chip {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.hc-assign-link-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-family: inherit;
+  font-size: 14px;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.hc-assign-link-input:focus {
+  outline: none;
+  border-color: var(--background-modifier-border-hover);
+}
+
+.hc-assign-link-input::placeholder {
+  color: var(--text-faint);
+}
+
+.hc-assign-conditional { /* structural container for conditional modal fields */ }

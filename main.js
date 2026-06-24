@@ -1,3 +1,4 @@
+/* --- Hold Course --- v0.2.0 */ 
 'use strict';
 
 const {
@@ -24,6 +25,18 @@ const COLOR_PALETTE = [
 ];
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+const ASSIGNMENT_TYPES = ['Reading', 'Writing', 'Quiz', 'Exam', 'Project', 'Discussion', 'Other'];
+
+const ASSIGNMENT_TYPE_STYLE = {
+  'Reading':    { color: '#1B6FCC', bg: '#E8F1FC' },
+  'Writing':    { color: '#BA7517', bg: '#FAEEDA' },
+  'Quiz':       { color: '#0F6E56', bg: '#E1F5EE' },
+  'Exam':       { color: '#993C1D', bg: '#FAECE7' },
+  'Project':    { color: '#534AB7', bg: '#EEEDFE' },
+  'Discussion': { color: '#3B6D11', bg: '#EAF3DE' },
+  'Other':      { color: '#666', bg: '#F0F0F0' },
+};
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -253,6 +266,86 @@ class HoldCoursePlugin extends Plugin {
     const cls = this.findClass(semesterId, classId);
     return cls ? cls.lectures.find(l => l.id === lectureId) : null;
   }
+
+  // ─── Assignment helpers ────────────────────────────────────────────────────
+
+  addAssignment(semesterId, classId, lectureId, data) {
+    const cls = this.findClass(semesterId, classId);
+    if (!cls) return null;
+    const assign = {
+      id: generateId(),
+      title: data.title.trim(),
+      type: data.type || 'Other',
+      dueDate: data.dueDate || '',
+      status: 'not-started',
+      notes: '',
+      linkedBook: '',
+      linkedNote: '',
+    };
+    if (lectureId) {
+      const lec = (cls.lectures || []).find(l => l.id === lectureId);
+      if (lec) { lec.assignments.push(assign); return assign; }
+    }
+    cls.assignments.push(assign);
+    return assign;
+  }
+
+  updateAssignment(semesterId, classId, assignmentId, updates) {
+    const result = this.findAssignment(semesterId, classId, assignmentId);
+    if (result) Object.assign(result.assignment, updates);
+  }
+
+  deleteAssignment(semesterId, classId, assignmentId) {
+    const cls = this.findClass(semesterId, classId);
+    if (!cls) return;
+    const clsIdx = (cls.assignments || []).findIndex(a => a.id === assignmentId);
+    if (clsIdx !== -1) { cls.assignments.splice(clsIdx, 1); return; }
+    for (const lec of (cls.lectures || [])) {
+      const lecIdx = (lec.assignments || []).findIndex(a => a.id === assignmentId);
+      if (lecIdx !== -1) { lec.assignments.splice(lecIdx, 1); return; }
+    }
+  }
+
+  findAssignment(semesterId, classId, assignmentId) {
+    const cls = this.findClass(semesterId, classId);
+    if (!cls) return null;
+    const classLevel = (cls.assignments || []).find(a => a.id === assignmentId);
+    if (classLevel) return { assignment: classLevel, lectureId: null };
+    for (const lec of (cls.lectures || [])) {
+      const found = (lec.assignments || []).find(a => a.id === assignmentId);
+      if (found) return { assignment: found, lectureId: lec.id };
+    }
+    return null;
+  }
+
+  moveAssignment(semesterId, classId, assignmentId, newLectureId) {
+    const cls = this.findClass(semesterId, classId);
+    if (!cls) return;
+
+    // Find and remove from current location
+    let assignment = null;
+    const clsIdx = (cls.assignments || []).findIndex(a => a.id === assignmentId);
+    if (clsIdx !== -1) {
+      assignment = cls.assignments.splice(clsIdx, 1)[0];
+    } else {
+      for (const lec of (cls.lectures || [])) {
+        const lecIdx = (lec.assignments || []).findIndex(a => a.id === assignmentId);
+        if (lecIdx !== -1) {
+          assignment = lec.assignments.splice(lecIdx, 1)[0];
+          break;
+        }
+      }
+    }
+
+    if (!assignment) return;
+
+    // Place in new location
+    if (newLectureId) {
+      const targetLec = (cls.lectures || []).find(l => l.id === newLectureId);
+      if (targetLec) { targetLec.assignments.push(assignment); return; }
+    }
+    cls.assignments.push(assignment);
+  }
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -264,6 +357,8 @@ class HoldCourseView extends ItemView {
     this.screen = 'dashboard';
     this.currentClassId = null;
     this.currentLectureId = null;
+    this.currentAssignmentId = null;
+    this.currentTab = 'Lectures';
     // Track open dropdown cleanup
     this._semDropEl = null;
     this._semCloseHandler = null;
@@ -276,10 +371,20 @@ class HoldCourseView extends ItemView {
   async onOpen() { this.render(); }
   async onClose() { this._closeSemDrop(); }
 
-  navigate(screen, classId = null, lectureId = null) {
+  navigate(screen, classId = null, lectureId = null, assignmentId = null) {
+    // Reset tab when moving to a different class
+    if (screen === 'class' && classId !== this.currentClassId) {
+      this.currentTab = 'Lectures';
+    }
     this.screen = screen;
     this.currentClassId = classId;
     this.currentLectureId = lectureId;
+    this.currentAssignmentId = assignmentId;
+    this.render();
+  }
+
+  navigateTab(tab) {
+    this.currentTab = tab;
     this.render();
   }
 
@@ -299,6 +404,7 @@ class HoldCourseView extends ItemView {
       case 'dashboard':    this._renderDashboard(content); break;
       case 'class':        this._renderClassView(content); break;
       case 'lecture':      this._renderLectureDetail(content); break;
+      case 'assignment':   this._renderAssignmentDetail(content); break;
       case 'assignments':  this._renderAssignmentsStub(content); break;
       case 'calendar':     this._renderCalendarStub(content); break;
       default:             this._renderDashboard(content);
@@ -370,6 +476,22 @@ class HoldCourseView extends ItemView {
           bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
           bc.createSpan({ cls: 'hc-bc-link', text: `Lecture ${idx + 1}` });
         }
+      }
+    }
+
+    if (this.screen === 'assignment' && this.currentClassId && this.currentAssignmentId) {
+      const cls = sem.classes.find(c => c.id === this.currentClassId);
+      if (cls) {
+        bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
+        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: cls.code });
+        clsBtn.style.color = getColor(cls.colorIndex).accent;
+        clsBtn.style.fontWeight = '500';
+        clsBtn.addEventListener('click', () => {
+          this.currentTab = 'Assignments';
+          this.navigate('class', cls.id);
+        });
+        bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
+        bc.createSpan({ cls: 'hc-bc-link', text: 'Assignment' });
       }
     }
   }
@@ -674,19 +796,29 @@ class HoldCourseView extends ItemView {
       item.createSpan({ text: cls.meetingDays.join(' · ') });
     }
 
-    // Tab row — Lectures active
+    // Tab row — functional
     const tabRow = content.createDiv('hc-tab-row');
     const tabs = ['Lectures', 'Assignments', 'Exams', 'Library'];
     for (const tab of tabs) {
       const btn = tabRow.createEl('button', { cls: 'hc-tab', text: tab });
-      if (tab === 'Lectures') {
+      if (tab === this.currentTab) {
         btn.addClass('hc-tab--active');
         btn.style.color = color.accent;
         btn.style.borderBottomColor = color.accent;
       }
+      btn.addEventListener('click', () => this.navigateTab(tab));
     }
 
-    this._renderLectureList(content, sem, cls, color);
+    if (this.currentTab === 'Lectures') {
+      this._renderLectureList(content, sem, cls, color);
+    } else if (this.currentTab === 'Assignments') {
+      this._renderAssignmentList(content, sem, cls, color);
+    } else {
+      const placeholder = content.createDiv('hc-placeholder');
+      const icon = placeholder.createDiv({ cls: 'hc-placeholder-icon' });
+      setIcon(icon, 'construction');
+      placeholder.createDiv({ cls: 'hc-placeholder-text', text: `${this.currentTab} coming in a future build.` });
+    }
   }
 
   _renderLectureList(content, sem, cls, color) {
@@ -751,6 +883,15 @@ class HoldCourseView extends ItemView {
 
     // Status + chevron
     const right = row.createDiv('hc-lecture-right');
+
+    const assignCount = (lec.assignments || []).length;
+    if (assignCount > 0) {
+      right.createDiv({
+        cls: 'hc-lecture-assign-count',
+        text: `${assignCount} ${assignCount === 1 ? 'assignment' : 'assignments'}`,
+      });
+    }
+
     const statusEl = right.createDiv({ cls: `hc-lecture-status hc-lecture-status--${lec.status}` });
     statusEl.setText(statusLabel(lec.status));
 
@@ -857,7 +998,7 @@ class HoldCourseView extends ItemView {
           const dueEl = aRow.createDiv('hc-lecture-assign-due');
           dueEl.createDiv({ cls: 'hc-lecture-assign-due-label', text: 'Due' });
           const dueDate = dueEl.createDiv({ cls: 'hc-lecture-assign-due-date', text: formatDate(a.dueDate) });
-          if (info?.urgency === 'overdue' || info?.urgency === 'today') {
+          if ((info?.urgency === 'overdue' || info?.urgency === 'today') && a.status !== 'done') {
             dueDate.style.color = '#E24B4A';
             if (info.urgency === 'overdue') {
               dueEl.createDiv({ cls: 'hc-lecture-assign-overdue', text: 'Overdue' });
@@ -865,6 +1006,241 @@ class HoldCourseView extends ItemView {
           }
         }
       }
+    }
+
+    const addAssignBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-add-btn' });
+    const addAssignIcon = addAssignBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(addAssignIcon, 'plus');
+    addAssignBtn.createSpan({ text: 'Add assignment' });
+    addAssignBtn.addEventListener('click', () => {
+      new AddAssignmentModal(this.app, this.plugin, sem.id, cls, () => {
+        this.plugin.save();
+        this.render();
+      }, lec.id).open();
+    });
+  }
+
+  // ─── Assignment list ──────────────────────────────────────────────────────
+
+  _renderAssignmentList(content, sem, cls, color) {
+    // Collect all assignments with lecture context
+    const items = [];
+    for (const a of (cls.assignments || [])) {
+      items.push({ assignment: a, lectureTitle: null });
+    }
+    const sorted = getLecturesSorted(cls);
+    for (const lec of sorted) {
+      for (const a of (lec.assignments || [])) {
+        items.push({ assignment: a, lectureTitle: lec.title });
+      }
+    }
+
+    const controlRow = content.createDiv('hc-assign-controls');
+    const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
+    const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(addIcon, 'plus');
+    addBtn.createSpan({ text: 'Add assignment' });
+    addBtn.addEventListener('click', () => {
+      new AddAssignmentModal(this.app, this.plugin, sem.id, cls, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+
+    const list = content.createDiv('hc-assign-list');
+
+    if (items.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'No assignments yet.' });
+    } else {
+      // Sort by due date
+      items.sort((a, b) => {
+        if (!a.assignment.dueDate && !b.assignment.dueDate) return 0;
+        if (!a.assignment.dueDate) return 1;
+        if (!b.assignment.dueDate) return -1;
+        return a.assignment.dueDate.localeCompare(b.assignment.dueDate);
+      });
+      for (const { assignment, lectureTitle } of items) {
+        this._renderAssignmentRow(list, assignment, lectureTitle, sem, cls);
+      }
+    }
+  }
+
+  _renderAssignmentRow(container, assignment, lectureTitle, sem, cls) {
+    const typeStyle = ASSIGNMENT_TYPE_STYLE[assignment.type] || ASSIGNMENT_TYPE_STYLE['Other'];
+    const info = assignment.dueDate ? getDueInfo(assignment.dueDate) : null;
+
+    const row = container.createDiv('hc-assign-row');
+
+    // Left: type pill
+    const pill = row.createSpan({ cls: 'hc-assign-pill', text: assignment.type || 'Other' });
+    pill.style.color = typeStyle.color;
+    pill.style.background = typeStyle.bg;
+
+    // Middle: title, lecture, status
+    const mid = row.createDiv('hc-assign-mid');
+    mid.createDiv({ cls: 'hc-assign-title', text: assignment.title });
+    mid.createDiv({
+      cls: 'hc-assign-lecture',
+      text: lectureTitle ? lectureTitle : 'Class-level',
+    });
+    const statusEl = mid.createDiv({ cls: `hc-assign-status hc-assign-status--${assignment.status}` });
+    statusEl.setText(statusLabel(assignment.status));
+
+    // Right: due date
+    const right = row.createDiv('hc-assign-due');
+    const isDone = assignment.status === 'done';
+    if (info) {
+      right.createDiv({ cls: 'hc-assign-due-label', text: 'Due' });
+      const dateEl = right.createDiv({ cls: 'hc-assign-due-date', text: formatDate(assignment.dueDate) });
+      if (!isDone) {
+        dateEl.style.color = info.color;
+        if (info.urgency === 'overdue') {
+          right.createDiv({ cls: 'hc-assign-due-note', text: 'Overdue' }).style.color = info.color;
+        } else if (info.urgency !== 'upcoming') {
+          right.createDiv({ cls: 'hc-assign-due-note', text: info.note }).style.color = info.color;
+        } else {
+          right.createDiv({ cls: 'hc-assign-due-note', text: info.note });
+        }
+      }
+    }
+
+    row.addEventListener('click', () => this.navigate('assignment', cls.id, null, assignment.id));
+  }
+
+  // ─── Assignment detail ────────────────────────────────────────────────────
+
+  _renderAssignmentDetail(content) {
+    const sem = this.plugin.getCurrentSemester();
+    if (!sem) { this.navigate('dashboard'); return; }
+    const cls = sem.classes.find(c => c.id === this.currentClassId);
+    if (!cls) { this.navigate('dashboard'); return; }
+    const result = this.plugin.findAssignment(sem.id, cls.id, this.currentAssignmentId);
+    if (!result) { this.currentTab = 'Assignments'; this.navigate('class', cls.id); return; }
+
+    const { assignment, lectureId } = result;
+    const color = getColor(cls.colorIndex);
+    const typeStyle = ASSIGNMENT_TYPE_STYLE[assignment.type] || ASSIGNMENT_TYPE_STYLE['Other'];
+
+    // Back button
+    const backBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
+    const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(backIcon, 'arrow-left');
+    backBtn.createSpan({ text: cls.code });
+    backBtn.addEventListener('click', () => {
+      this.currentTab = 'Assignments';
+      this.navigate('class', cls.id);
+    });
+
+    // Type pill + title
+    const titleRow = content.createDiv('hc-assign-detail-title-row');
+    const pill = titleRow.createSpan({ cls: 'hc-assign-pill hc-assign-pill--lg', text: assignment.type || 'Other' });
+    pill.style.color = typeStyle.color;
+    pill.style.background = typeStyle.bg;
+
+    content.createDiv({ cls: 'hc-lecture-detail-title', text: assignment.title });
+
+    // Lecture context
+    let lecTitle = 'Class-level';
+    if (lectureId) {
+      const lec = cls.lectures.find(l => l.id === lectureId);
+      if (lec) {
+        const sorted = getLecturesSorted(cls);
+        const num = sorted.indexOf(lec) + 1;
+        lecTitle = `Lecture ${num} — ${lec.title}`;
+      }
+    }
+    content.createDiv({ cls: 'hc-assign-detail-lecture', text: lecTitle });
+
+    // Due date
+    if (assignment.dueDate) {
+      const info = getDueInfo(assignment.dueDate);
+      const dueRow = content.createDiv('hc-assign-detail-due');
+      dueRow.createSpan({ text: `Due ${formatDateLong(assignment.dueDate)}` });
+      if (info && info.urgency !== 'upcoming' && assignment.status !== 'done') {
+        const chip = dueRow.createSpan({ cls: 'hc-assign-detail-due-chip', text: info.note });
+        chip.style.color = info.color;
+      }
+    }
+
+    // Actions row
+    const actionsRow = content.createDiv('hc-lecture-detail-actions');
+
+    const statusBtn = actionsRow.createEl('button', { cls: `hc-lecture-status-btn hc-lecture-status-btn--${assignment.status}` });
+    statusBtn.setText(statusLabel(assignment.status));
+    statusBtn.addEventListener('click', () => {
+      assignment.status = cycleStatus(assignment.status);
+      this.plugin.save();
+      this.render();
+    });
+
+    const editBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const editIcon = editBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(editIcon, 'pencil');
+    editBtn.createSpan({ text: 'Edit' });
+    editBtn.addEventListener('click', () => {
+      new EditAssignmentModal(this.app, this.plugin, sem.id, cls, assignment, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+
+    const moveBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const moveIcon = moveBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(moveIcon, 'move');
+    moveBtn.createSpan({ text: 'Move' });
+    moveBtn.addEventListener('click', () => {
+      new MoveAssignmentModal(this.app, this.plugin, sem.id, cls, assignment, lectureId, () => {
+        this.plugin.save();
+        this.currentTab = 'Assignments';
+        this.navigate('class', cls.id);
+      }).open();
+    });
+
+    const deleteBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm hc-btn--danger' });
+    const deleteIcon = deleteBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(deleteIcon, 'trash-2');
+    deleteBtn.createSpan({ text: 'Delete' });
+    deleteBtn.addEventListener('click', () => {
+      new DeleteAssignmentModal(this.app, this.plugin, sem.id, cls.id, assignment, () => {
+        this.plugin.save();
+        this.currentTab = 'Assignments';
+        this.navigate('class', cls.id);
+      }).open();
+    });
+
+    // Notes
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Notes' });
+    const textarea = content.createEl('textarea', { cls: 'hc-lecture-notes' });
+    textarea.value = assignment.notes || '';
+    textarea.placeholder = 'Add notes…';
+    textarea.addEventListener('blur', () => {
+      assignment.notes = textarea.value;
+      this.plugin.save();
+    });
+
+    // Linked book (Reading only)
+    if (assignment.type === 'Reading') {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Linked Book' });
+      const bookInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+      bookInput.placeholder = 'Book title (Library link coming later)';
+      bookInput.value = assignment.linkedBook || '';
+      bookInput.addEventListener('blur', () => {
+        assignment.linkedBook = bookInput.value;
+        this.plugin.save();
+      });
+    }
+
+    // Linked note (Writing only)
+    if (assignment.type === 'Writing') {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Linked Note' });
+      const noteInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+      noteInput.placeholder = 'Note name (file picker coming later)';
+      noteInput.value = assignment.linkedNote || '';
+      noteInput.addEventListener('blur', () => {
+        assignment.linkedNote = noteInput.value;
+        this.plugin.save();
+      });
     }
   }
 
@@ -1230,12 +1606,281 @@ class DeleteLectureModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
-// Attach shared footer to modals that use it
-AddSemesterModal.prototype._renderFooter  = _renderFooter;
-AddClassModal.prototype._renderFooter     = _renderFooter;
-EditClassModal.prototype._renderFooter    = _renderFooter;
-AddLectureModal.prototype._renderFooter   = _renderFooter;
-EditLectureModal.prototype._renderFooter  = _renderFooter;
+class AddAssignmentModal extends Modal {
+  constructor(app, plugin, semesterId, cls, onSave, defaultLectureId = null) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.cls = cls;
+    this.onSave = onSave;
+    this.formData = { title: '', type: 'Reading', dueDate: '', lectureId: defaultLectureId || null };
+    // Pre-fill due date if opening from a lecture context
+    if (defaultLectureId) {
+      const lec = (cls.lectures || []).find(l => l.id === defaultLectureId);
+      if (lec?.date) this.formData.dueDate = lec.date;
+    }
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add assignment' });
+
+    new Setting(contentEl).setName('Title').addText(text => {
+      text.setPlaceholder('Introduction to the OT, Ch. 1-3').onChange(v => this.formData.title = v);
+      text.inputEl.focus();
+    });
+
+    new Setting(contentEl).setName('Type').addDropdown(drop => {
+      for (const t of ASSIGNMENT_TYPES) drop.addOption(t, t);
+      drop.setValue(this.formData.type);
+      drop.onChange(v => { this.formData.type = v; this._updateConditional(contentEl); });
+    });
+
+    // Lecture selector before due date so it can autofill
+    let dueDateInputEl = null;
+    new Setting(contentEl).setName('Lecture').addDropdown(drop => {
+      drop.addOption('', 'Class-level (no lecture)');
+      const sorted = getLecturesSorted(this.cls);
+      sorted.forEach((lec, i) => drop.addOption(lec.id, `Lecture ${i + 1} — ${lec.title}`));
+      drop.setValue(this.formData.lectureId || '');
+      drop.onChange(v => {
+        this.formData.lectureId = v || null;
+        if (v && dueDateInputEl) {
+          const lec = this.cls.lectures.find(l => l.id === v);
+          if (lec?.date) {
+            dueDateInputEl.value = lec.date;
+            this.formData.dueDate = lec.date;
+          }
+        }
+      });
+    });
+
+    new Setting(contentEl).setName('Due date').addText(text => {
+      text.inputEl.type = 'date';
+      text.inputEl.value = this.formData.dueDate;
+      dueDateInputEl = text.inputEl;
+      text.onChange(v => this.formData.dueDate = v);
+    });
+
+    // Conditional fields container
+    contentEl.createDiv('hc-assign-conditional');
+    this._updateConditional(contentEl);
+
+    this._renderFooter(contentEl, 'Add assignment', () => this._save());
+  }
+
+  _updateConditional(contentEl) {
+    const container = contentEl.querySelector('.hc-assign-conditional');
+    if (!container) return;
+    container.empty();
+    if (this.formData.type === 'Reading') {
+      new Setting(container).setName('Linked book').addText(text => {
+        text.setPlaceholder('Book title (Library link coming later)');
+        text.onChange(v => this.formData.linkedBook = v);
+      });
+    } else if (this.formData.type === 'Writing') {
+      new Setting(container).setName('Linked note').addText(text => {
+        text.setPlaceholder('Note name (file picker coming later)');
+        text.onChange(v => this.formData.linkedNote = v);
+      });
+    }
+  }
+
+  _save() {
+    if (!this.formData.title.trim()) { new Notice('Assignment title is required.'); return; }
+    const assign = this.plugin.addAssignment(this.semesterId, this.cls.id, this.formData.lectureId, this.formData);
+    if (assign && this.formData.linkedBook) assign.linkedBook = this.formData.linkedBook;
+    if (assign && this.formData.linkedNote) assign.linkedNote = this.formData.linkedNote;
+    this.onSave();
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class EditAssignmentModal extends Modal {
+  constructor(app, plugin, semesterId, cls, assignment, onSave) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.cls = cls;
+    this.assignment = assignment;
+    this.onSave = onSave;
+    this.formData = {
+      title: assignment.title || '',
+      type: assignment.type || 'Other',
+      dueDate: assignment.dueDate || '',
+      linkedBook: assignment.linkedBook || '',
+      linkedNote: assignment.linkedNote || '',
+    };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit assignment' });
+
+    new Setting(contentEl).setName('Title').addText(text => {
+      text.setValue(this.formData.title).onChange(v => this.formData.title = v);
+      text.inputEl.focus();
+    });
+
+    new Setting(contentEl).setName('Type').addDropdown(drop => {
+      for (const t of ASSIGNMENT_TYPES) drop.addOption(t, t);
+      drop.setValue(this.formData.type);
+      drop.onChange(v => { this.formData.type = v; this._updateConditional(contentEl); });
+    });
+
+    new Setting(contentEl).setName('Due date').addText(text => {
+      text.inputEl.type = 'date';
+      text.inputEl.value = this.formData.dueDate;
+      text.onChange(v => this.formData.dueDate = v);
+    });
+
+    contentEl.createDiv('hc-assign-conditional');
+    this._updateConditional(contentEl);
+
+    this._renderFooter(contentEl, 'Save changes', () => this._save());
+  }
+
+  _updateConditional(contentEl) {
+    const container = contentEl.querySelector('.hc-assign-conditional');
+    if (!container) return;
+    container.empty();
+    if (this.formData.type === 'Reading') {
+      new Setting(container).setName('Linked book').addText(text => {
+        text.setValue(this.formData.linkedBook).setPlaceholder('Book title');
+        text.onChange(v => this.formData.linkedBook = v);
+      });
+    } else if (this.formData.type === 'Writing') {
+      new Setting(container).setName('Linked note').addText(text => {
+        text.setValue(this.formData.linkedNote).setPlaceholder('Note name');
+        text.onChange(v => this.formData.linkedNote = v);
+      });
+    }
+  }
+
+  _save() {
+    if (!this.formData.title.trim()) { new Notice('Assignment title is required.'); return; }
+    this.plugin.updateAssignment(this.semesterId, this.cls.id, this.assignment.id, {
+      title: this.formData.title.trim(),
+      type: this.formData.type,
+      dueDate: this.formData.dueDate,
+      linkedBook: this.formData.type === 'Reading' ? this.formData.linkedBook : '',
+      linkedNote: this.formData.type === 'Writing' ? this.formData.linkedNote : '',
+    });
+    this.onSave();
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class DeleteAssignmentModal extends Modal {
+  constructor(app, plugin, semesterId, classId, assignment, onDelete) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.classId = classId;
+    this.assignment = assignment;
+    this.onDelete = onDelete;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Delete assignment' });
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: `Delete "${this.assignment.title}"? This cannot be undone.`,
+    });
+
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const deleteBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Delete assignment' });
+    deleteBtn.addEventListener('click', () => {
+      this.plugin.deleteAssignment(this.semesterId, this.classId, this.assignment.id);
+      this.onDelete();
+      this.close();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class MoveAssignmentModal extends Modal {
+  constructor(app, plugin, semesterId, cls, assignment, currentLectureId, onSave) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.cls = cls;
+    this.assignment = assignment;
+    this.onSave = onSave;
+    this.formData = { lectureId: currentLectureId, dueDate: assignment.dueDate || '' };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Move to lecture' });
+
+    let dueDateInputEl = null;
+
+    new Setting(contentEl).setName('Lecture').addDropdown(drop => {
+      drop.addOption('', 'Class-level (no lecture)');
+      const sorted = getLecturesSorted(this.cls);
+      sorted.forEach((lec, i) => drop.addOption(lec.id, `Lecture ${i + 1} — ${lec.title}`));
+      drop.setValue(this.formData.lectureId || '');
+      drop.onChange(v => {
+        this.formData.lectureId = v || null;
+        if (dueDateInputEl) {
+          if (v) {
+            const lec = this.cls.lectures.find(l => l.id === v);
+            if (lec?.date) {
+              dueDateInputEl.value = lec.date;
+              this.formData.dueDate = lec.date;
+            }
+          }
+        }
+      });
+    });
+
+    new Setting(contentEl).setName('Due date').addText(text => {
+      text.inputEl.type = 'date';
+      text.inputEl.value = this.formData.dueDate;
+      dueDateInputEl = text.inputEl;
+      text.onChange(v => this.formData.dueDate = v);
+    });
+
+    this._renderFooter(contentEl, 'Move', () => this._save());
+  }
+
+  _save() {
+    this.assignment.dueDate = this.formData.dueDate;
+    this.plugin.moveAssignment(this.semesterId, this.cls.id, this.assignment.id, this.formData.lectureId);
+    this.onSave();
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// ─── Shared footer — attach after all class definitions ───────────────────────
+
+AddSemesterModal.prototype._renderFooter    = _renderFooter;
+AddClassModal.prototype._renderFooter       = _renderFooter;
+EditClassModal.prototype._renderFooter      = _renderFooter;
+AddLectureModal.prototype._renderFooter     = _renderFooter;
+EditLectureModal.prototype._renderFooter    = _renderFooter;
+AddAssignmentModal.prototype._renderFooter  = _renderFooter;
+EditAssignmentModal.prototype._renderFooter = _renderFooter;
+MoveAssignmentModal.prototype._renderFooter = _renderFooter;
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 
