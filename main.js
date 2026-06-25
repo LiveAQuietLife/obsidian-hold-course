@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.12 */ 
+/* --- Hold Course --- v0.4.14 */ 
 'use strict';
 
 const {
@@ -184,6 +184,64 @@ function cycleResourceStatus(status) {
   if (status === 'unread') return 'in-progress';
   if (status === 'in-progress') return 'done';
   return 'unread';
+}
+
+// ─── Calendar helpers ─────────────────────────────────────────────────────────
+
+function makeISO(year, month1, day) {
+  return `${year}-${String(month1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function addDaysISO(dateISO, n) {
+  const d = new Date(dateISO + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return makeISO(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
+
+function getWeekStartISO(dateISO) {
+  const d = new Date(dateISO + 'T12:00:00');
+  const daysBack = (d.getDay() + 6) % 7; // Mon = 0
+  return addDaysISO(dateISO, -daysBack);
+}
+
+function getItemsForDate(sem, dateISO, filterClassId) {
+  const items = [];
+  for (const cls of (sem.classes || [])) {
+    if (filterClassId && cls.id !== filterClassId) continue;
+    for (const lec of (cls.lectures || [])) {
+      if (lec.date === dateISO) {
+        items.push({ kind: 'lecture', title: lec.title, cls, lec });
+      }
+    }
+    for (const a of (cls.assignments || [])) {
+      if (a.dueDate === dateISO) {
+        items.push({ kind: 'assignment', title: a.title, cls, assignment: a, lectureId: null });
+      }
+    }
+    for (const lec of (cls.lectures || [])) {
+      for (const a of (lec.assignments || [])) {
+        if (a.dueDate === dateISO) {
+          items.push({ kind: 'assignment', title: a.title, cls, assignment: a, lectureId: lec.id });
+        }
+      }
+    }
+    for (const exam of (cls.exams || [])) {
+      if (exam.dueDate === dateISO) {
+        items.push({ kind: 'exam', title: exam.title, cls, exam });
+      }
+    }
+  }
+  return items;
+}
+
+function getCalItemStyle(item) {
+  if (item.kind === 'lecture') {
+    const c = getColor(item.cls.colorIndex);
+    return { color: c.accent, bg: c.bg };
+  }
+  if (item.kind === 'exam')       return ASSIGNMENT_TYPE_STYLE['Exam'] || { color: '#666', bg: '#F0F0F0' };
+  if (item.kind === 'assignment') return ASSIGNMENT_TYPE_STYLE[item.assignment.type] || ASSIGNMENT_TYPE_STYLE['Other'];
+  return { color: '#666', bg: '#F0F0F0' };
 }
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
@@ -474,9 +532,19 @@ class HoldCourseView extends ItemView {
     this.currentTab = 'Lectures';
     this.previousScreen = null;
     this.globalAssignFilterClassId = null;
+    this.globalAssignFilterType = null;
+    this.libraryFilterClassId = null;
+    // Calendar session state
+    this.calView = 'month';
+    this.calYear = null;
+    this.calMonth = null;
+    this.calWeekStart = null;
+    this.calFilterClassId = null;
     // Track open dropdown cleanup
     this._semDropEl = null;
     this._semCloseHandler = null;
+    this._calPopoverEl = null;
+    this._calPopoverCloseHandler = null;
   }
 
   getViewType() { return VIEW_TYPE; }
@@ -484,12 +552,13 @@ class HoldCourseView extends ItemView {
   getIcon() { return 'graduation-cap'; }
 
   async onOpen() { this.render(); }
-  async onClose() { this._closeSemDrop(); }
+  async onClose() { this._closeSemDrop(); this._closeCalPopover(); }
 
   navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null, resourceId = null) {
-    // Reset tab when moving to a different class
+    // Reset tab and library filter when moving to a different class
     if (screen === 'class' && classId !== this.currentClassId) {
       this.currentTab = 'Lectures';
+      this.libraryFilterClassId = null;
     }
     this.previousScreen = this.screen;
     this.screen = screen;
@@ -510,6 +579,7 @@ class HoldCourseView extends ItemView {
 
   render() {
     this._closeSemDrop();
+    this._closeCalPopover();
 
     this.contentEl.empty();
     const root = this.contentEl.createDiv('hc-root');
@@ -526,7 +596,7 @@ class HoldCourseView extends ItemView {
       case 'exam':         this._renderExamDetail(content); break;
       case 'resource':     this._renderResourceDetail(content); break;
       case 'assignments':  this._renderAssignmentsStub(content); break;
-      case 'calendar':     this._renderCalendarStub(content); break;
+      case 'calendar':     this._renderCalendarView(content); break;
       default:             this._renderDashboard(content);
     }
   }
@@ -977,7 +1047,9 @@ class HoldCourseView extends ItemView {
 
     const controlRow = content.createDiv('hc-lecture-controls');
 
-    const sortBtn = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const leftControls = controlRow.createDiv('hc-lecture-left-controls');
+
+    const sortBtn = leftControls.createEl('button', { cls: 'hc-btn hc-btn--sm' });
     const sortIcon = sortBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(sortIcon, sortDesc ? 'arrow-down-narrow-wide' : 'arrow-up-narrow-wide');
     sortBtn.createSpan({ text: sortDesc ? 'Newest first' : 'Oldest first' });
@@ -987,7 +1059,7 @@ class HoldCourseView extends ItemView {
       this.render();
     });
 
-    const doneToggle = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const doneToggle = leftControls.createEl('button', { cls: 'hc-btn hc-btn--sm' });
     const doneIcon = doneToggle.createSpan({ cls: 'hc-btn-icon' });
     setIcon(doneIcon, showDone ? 'eye-off' : 'eye');
     doneToggle.createSpan({ text: showDone ? 'Hide done' : 'Show done' });
@@ -1815,8 +1887,16 @@ class HoldCourseView extends ItemView {
   // ─── Library list ─────────────────────────────────────────────────────────
 
   _renderLibraryList(content, sem, cls, color) {
-    const resources = [...(sem.resources || [])];
+    let resources = [...(sem.resources || [])];
+
+    // Migrate stale 'class' sort key
+    if (sem.librarySort === 'class') sem.librarySort = 'alpha-asc';
     const sortKey = sem.librarySort || 'alpha-asc';
+
+    // Apply class filter
+    if (this.libraryFilterClassId) {
+      resources = resources.filter(r => (r.classIds || []).includes(this.libraryFilterClassId));
+    }
 
     const statusOrder = { 'in-progress': 0, 'unread': 1, 'done': 2 };
     if (sortKey === 'alpha-asc') {
@@ -1829,21 +1909,59 @@ class HoldCourseView extends ItemView {
         const sb = statusOrder[b.status] ?? 1;
         return sa !== sb ? sa - sb : a.title.localeCompare(b.title);
       });
-    } else if (sortKey === 'class') {
-      resources.sort((a, b) => {
-        const ca = a.classIds[0] ? (sem.classes.find(c => c.id === a.classIds[0])?.code || '\uFFFF') : '\uFFFF';
-        const cb = b.classIds[0] ? (sem.classes.find(c => c.id === b.classIds[0])?.code || '\uFFFF') : '\uFFFF';
-        return ca !== cb ? ca.localeCompare(cb) : a.title.localeCompare(b.title);
-      });
     }
 
-    const sortLabels = { 'alpha-asc': 'A–Z', 'alpha-desc': 'Z–A', 'status': 'By status', 'class': 'By class' };
-    const sortCycle  = { 'alpha-asc': 'alpha-desc', 'alpha-desc': 'status', 'status': 'class', 'class': 'alpha-asc' };
-    const sortIcons  = { 'alpha-asc': 'arrow-up-narrow-wide', 'alpha-desc': 'arrow-down-narrow-wide', 'status': 'layers', 'class': 'bookmark' };
+    const sortLabels = { 'alpha-asc': 'A–Z', 'alpha-desc': 'Z–A', 'status': 'By status' };
+    const sortCycle  = { 'alpha-asc': 'alpha-desc', 'alpha-desc': 'status', 'status': 'alpha-asc' };
+    const sortIcons  = { 'alpha-asc': 'arrow-up-narrow-wide', 'alpha-desc': 'arrow-down-narrow-wide', 'status': 'layers' };
 
     const controlRow = content.createDiv('hc-resource-controls');
 
-    const sortBtn = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    // Left: class filter
+    const libFilterWrap = controlRow.createDiv('hc-global-filter-wrap');
+    const libFilterBtn  = libFilterWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const libFilterIcon = libFilterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(libFilterIcon, 'filter');
+    const libFilterLabel = this.libraryFilterClassId
+      ? (sem.classes.find(c => c.id === this.libraryFilterClassId)?.code || 'All classes')
+      : 'All classes';
+    libFilterBtn.createSpan({ cls: 'hc-global-filter-label', text: libFilterLabel });
+    const libFilterChev = libFilterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(libFilterChev, 'chevron-down');
+
+    let libDropEl = null;
+    const closeLibDrop = () => { if (libDropEl) { libDropEl.remove(); libDropEl = null; } };
+    libFilterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (libDropEl) { closeLibDrop(); return; }
+      libDropEl = libFilterWrap.createDiv('hc-sem-drop');
+
+      const allItem = libDropEl.createDiv('hc-sem-drop-item');
+      if (!this.libraryFilterClassId) allItem.addClass('hc-sem-drop-item--active');
+      const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
+      if (!this.libraryFilterClassId) setIcon(allIcon, 'check');
+      allItem.createSpan({ text: 'All classes' });
+      allItem.addEventListener('click', () => { this.libraryFilterClassId = null; closeLibDrop(); this.render(); });
+
+      libDropEl.createDiv('hc-sem-drop-divider');
+
+      for (const c of (sem.classes || [])) {
+        const item = libDropEl.createDiv('hc-sem-drop-item');
+        if (c.id === this.libraryFilterClassId) item.addClass('hc-sem-drop-item--active');
+        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (c.id === this.libraryFilterClassId) setIcon(icon, 'check');
+        const lbl = item.createSpan({ text: c.code });
+        lbl.style.color = getColor(c.colorIndex).accent;
+        item.addEventListener('click', () => { this.libraryFilterClassId = c.id; closeLibDrop(); this.render(); });
+      }
+
+      setTimeout(() => document.addEventListener('click', () => closeLibDrop(), { once: true }), 0);
+    });
+
+    // Right: sort + add
+    const libRightControls = controlRow.createDiv('hc-global-right-controls');
+
+    const sortBtn = libRightControls.createEl('button', { cls: 'hc-btn hc-btn--sm' });
     const sortIcon = sortBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(sortIcon, sortIcons[sortKey]);
     sortBtn.createSpan({ text: sortLabels[sortKey] });
@@ -1853,7 +1971,7 @@ class HoldCourseView extends ItemView {
       this.render();
     });
 
-    const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
+    const addBtn = libRightControls.createEl('button', { cls: 'hc-btn' });
     const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(addIcon, 'plus');
     addBtn.createSpan({ text: 'Add resource' });
@@ -2093,9 +2211,8 @@ class HoldCourseView extends ItemView {
       { key: 'due',    label: 'By due date' },
       { key: 'class',  label: 'By class'    },
       { key: 'status', label: 'By status'   },
-      { key: 'type',   label: 'By type'     },
     ];
-    if (!sem.assignSort) sem.assignSort = 'due';
+    if (!sem.assignSort || sem.assignSort === 'type') sem.assignSort = 'due';
     if (sem.assignShowDone === undefined) sem.assignShowDone = false;
 
     const currentSort = SORT_OPTIONS.find(o => o.key === sem.assignSort) || SORT_OPTIONS[0];
@@ -2105,8 +2222,11 @@ class HoldCourseView extends ItemView {
     // ── Controls row ──────────────────────────────────────────────────────────
     const controlRow = content.createDiv('hc-assign-controls hc-global-controls');
 
+    // Left: class filter + type filter
+    const leftFilters = controlRow.createDiv('hc-global-left-filters');
+
     // Class filter dropdown
-    const filterWrap = controlRow.createDiv('hc-global-filter-wrap');
+    const filterWrap = leftFilters.createDiv('hc-global-filter-wrap');
     const filterBtn  = filterWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
     const filterIcon = filterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(filterIcon, 'filter');
@@ -2154,6 +2274,53 @@ class HoldCourseView extends ItemView {
       setTimeout(() => document.addEventListener('click', () => closeFilterDrop(), { once: true }), 0);
     });
 
+    // Type filter dropdown
+    const typeFilterWrap = leftFilters.createDiv('hc-global-filter-wrap');
+    const typeFilterBtn  = typeFilterWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const typeFilterIcon = typeFilterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(typeFilterIcon, 'tag');
+    typeFilterBtn.createSpan({ cls: 'hc-global-filter-label', text: this.globalAssignFilterType || 'All types' });
+    const typeFilterChev = typeFilterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(typeFilterChev, 'chevron-down');
+
+    let typeDropEl = null;
+    const closeTypeDrop = () => { if (typeDropEl) { typeDropEl.remove(); typeDropEl = null; } };
+    typeFilterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (typeDropEl) { closeTypeDrop(); return; }
+      typeDropEl = typeFilterWrap.createDiv('hc-sem-drop');
+
+      const allTypeItem = typeDropEl.createDiv('hc-sem-drop-item');
+      if (!this.globalAssignFilterType) allTypeItem.addClass('hc-sem-drop-item--active');
+      const allTypeIcon = allTypeItem.createSpan({ cls: 'hc-sem-drop-icon' });
+      if (!this.globalAssignFilterType) setIcon(allTypeIcon, 'check');
+      allTypeItem.createSpan({ text: 'All types' });
+      allTypeItem.addEventListener('click', () => {
+        this.globalAssignFilterType = null;
+        closeTypeDrop();
+        this.render();
+      });
+
+      typeDropEl.createDiv('hc-sem-drop-divider');
+
+      for (const type of ASSIGNMENT_TYPES) {
+        const typeStyle = ASSIGNMENT_TYPE_STYLE[type] || ASSIGNMENT_TYPE_STYLE['Other'];
+        const item = typeDropEl.createDiv('hc-sem-drop-item');
+        if (type === this.globalAssignFilterType) item.addClass('hc-sem-drop-item--active');
+        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (type === this.globalAssignFilterType) setIcon(icon, 'check');
+        const lbl = item.createSpan({ text: type });
+        lbl.style.color = typeStyle.color;
+        item.addEventListener('click', () => {
+          this.globalAssignFilterType = type;
+          closeTypeDrop();
+          this.render();
+        });
+      }
+
+      setTimeout(() => document.addEventListener('click', () => closeTypeDrop(), { once: true }), 0);
+    });
+
     // Right side controls
     const rightControls = controlRow.createDiv('hc-global-right-controls');
 
@@ -2168,7 +2335,7 @@ class HoldCourseView extends ItemView {
       this.render();
     });
 
-    // Sort cycle button
+    // Sort cycle button (3 options: due / class / status)
     const sortBtn = rightControls.createEl('button', { cls: 'hc-btn hc-btn--sm' });
     const sortIcon = sortBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(sortIcon, 'arrow-up-narrow-wide');
@@ -2185,6 +2352,9 @@ class HoldCourseView extends ItemView {
 
     if (this.globalAssignFilterClassId) {
       allAssigns = allAssigns.filter(a => a.classId === this.globalAssignFilterClassId);
+    }
+    if (this.globalAssignFilterType) {
+      allAssigns = allAssigns.filter(a => a.type === this.globalAssignFilterType);
     }
     if (!showDone) {
       allAssigns = allAssigns.filter(a => a.status !== 'done');
@@ -2214,15 +2384,6 @@ class HoldCourseView extends ItemView {
         const ua = STATUS_ORDER[getUrgency(a)] ?? 5;
         const ub = STATUS_ORDER[getUrgency(b)] ?? 5;
         if (ua !== ub) return ua - ub;
-        if (!a.dueDate && !b.dueDate) return 0;
-        if (!a.dueDate) return 1;
-        if (!b.dueDate) return -1;
-        return a.dueDate.localeCompare(b.dueDate);
-      });
-    } else if (sem.assignSort === 'type') {
-      allAssigns.sort((a, b) => {
-        const ta = a.type || '', tb = b.type || '';
-        if (ta !== tb) return ta.localeCompare(tb);
         if (!a.dueDate && !b.dueDate) return 0;
         if (!a.dueDate) return 1;
         if (!b.dueDate) return -1;
@@ -2301,11 +2462,320 @@ class HoldCourseView extends ItemView {
     }
   }
 
-  _renderCalendarStub(content) {
-    const placeholder = content.createDiv('hc-placeholder');
-    const icon = placeholder.createDiv({ cls: 'hc-placeholder-icon' });
-    setIcon(icon, 'construction');
-    placeholder.createDiv({ cls: 'hc-placeholder-text', text: 'Calendar view coming in a future build.' });
+  _renderCalendarView(content) {
+    const sem = this.plugin.getCurrentSemester();
+    if (!sem) {
+      const empty = content.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'No semester found.' });
+      return;
+    }
+
+    const today = new Date();
+    if (this.calYear === null)  this.calYear  = today.getFullYear();
+    if (this.calMonth === null) this.calMonth = today.getMonth();
+    if (!this.calWeekStart)    this.calWeekStart = getWeekStartISO(getTodayISO());
+
+    // ── Controls row ──────────────────────────────────────────────────────────
+    const controls = content.createDiv('hc-cal-controls');
+
+    const toggle = controls.createDiv('hc-cal-view-toggle');
+    const monthBtn = toggle.createEl('button', { cls: 'hc-cal-toggle-btn', text: 'Month' });
+    if (this.calView === 'month') monthBtn.addClass('hc-cal-toggle-btn--active');
+    const weekBtn = toggle.createEl('button', { cls: 'hc-cal-toggle-btn', text: 'Week' });
+    if (this.calView === 'week') weekBtn.addClass('hc-cal-toggle-btn--active');
+    monthBtn.addEventListener('click', () => { this.calView = 'month'; this.render(); });
+    weekBtn.addEventListener('click',  () => { this.calView = 'week';  this.render(); });
+
+    const nav = controls.createDiv('hc-cal-nav');
+    const prevBtn = nav.createEl('button', { cls: 'hc-cal-nav-btn' });
+    setIcon(prevBtn, 'chevron-left');
+    const titleEl = nav.createDiv('hc-cal-nav-title');
+    const nextBtn = nav.createEl('button', { cls: 'hc-cal-nav-btn' });
+    setIcon(nextBtn, 'chevron-right');
+
+    const MONTH_NAMES = ['January','February','March','April','May','June',
+                         'July','August','September','October','November','December'];
+
+    if (this.calView === 'month') {
+      titleEl.setText(`${MONTH_NAMES[this.calMonth]} ${this.calYear}`);
+      prevBtn.addEventListener('click', () => {
+        this.calMonth--;
+        if (this.calMonth < 0) { this.calMonth = 11; this.calYear--; }
+        this.render();
+      });
+      nextBtn.addEventListener('click', () => {
+        this.calMonth++;
+        if (this.calMonth > 11) { this.calMonth = 0; this.calYear++; }
+        this.render();
+      });
+      this._renderCalLegend(content, sem);
+      this._renderMonthGrid(content, sem);
+    } else {
+      const weekEndISO = addDaysISO(this.calWeekStart, 6);
+      const ws = new Date(this.calWeekStart + 'T12:00:00');
+      const we = new Date(weekEndISO      + 'T12:00:00');
+      const fmt = (d) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      titleEl.setText(`${fmt(ws)} – ${fmt(we)}`);
+      prevBtn.addEventListener('click', () => { this.calWeekStart = addDaysISO(this.calWeekStart, -7); this.render(); });
+      nextBtn.addEventListener('click', () => { this.calWeekStart = addDaysISO(this.calWeekStart,  7); this.render(); });
+      this._renderCalLegend(content, sem);
+      this._renderWeekGrid(content, sem);
+    }
+
+    this._renderCalFilterBar(content, sem);
+  }
+
+  _renderCalLegend(content, sem) {
+    const classes = sem.classes || [];
+    if (classes.length === 0) return;
+
+    const legend = content.createDiv('hc-cal-legend');
+
+    // Lectures group — colored by class
+    const classGroup = legend.createDiv('hc-cal-legend-group');
+    classGroup.createSpan({ cls: 'hc-cal-legend-grouplabel', text: 'Lectures' });
+    for (const cls of classes) {
+      const c = getColor(cls.colorIndex);
+      const item = classGroup.createDiv('hc-cal-legend-item');
+      const dot = item.createDiv('hc-cal-legend-dot');
+      dot.style.background = c.accent;
+      item.createSpan({ cls: 'hc-cal-legend-label', text: cls.code });
+    }
+
+    legend.createDiv('hc-cal-legend-sep');
+
+    // Assignment types group
+    const typeGroup = legend.createDiv('hc-cal-legend-group');
+    typeGroup.createSpan({ cls: 'hc-cal-legend-grouplabel', text: 'Assignments' });
+    const typesToShow = ['Reading', 'Writing', 'Discussion', 'Project', 'Exam', 'Other'];
+    for (const type of typesToShow) {
+      const style = ASSIGNMENT_TYPE_STYLE[type];
+      if (!style) continue;
+      const item = typeGroup.createDiv('hc-cal-legend-item');
+      const dot = item.createDiv('hc-cal-legend-dot');
+      dot.style.background = style.color;
+      item.createSpan({ cls: 'hc-cal-legend-label', text: type });
+    }
+  }
+
+  _renderMonthGrid(content, sem) {
+    const todayISO = getTodayISO();
+    const firstISO = makeISO(this.calYear, this.calMonth + 1, 1);
+    const firstD   = new Date(firstISO + 'T12:00:00');
+    const startOffset = (firstD.getDay() + 6) % 7;
+    const gridStartISO = addDaysISO(firstISO, -startOffset);
+
+    const grid = content.createDiv('hc-cal-grid');
+
+    for (const d of ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']) {
+      grid.createDiv({ cls: 'hc-cal-day-header', text: d });
+    }
+
+    for (let i = 0; i < 42; i++) {
+      const dateISO = addDaysISO(gridStartISO, i);
+      const d = new Date(dateISO + 'T12:00:00');
+      const inMonth = d.getMonth() === this.calMonth && d.getFullYear() === this.calYear;
+      const isToday = dateISO === todayISO;
+      const items   = getItemsForDate(sem, dateISO, this.calFilterClassId);
+
+      const cell = grid.createDiv('hc-cal-cell');
+      if (isToday)  cell.addClass('hc-cal-cell--today');
+      if (!inMonth) cell.addClass('hc-cal-cell--other-month');
+      if (items.length > 0) {
+        cell.addClass('hc-cal-cell--has-items');
+        cell.addEventListener('click', () => this._showCalPopover(items, cell, dateISO));
+      }
+
+      const dateNum = cell.createDiv('hc-cal-date-num');
+      dateNum.setText(String(d.getDate()));
+      if (isToday) dateNum.addClass('hc-cal-date-num--today');
+
+      // Type-colored pills — display only, no individual click listeners
+      const maxPills = 3;
+      const shown = items.slice(0, maxPills);
+      const extra = items.length - maxPills;
+
+      for (const item of shown) {
+        const style = getCalItemStyle(item);
+        const overdue = this._isCalItemOverdue(item);
+        const pill = cell.createDiv('hc-cal-pill');
+        pill.style.background = style.bg;
+        pill.style.color = overdue ? '#E24B4A' : style.color;
+        pill.setText(item.title);
+      }
+
+      if (extra > 0) {
+        cell.createDiv({ cls: 'hc-cal-more', text: `+${extra} more` });
+      }
+    }
+  }
+
+  _renderWeekGrid(content, sem) {
+    const todayISO = getTodayISO();
+    const SHORT_DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+    const grid = content.createDiv('hc-cal-grid hc-cal-grid--week');
+
+    // Header row
+    for (let i = 0; i < 7; i++) {
+      const dateISO = addDaysISO(this.calWeekStart, i);
+      const d = new Date(dateISO + 'T12:00:00');
+      const isToday = dateISO === todayISO;
+      const hdr = grid.createDiv('hc-cal-week-header');
+      if (isToday) hdr.addClass('hc-cal-week-header--today');
+      hdr.createDiv({ cls: 'hc-cal-week-header-day',  text: SHORT_DAYS[i] });
+      hdr.createDiv({ cls: 'hc-cal-week-header-date', text: String(d.getDate()) });
+    }
+
+    // Content row — cell click → popover (Option B)
+    for (let i = 0; i < 7; i++) {
+      const dateISO = addDaysISO(this.calWeekStart, i);
+      const isToday = dateISO === todayISO;
+      const items   = getItemsForDate(sem, dateISO, this.calFilterClassId);
+
+      const cell = grid.createDiv('hc-cal-week-cell');
+      if (isToday) cell.addClass('hc-cal-week-cell--today');
+      if (items.length > 0) {
+        cell.addClass('hc-cal-week-cell--has-items');
+        cell.addEventListener('click', () => this._showCalPopover(items, cell, dateISO));
+      }
+
+      for (const item of items) {
+        const style = getCalItemStyle(item);
+        const overdue = this._isCalItemOverdue(item);
+        const pill = cell.createDiv('hc-cal-week-pill');
+        pill.style.background = style.bg;
+        pill.style.color = overdue ? '#E24B4A' : style.color;
+        pill.setText(item.title);
+      }
+    }
+  }
+
+  _renderCalFilterBar(content, sem) {
+    const classes = sem.classes || [];
+
+    const bar = content.createDiv('hc-cal-filter-bar');
+    bar.createDiv({ cls: 'hc-cal-filter-label', text: 'Class' });
+
+    const filterWrap = bar.createDiv('hc-cal-filter-wrap');
+    const filterBtn  = filterWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const filterIcon = filterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(filterIcon, 'filter');
+    const label = this.calFilterClassId
+      ? (classes.find(c => c.id === this.calFilterClassId)?.code || 'All classes')
+      : 'All classes';
+    filterBtn.createSpan({ text: label });
+    const chevron = filterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(chevron, 'chevron-down');
+
+    let dropEl = null;
+    const closeDrop = () => { if (dropEl) { dropEl.remove(); dropEl = null; } };
+
+    filterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (dropEl) { closeDrop(); return; }
+      dropEl = filterWrap.createDiv('hc-sem-drop hc-cal-filter-drop');
+
+      const allItem = dropEl.createDiv('hc-sem-drop-item');
+      if (!this.calFilterClassId) allItem.addClass('hc-sem-drop-item--active');
+      const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
+      if (!this.calFilterClassId) setIcon(allIcon, 'check');
+      allItem.createSpan({ text: 'All classes' });
+      allItem.addEventListener('click', () => { this.calFilterClassId = null; closeDrop(); this.render(); });
+
+      dropEl.createDiv('hc-sem-drop-divider');
+
+      for (const cls of classes) {
+        const item = dropEl.createDiv('hc-sem-drop-item');
+        if (cls.id === this.calFilterClassId) item.addClass('hc-sem-drop-item--active');
+        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (cls.id === this.calFilterClassId) setIcon(icon, 'check');
+        const lbl = item.createSpan({ text: cls.code });
+        lbl.style.color = getColor(cls.colorIndex).accent;
+        item.addEventListener('click', () => { this.calFilterClassId = cls.id; closeDrop(); this.render(); });
+      }
+
+      setTimeout(() => document.addEventListener('click', () => closeDrop(), { once: true }), 0);
+    });
+  }
+
+  _isCalItemOverdue(item) {
+    if (item.kind === 'lecture') return false;
+    if (item.kind === 'assignment') {
+      return item.assignment.dueDate
+        && getDaysUntil(item.assignment.dueDate) < 0
+        && item.assignment.status !== 'done';
+    }
+    if (item.kind === 'exam') {
+      return item.exam.dueDate
+        && getDaysUntil(item.exam.dueDate) < 0
+        && item.exam.status !== 'done';
+    }
+    return false;
+  }
+
+  _navigateCalItem(item) {
+    if (item.kind === 'lecture')    this.navigate('lecture',    item.cls.id, item.lec.id);
+    if (item.kind === 'assignment') this.navigate('assignment', item.cls.id, item.lectureId, item.assignment.id);
+    if (item.kind === 'exam')       this.navigate('exam',       item.cls.id, null, null, item.exam.id);
+  }
+
+  _showCalPopover(items, cellEl, dateISO) {
+    this._closeCalPopover();
+    if (!items.length) return;
+
+    const pop = document.body.createDiv('hc-cal-popover');
+    this._calPopoverEl = pop;
+
+    const rect = cellEl.getBoundingClientRect();
+    const popW = 240;
+    const left = (rect.right + popW + 8 < window.innerWidth)
+      ? rect.right + 4
+      : rect.left - popW - 4;
+    const top = Math.max(8, Math.min(rect.top, window.innerHeight - 320));
+    pop.style.left = `${left}px`;
+    pop.style.top  = `${top}px`;
+
+    pop.createDiv({ cls: 'hc-cal-popover-date', text: formatDateLong(dateISO) });
+
+    for (const item of items) {
+      const style = getCalItemStyle(item);
+      const overdue = this._isCalItemOverdue(item);
+      const row = pop.createDiv('hc-cal-popover-item');
+      if (overdue) row.addClass('hc-cal-popover-item--overdue');
+
+      // Type-colored dot
+      const dot = row.createDiv('hc-cal-popover-dot');
+      dot.style.background = style.color;
+
+      const info = row.createDiv('hc-cal-popover-info');
+      const kindText = item.kind === 'lecture' ? 'Lecture'
+        : item.kind === 'exam'       ? 'Exam'
+        : (item.assignment.type || 'Assignment');
+      info.createSpan({ cls: 'hc-cal-popover-kind',  text: kindText });
+      info.createDiv({  cls: 'hc-cal-popover-title', text: item.title });
+
+      // Class code in muted text
+      info.createDiv({ cls: 'hc-cal-popover-class', text: item.cls.code });
+
+      row.addEventListener('click', () => {
+        this._closeCalPopover();
+        this._navigateCalItem(item);
+      });
+    }
+
+    this._calPopoverCloseHandler = (e) => {
+      if (!pop.contains(e.target)) this._closeCalPopover();
+    };
+    setTimeout(() => document.addEventListener('click', this._calPopoverCloseHandler, true), 0);
+  }
+
+  _closeCalPopover() {
+    if (this._calPopoverEl) { this._calPopoverEl.remove(); this._calPopoverEl = null; }
+    if (this._calPopoverCloseHandler) {
+      document.removeEventListener('click', this._calPopoverCloseHandler, true);
+      this._calPopoverCloseHandler = null;
+    }
   }
 
   // ─── Dropdown cleanup ─────────────────────────────────────────────────────
