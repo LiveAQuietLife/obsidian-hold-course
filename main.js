@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.9 */ 
+/* --- Hold Course --- v0.4.10 */ 
 'use strict';
 
 const {
@@ -125,6 +125,34 @@ function getLecturesSorted(cls) {
     if (!a.date) return 1;
     if (!b.date) return -1;
     return a.date.localeCompare(b.date);
+  });
+}
+
+function getAssignmentsSorted(cls) {
+  const items = [];
+  for (const a of (cls.assignments || [])) {
+    items.push({ assignment: a, lectureId: null });
+  }
+  for (const lec of getLecturesSorted(cls)) {
+    for (const a of (lec.assignments || [])) {
+      items.push({ assignment: a, lectureId: lec.id });
+    }
+  }
+  items.sort((a, b) => {
+    if (!a.assignment.dueDate && !b.assignment.dueDate) return 0;
+    if (!a.assignment.dueDate) return 1;
+    if (!b.assignment.dueDate) return -1;
+    return a.assignment.dueDate.localeCompare(b.assignment.dueDate);
+  });
+  return items;
+}
+
+function getExamsSorted(cls) {
+  return [...(cls.exams || [])].sort((a, b) => {
+    if (!a.dueDate && !b.dueDate) return 0;
+    if (!a.dueDate) return 1;
+    if (!b.dueDate) return -1;
+    return a.dueDate.localeCompare(b.dueDate);
   });
 }
 
@@ -1033,12 +1061,31 @@ class HoldCourseView extends ItemView {
     const sorted = getLecturesSorted(cls);
     const num = sorted.indexOf(lec) + 1;
 
-    // Back button
-    const backBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
+    // Top bar: back button + prev/next nav
+    const topbar = content.createDiv('hc-detail-topbar');
+    const backBtn = topbar.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
     backBtn.createSpan({ text: cls.code });
     backBtn.addEventListener('click', () => this.navigate('class', cls.id));
+
+    const navEl = topbar.createDiv('hc-detail-nav');
+    const idx = sorted.indexOf(lec);
+    const prevLec = sorted[idx - 1] || null;
+    const nextLec = sorted[idx + 1] || null;
+    const prevLecBtn = navEl.createEl('button', { cls: 'hc-detail-nav-btn' });
+    setIcon(prevLecBtn, 'chevron-left');
+    prevLecBtn.disabled = !prevLec;
+    prevLecBtn.addEventListener('click', () => {
+      if (prevLec) this.navigate('lecture', cls.id, prevLec.id);
+    });
+    navEl.createSpan({ cls: 'hc-detail-nav-pos', text: `${idx + 1} / ${sorted.length}` });
+    const nextLecBtn = navEl.createEl('button', { cls: 'hc-detail-nav-btn' });
+    setIcon(nextLecBtn, 'chevron-right');
+    nextLecBtn.disabled = !nextLec;
+    nextLecBtn.addEventListener('click', () => {
+      if (nextLec) this.navigate('lecture', cls.id, nextLec.id);
+    });
 
     // Lecture label
     const labelEl = content.createDiv('hc-lecture-detail-label');
@@ -1149,7 +1196,8 @@ class HoldCourseView extends ItemView {
       assignList.createDiv({ cls: 'hc-empty-text hc-lecture-assign-empty', text: 'No assignments for this lecture.' });
     } else {
       for (const a of lec.assignments) {
-        const aRow = assignList.createDiv('hc-lecture-assign-row');
+        const aRow = assignList.createDiv('hc-lecture-assign-row hc-lecture-assign-row--clickable');
+        aRow.addEventListener('click', () => this.navigate('assignment', cls.id, lec.id, a.id));
         if (a.type) {
           const pill = aRow.createSpan({ cls: 'hc-assign-type-pill', text: a.type });
         }
@@ -1287,19 +1335,49 @@ class HoldCourseView extends ItemView {
     const color = getColor(cls.colorIndex);
     const typeStyle = ASSIGNMENT_TYPE_STYLE[assignment.type] || ASSIGNMENT_TYPE_STYLE['Other'];
 
-    // Back button
-    const backBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
+    // Top bar: back button + prev/next nav
+    const assignSorted = getAssignmentsSorted(cls);
+    const assignIdx = assignSorted.findIndex(item => item.assignment.id === assignment.id);
+    const prevAssign = assignIdx > 0 ? assignSorted[assignIdx - 1] : null;
+    const nextAssign = assignIdx < assignSorted.length - 1 ? assignSorted[assignIdx + 1] : null;
+
+    const topbar = content.createDiv('hc-detail-topbar');
+    const backBtn = topbar.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
     const fromGlobal = this.previousScreen === 'assignments';
-    backBtn.createSpan({ text: fromGlobal ? 'All Assignments' : cls.code });
+    const fromLecture = this.previousScreen === 'lecture';
+    if (fromGlobal) backBtn.createSpan({ text: 'All Assignments' });
+    else if (fromLecture) {
+      const srcLec = cls.lectures.find(l => l.id === this.currentLectureId);
+      const srcSorted = getLecturesSorted(cls);
+      const srcNum = srcLec ? srcSorted.indexOf(srcLec) + 1 : '?';
+      backBtn.createSpan({ text: `Lecture ${srcNum}` });
+    } else backBtn.createSpan({ text: cls.code });
     backBtn.addEventListener('click', () => {
       if (fromGlobal) {
         this.navigate('assignments');
+      } else if (fromLecture) {
+        this.navigate('lecture', cls.id, this.currentLectureId);
       } else {
         this.currentTab = 'Assignments';
         this.navigate('class', cls.id);
       }
+    });
+
+    const assignNavEl = topbar.createDiv('hc-detail-nav');
+    const prevAssignBtn = assignNavEl.createEl('button', { cls: 'hc-detail-nav-btn' });
+    setIcon(prevAssignBtn, 'chevron-left');
+    prevAssignBtn.disabled = !prevAssign;
+    prevAssignBtn.addEventListener('click', () => {
+      if (prevAssign) this.navigate('assignment', cls.id, prevAssign.lectureId, prevAssign.assignment.id);
+    });
+    assignNavEl.createSpan({ cls: 'hc-detail-nav-pos', text: assignIdx >= 0 ? `${assignIdx + 1} / ${assignSorted.length}` : '' });
+    const nextAssignBtn = assignNavEl.createEl('button', { cls: 'hc-detail-nav-btn' });
+    setIcon(nextAssignBtn, 'chevron-right');
+    nextAssignBtn.disabled = !nextAssign;
+    nextAssignBtn.addEventListener('click', () => {
+      if (nextAssign) this.navigate('assignment', cls.id, nextAssign.lectureId, nextAssign.assignment.id);
     });
 
     // Type pill + title
@@ -1584,14 +1662,35 @@ class HoldCourseView extends ItemView {
 
     const color = getColor(cls.colorIndex);
 
-    // Back button
-    const backBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
+    // Top bar: back button + prev/next nav
+    const examSorted = getExamsSorted(cls);
+    const examIdx = examSorted.findIndex(e => e.id === exam.id);
+    const prevExam = examIdx > 0 ? examSorted[examIdx - 1] : null;
+    const nextExam = examIdx < examSorted.length - 1 ? examSorted[examIdx + 1] : null;
+
+    const topbar = content.createDiv('hc-detail-topbar');
+    const backBtn = topbar.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
     backBtn.createSpan({ text: cls.code });
     backBtn.addEventListener('click', () => {
       this.currentTab = 'Exams';
       this.navigate('class', cls.id);
+    });
+
+    const examNavEl = topbar.createDiv('hc-detail-nav');
+    const prevExamBtn = examNavEl.createEl('button', { cls: 'hc-detail-nav-btn' });
+    setIcon(prevExamBtn, 'chevron-left');
+    prevExamBtn.disabled = !prevExam;
+    prevExamBtn.addEventListener('click', () => {
+      if (prevExam) this.navigate('exam', cls.id, null, null, prevExam.id);
+    });
+    examNavEl.createSpan({ cls: 'hc-detail-nav-pos', text: examIdx >= 0 ? `${examIdx + 1} / ${examSorted.length}` : '' });
+    const nextExamBtn = examNavEl.createEl('button', { cls: 'hc-detail-nav-btn' });
+    setIcon(nextExamBtn, 'chevron-right');
+    nextExamBtn.disabled = !nextExam;
+    nextExamBtn.addEventListener('click', () => {
+      if (nextExam) this.navigate('exam', cls.id, null, null, nextExam.id);
     });
 
     // Title

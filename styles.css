@@ -1,4 +1,4 @@
-/* --- Hold Course - v0.4.9 -------------------------------------------------- */
+/* --- Hold Course - v0.4.10 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -730,8 +730,51 @@
 
 /* --- Lecture detail -------------------------------------------------------- */
 
-.hc-lecture-back-btn {
+.hc-detail-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 20px;
+}
+
+.hc-lecture-back-btn {
+  margin-bottom: 0;
+}
+
+.hc-detail-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.hc-detail-nav-pos {
+  font-size: 12px;
+  color: var(--text-faint);
+  min-width: 42px;
+  text-align: center;
+}
+
+.hc-detail-nav-btn {
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 3px 5px;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.hc-detail-nav-btn:hover:not(:disabled) {
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+
+.hc-detail-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .hc-lecture-detail-label {
@@ -847,6 +890,15 @@
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   background: var(--background-primary);
+}
+
+.hc-lecture-assign-row--clickable {
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.hc-lecture-assign-row--clickable:hover {
+  background: var(--background-secondary);
 }
 
 .hc-assign-type-pill {
