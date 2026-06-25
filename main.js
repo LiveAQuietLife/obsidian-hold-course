@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.8 */ 
+/* --- Hold Course --- v0.4.9 */ 
 'use strict';
 
 const {
@@ -734,51 +734,48 @@ class HoldCourseView extends ItemView {
 
   _renderTodayStrip(content, sem) {
     const today = getTodayISO();
-    const weekEnd = getWeekEndISO();
 
-    const todayLectures = [];
-    for (const cls of sem.classes) {
-      for (const lec of (cls.lectures || [])) {
-        if (lec.date === today) todayLectures.push({ cls, lec });
-      }
-    }
+    const dueToday = getAllAssignments(sem)
+      .filter(a => a.status !== 'done' && a.dueDate === today)
+      .sort((a, b) => a.title.localeCompare(b.title));
 
-    const dueThisWeek = getAllAssignments(sem)
-      .filter(a => a.status !== 'done' && a.dueDate && a.dueDate <= weekEnd)
-      .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-
-    if (!todayLectures.length && !dueThisWeek.length) return;
+    const comingUp = getAllAssignments(sem)
+      .filter(a => a.status !== 'done' && a.dueDate && a.dueDate > today)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+      .slice(0, 5);
 
     const strip = content.createDiv('hc-today-strip');
 
-    // Today's lectures column
-    const todayDate = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-    if (todayLectures.length) {
-      const col = strip.createDiv('hc-today-col');
-      col.createDiv({ cls: 'hc-today-label', text: `Today — ${todayDate}` });
-      for (const { cls, lec } of todayLectures) {
-        const color = getColor(cls.colorIndex);
-        const row = col.createDiv('hc-today-row');
+    // Left: Due today — always shown, empty state if nothing
+    const leftCol = strip.createDiv('hc-today-col');
+    leftCol.createDiv({ cls: 'hc-today-label', text: 'Due today' });
+    if (dueToday.length) {
+      for (const a of dueToday) {
+        const info = getDueInfo(a.dueDate);
+        const row = leftCol.createDiv('hc-today-row');
         const dot = row.createDiv('hc-today-dot');
-        dot.style.background = color.accent;
-        row.createSpan({ text: `${cls.code} · ${lec.title}` });
+        dot.style.background = info ? info.color : '#999';
+        row.createSpan({ text: a.title });
       }
+    } else {
+      const emptyRow = leftCol.createDiv('hc-today-row hc-today-empty');
+      emptyRow.createSpan({ text: 'No assignments due today.' });
     }
 
-    // Due this week column
-    if (dueThisWeek.length) {
-      const col = strip.createDiv('hc-today-col');
-      col.createDiv({ cls: 'hc-today-label', text: 'Due this week' });
-      for (const a of dueThisWeek.slice(0, 5)) {
+    // Right: Coming up — always shown, empty state if nothing
+    const rightCol = strip.createDiv('hc-today-col');
+    rightCol.createDiv({ cls: 'hc-today-label', text: 'Coming up' });
+    if (comingUp.length) {
+      for (const a of comingUp) {
         const info = getDueInfo(a.dueDate);
-        const row = col.createDiv('hc-today-row');
+        const row = rightCol.createDiv('hc-today-row');
         const dot = row.createDiv('hc-today-dot');
-        dot.style.background = info ? info.color : getColor(a.colorIndex).accent;
-        const span = row.createSpan({ text: `${a.title} · ${formatDate(a.dueDate)}` });
-        if (info?.urgency === 'overdue' || info?.urgency === 'today') {
-          span.style.color = '#A32D2D';
-        }
+        dot.style.background = info ? info.color : '#999';
+        row.createSpan({ text: `${a.title} · ${formatDate(a.dueDate)}` });
       }
+    } else {
+      const emptyRow = rightCol.createDiv('hc-today-row hc-today-empty');
+      emptyRow.createSpan({ text: 'Nothing coming up.' });
     }
   }
 
