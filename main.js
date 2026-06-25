@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.11 */ 
+/* --- Hold Course --- v0.4.12 */ 
 'use strict';
 
 const {
@@ -2332,6 +2332,7 @@ class AddSemesterModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'New semester' });
 
@@ -2369,6 +2370,7 @@ class AddClassModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add class' });
 
@@ -2436,6 +2438,7 @@ class EditClassModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit class' });
 
@@ -2527,6 +2530,46 @@ class DeleteClassModal extends Modal {
 // ─── Shared modal footer helper ───────────────────────────────────────────────
 // Attached to modal prototypes that share this pattern
 
+function _makeDraggable(modal) {
+  const el = modal.modalEl;
+  el.style.position = 'fixed';
+  let isDragging = false, dragOffX = 0, dragOffY = 0;
+
+  const onMouseMove = e => {
+    if (!isDragging) return;
+    el.style.left      = (e.clientX - dragOffX) + 'px';
+    el.style.top       = (e.clientY - dragOffY) + 'px';
+    el.style.transform = 'none';
+    el.style.margin    = '0';
+  };
+  const onMouseUp = () => {
+    isDragging = false;
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup',   onMouseUp);
+  };
+
+  const dragBar = modal.contentEl.createDiv('hc-drag-bar');
+  dragBar.createSpan({ cls: 'hc-drag-bar-dots' });
+  dragBar.createSpan({ cls: 'hc-drag-bar-label', text: 'drag to move' });
+
+  dragBar.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    if (!el.style.left) {
+      const rect = el.getBoundingClientRect();
+      el.style.left      = rect.left + 'px';
+      el.style.top       = rect.top  + 'px';
+      el.style.transform = 'none';
+      el.style.margin    = '0';
+    }
+    isDragging = true;
+    dragOffX = e.clientX - el.getBoundingClientRect().left;
+    dragOffY = e.clientY - el.getBoundingClientRect().top;
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup',   onMouseUp);
+    e.preventDefault();
+  });
+}
+
 function _renderFooter(contentEl, saveLabel, onSave) {
   const footer = contentEl.createDiv('hc-modal-footer');
   const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
@@ -2548,6 +2591,7 @@ class AddLectureModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add lecture' });
 
@@ -2615,6 +2659,7 @@ class EditLectureModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit lecture' });
 
@@ -2726,6 +2771,7 @@ class AddAssignmentModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add assignment' });
 
@@ -2854,6 +2900,7 @@ class EditAssignmentModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit assignment' });
 
@@ -2993,6 +3040,7 @@ class MoveAssignmentModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Move to lecture' });
 
@@ -3052,6 +3100,7 @@ class AddExamModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add exam' });
 
@@ -3096,6 +3145,7 @@ class EditExamModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit exam' });
 
@@ -3228,6 +3278,7 @@ class QuickAddResourceModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Quick add to Library' });
     contentEl.createDiv({
@@ -3281,6 +3332,7 @@ class AddResourceModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add resource' });
 
@@ -3379,6 +3431,7 @@ class EditResourceModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit resource' });
 
@@ -3497,7 +3550,18 @@ class DeleteResourceModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
-// ─── Shared footer — attach after all class definitions ───────────────────────
+// ─── Shared modal behaviours — attach after all class definitions ─────────────
+
+const DRAGGABLE_MODALS = [
+  AddSemesterModal, AddClassModal, EditClassModal,
+  AddLectureModal, EditLectureModal,
+  AddAssignmentModal, EditAssignmentModal, MoveAssignmentModal,
+  AddExamModal, EditExamModal,
+  QuickAddResourceModal, AddResourceModal, EditResourceModal,
+];
+for (const Cls of DRAGGABLE_MODALS) {
+  Cls.prototype._makeDraggable = _makeDraggable;
+}
 
 AddSemesterModal.prototype._renderFooter    = _renderFooter;
 AddClassModal.prototype._renderFooter       = _renderFooter;

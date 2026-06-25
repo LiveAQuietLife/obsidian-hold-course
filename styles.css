@@ -1,4 +1,4 @@
-/* --- Hold Course - v0.4.11 -------------------------------------------------- */
+/* --- Hold Course - v0.4.12 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -564,6 +564,36 @@
 /* --- Modals ---------------------------------------------------------------- */
 
 .hc-modal { padding: 0; }
+
+/* --- Drag bar -------------------------------------------------------------- */
+
+.hc-drag-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  cursor: grab;
+  user-select: none;
+  border-radius: 8px 8px 0 0;
+}
+
+.hc-drag-bar:active { cursor: grabbing; }
+
+.hc-drag-bar-dots {
+  font-size: 14px;
+  letter-spacing: 2px;
+  opacity: 0.4;
+}
+
+.hc-drag-bar-dots::before { content: "⠿⠿⠿"; }
+
+.hc-drag-bar-label {
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
 
 .hc-modal-title {
   font-size: 18px;
