@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.14 */ 
+/* --- Hold Course --- v0.4.16 */ 
 'use strict';
 
 const {
@@ -25,19 +25,19 @@ const COLOR_PALETTE = [
   { name: 'green',  accent: '#3B6D11', light: '#C0DD97', bg: '#EAF3DE', text: '#173404' },
 ];
 
+const ASSIGNMENT_TYPE_STYLE = {
+  'Reading':    { color: '#0A3D8F', bg: '#E8F1FC' },
+  'Writing':    { color: '#C05E0A', bg: '#FAEADC' },
+  'Quiz':       { color: '#A0235F', bg: '#F8E4EF' },
+  'Exam':       { color: '#A0235F', bg: '#F8E4EF' },
+  'Project':    { color: '#4A6FA5', bg: '#E4EBF5' },
+  'Discussion': { color: '#5C7A00', bg: '#EBF3D6' },
+  'Other':      { color: '#666666', bg: '#F0F0F0' },
+};
+
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const ASSIGNMENT_TYPES = ['Reading', 'Writing', 'Project', 'Discussion', 'Other'];
-
-const ASSIGNMENT_TYPE_STYLE = {
-  'Reading':    { color: '#1B6FCC', bg: '#E8F1FC' },
-  'Writing':    { color: '#BA7517', bg: '#FAEEDA' },
-  'Quiz':       { color: '#0F6E56', bg: '#E1F5EE' },
-  'Exam':       { color: '#993C1D', bg: '#FAECE7' },
-  'Project':    { color: '#534AB7', bg: '#EEEDFE' },
-  'Discussion': { color: '#3B6D11', bg: '#EAF3DE' },
-  'Other':      { color: '#666', bg: '#F0F0F0' },
-};
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,10 @@ function generateId() {
 
 function getColor(index) {
   return COLOR_PALETTE[index % COLOR_PALETTE.length];
+}
+
+function getTypeStyle(type) {
+  return ASSIGNMENT_TYPE_STYLE[type] || ASSIGNMENT_TYPE_STYLE['Other'];
 }
 
 function getTodayISO() {
@@ -239,8 +243,8 @@ function getCalItemStyle(item) {
     const c = getColor(item.cls.colorIndex);
     return { color: c.accent, bg: c.bg };
   }
-  if (item.kind === 'exam')       return ASSIGNMENT_TYPE_STYLE['Exam'] || { color: '#666', bg: '#F0F0F0' };
-  if (item.kind === 'assignment') return ASSIGNMENT_TYPE_STYLE[item.assignment.type] || ASSIGNMENT_TYPE_STYLE['Other'];
+  if (item.kind === 'exam')       return getTypeStyle('Exam');
+  if (item.kind === 'assignment') return getTypeStyle(item.assignment.type);
   return { color: '#666', bg: '#F0F0F0' };
 }
 
@@ -951,6 +955,18 @@ class HoldCourseView extends ItemView {
       body.createDiv({ cls: 'hc-class-next-title', text: '—' });
     }
 
+    // Lecture progress — only shown once at least one lecture is marked done
+    const totalLectures = (cls.lectures || []).length;
+    const doneLectures  = (cls.lectures || []).filter(l => l.status === 'done').length;
+    if (totalLectures > 0 && doneLectures > 0) {
+      body.createDiv('hc-class-divider');
+      const progRow = body.createDiv('hc-class-lec-progress');
+      const icon = progRow.createSpan({ cls: 'hc-inline-icon' });
+      setIcon(icon, 'book-open');
+      icon.style.color = color.accent;
+      progRow.createSpan({ cls: 'hc-class-lec-progress-text', text: `${doneLectures} / ${totalLectures} lectures` });
+    }
+
     card.addEventListener('click', () => this.navigate('class', cls.id));
   }
 
@@ -1385,7 +1401,7 @@ class HoldCourseView extends ItemView {
   }
 
   _renderAssignmentRow(container, assignment, lectureLabel, sem, cls) {
-    const typeStyle = ASSIGNMENT_TYPE_STYLE[assignment.type] || ASSIGNMENT_TYPE_STYLE['Other'];
+    const typeStyle = getTypeStyle(assignment.type);
     const info = assignment.dueDate ? getDueInfo(assignment.dueDate) : null;
 
     const row = container.createDiv('hc-assign-row');
@@ -1440,7 +1456,7 @@ class HoldCourseView extends ItemView {
 
     const { assignment, lectureId } = result;
     const color = getColor(cls.colorIndex);
-    const typeStyle = ASSIGNMENT_TYPE_STYLE[assignment.type] || ASSIGNMENT_TYPE_STYLE['Other'];
+    const typeStyle = getTypeStyle(assignment.type);
 
     // Top bar: back button + prev/next nav
     const assignSorted = getAssignmentsSorted(cls);
@@ -2304,7 +2320,7 @@ class HoldCourseView extends ItemView {
       typeDropEl.createDiv('hc-sem-drop-divider');
 
       for (const type of ASSIGNMENT_TYPES) {
-        const typeStyle = ASSIGNMENT_TYPE_STYLE[type] || ASSIGNMENT_TYPE_STYLE['Other'];
+        const typeStyle = getTypeStyle(type);
         const item = typeDropEl.createDiv('hc-sem-drop-item');
         if (type === this.globalAssignFilterType) item.addClass('hc-sem-drop-item--active');
         const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
@@ -2407,7 +2423,7 @@ class HoldCourseView extends ItemView {
       const cls = classes.find(c => c.id === a.classId);
       if (!cls) continue;
 
-      const typeStyle = ASSIGNMENT_TYPE_STYLE[a.type] || ASSIGNMENT_TYPE_STYLE['Other'];
+      const typeStyle = getTypeStyle(a.type);
       const info      = a.dueDate ? getDueInfo(a.dueDate) : null;
       const color     = getColor(cls.colorIndex);
 
@@ -2549,8 +2565,7 @@ class HoldCourseView extends ItemView {
     typeGroup.createSpan({ cls: 'hc-cal-legend-grouplabel', text: 'Assignments' });
     const typesToShow = ['Reading', 'Writing', 'Discussion', 'Project', 'Exam', 'Other'];
     for (const type of typesToShow) {
-      const style = ASSIGNMENT_TYPE_STYLE[type];
-      if (!style) continue;
+      const style = getTypeStyle(type);
       const item = typeGroup.createDiv('hc-cal-legend-item');
       const dot = item.createDiv('hc-cal-legend-dot');
       dot.style.background = style.color;
@@ -2598,7 +2613,8 @@ class HoldCourseView extends ItemView {
       for (const item of shown) {
         const style = getCalItemStyle(item);
         const overdue = this._isCalItemOverdue(item);
-        const pill = cell.createDiv('hc-cal-pill');
+        const pillCls = item.kind === 'lecture' ? 'hc-cal-pill hc-cal-pill--lecture' : 'hc-cal-pill';
+        const pill = cell.createDiv(pillCls);
         pill.style.background = style.bg;
         pill.style.color = overdue ? '#E24B4A' : style.color;
         pill.setText(item.title);
@@ -2643,7 +2659,8 @@ class HoldCourseView extends ItemView {
       for (const item of items) {
         const style = getCalItemStyle(item);
         const overdue = this._isCalItemOverdue(item);
-        const pill = cell.createDiv('hc-cal-week-pill');
+        const weekPillCls = item.kind === 'lecture' ? 'hc-cal-week-pill hc-cal-week-pill--lecture' : 'hc-cal-week-pill';
+        const pill = cell.createDiv(weekPillCls);
         pill.style.background = style.bg;
         pill.style.color = overdue ? '#E24B4A' : style.color;
         pill.setText(item.title);
