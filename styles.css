@@ -1,4 +1,4 @@
-/* --- Hold Course - v0.4.5 -------------------------------------------------- */
+/* --- Hold Course - v0.4.8 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -897,6 +897,41 @@
   margin-bottom: 12px;
 }
 
+.hc-global-controls {
+  justify-content: space-between;
+}
+
+.hc-global-filter-wrap {
+  position: relative;
+}
+
+.hc-global-filter-label {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-global-right-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hc-assign-context-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.hc-assign-class-chip {
+  font-weight: 600;
+  font-size: 12px;
+}
+
 .hc-assign-list {
   display: flex;
   flex-direction: column;
@@ -1061,6 +1096,21 @@
 }
 
 .hc-assign-conditional { /* structural container for conditional modal fields */ }
+
+.hc-assign-note-section {
+  margin-bottom: 16px;
+}
+
+.hc-assign-note-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hc-assign-note-input-wrap {
+  flex: 1;
+  min-width: 0;
+}
 
 /* --- Exam list -------------------------------------------------------------- */
 

@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.5 */ 
+/* --- Hold Course --- v0.4.8 */ 
 'use strict';
 
 const {
@@ -259,6 +259,7 @@ class HoldCoursePlugin extends Plugin {
       date: lectureData.date || '',
       status: 'not-started',
       notes: '',
+      vaultLink: '',
       assignments: [],
     };
     cls.lectures.push(lec);
@@ -443,6 +444,8 @@ class HoldCourseView extends ItemView {
     this.currentExamId = null;
     this.currentResourceId = null;
     this.currentTab = 'Lectures';
+    this.previousScreen = null;
+    this.globalAssignFilterClassId = null;
     // Track open dropdown cleanup
     this._semDropEl = null;
     this._semCloseHandler = null;
@@ -460,6 +463,7 @@ class HoldCourseView extends ItemView {
     if (screen === 'class' && classId !== this.currentClassId) {
       this.currentTab = 'Lectures';
     }
+    this.previousScreen = this.screen;
     this.screen = screen;
     this.currentClassId = classId;
     this.currentLectureId = lectureId;
@@ -1095,6 +1099,51 @@ class HoldCourseView extends ItemView {
       this.plugin.save();
     });
 
+    // Vault link section
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Lecture Notes' });
+    const vaultLinkSection = content.createDiv('hc-assign-note-section');
+
+    const renderVaultLinkSection = () => {
+      vaultLinkSection.empty();
+      const path = lec.vaultLink || '';
+
+      const linkRow = vaultLinkSection.createDiv('hc-assign-note-row');
+      const textWrap = linkRow.createDiv('hc-assign-note-input-wrap');
+      const linkInput = textWrap.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+      linkInput.placeholder = 'path/to/notes.md';
+      linkInput.value = path;
+      linkInput.addEventListener('blur', () => {
+        lec.vaultLink = linkInput.value.trim();
+        this.plugin.save();
+      });
+
+      const browseBtn = linkRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Browse' });
+      browseBtn.addEventListener('click', () => {
+        new VaultLinkSuggestModal(this.app, (selectedPath) => {
+          lec.vaultLink = selectedPath;
+          this.plugin.save();
+          renderVaultLinkSection();
+        }).open();
+      });
+
+      if (path) {
+        const openBtn = linkRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Open note' });
+        openBtn.addEventListener('click', () => {
+          const file = this.app.vault.getAbstractFileByPath(path);
+          if (file) this.app.workspace.openLinkText(path, '', false);
+          else new Notice('Note not found in vault.');
+        });
+
+        const removeBtn = linkRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Remove' });
+        removeBtn.addEventListener('click', () => {
+          lec.vaultLink = '';
+          this.plugin.save();
+          renderVaultLinkSection();
+        });
+      }
+    };
+    renderVaultLinkSection();
+
     // Assignments section
     content.createDiv({ cls: 'hc-lecture-section-label', text: 'Assignments' });
     const assignList = content.createDiv('hc-lecture-assign-list');
@@ -1245,10 +1294,15 @@ class HoldCourseView extends ItemView {
     const backBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
-    backBtn.createSpan({ text: cls.code });
+    const fromGlobal = this.previousScreen === 'assignments';
+    backBtn.createSpan({ text: fromGlobal ? 'All Assignments' : cls.code });
     backBtn.addEventListener('click', () => {
-      this.currentTab = 'Assignments';
-      this.navigate('class', cls.id);
+      if (fromGlobal) {
+        this.navigate('assignments');
+      } else {
+        this.currentTab = 'Assignments';
+        this.navigate('class', cls.id);
+      }
     });
 
     // Type pill + title
@@ -1404,13 +1458,48 @@ class HoldCourseView extends ItemView {
     // Linked note (Writing only)
     if (assignment.type === 'Writing') {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Linked Note' });
-      const noteInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
-      noteInput.placeholder = 'Note name (file picker coming later)';
-      noteInput.value = assignment.linkedNote || '';
-      noteInput.addEventListener('blur', () => {
-        assignment.linkedNote = noteInput.value;
-        this.plugin.save();
-      });
+      const noteSection = content.createDiv('hc-assign-note-section');
+
+      const renderNoteSection = () => {
+        noteSection.empty();
+        const path = assignment.linkedNote || '';
+
+        const noteRow = noteSection.createDiv('hc-assign-note-row');
+        const textWrap = noteRow.createDiv('hc-assign-note-input-wrap');
+        const noteInput = textWrap.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+        noteInput.placeholder = 'path/to/note.md';
+        noteInput.value = path;
+        noteInput.addEventListener('blur', () => {
+          assignment.linkedNote = noteInput.value.trim();
+          this.plugin.save();
+        });
+
+        const browseBtn = noteRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Browse' });
+        browseBtn.addEventListener('click', () => {
+          new VaultLinkSuggestModal(this.app, (selectedPath) => {
+            assignment.linkedNote = selectedPath;
+            this.plugin.save();
+            renderNoteSection();
+          }).open();
+        });
+
+        if (path) {
+          const openBtn = noteRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Open note' });
+          openBtn.addEventListener('click', () => {
+            const file = this.app.vault.getAbstractFileByPath(path);
+            if (file) this.app.workspace.openLinkText(path, '', false);
+            else new Notice('Note not found in vault.');
+          });
+
+          const removeBtn = noteRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Remove' });
+          removeBtn.addEventListener('click', () => {
+            assignment.linkedNote = '';
+            this.plugin.save();
+            renderNoteSection();
+          });
+        }
+      };
+      renderNoteSection();
     }
   }
 
@@ -1843,10 +1932,223 @@ class HoldCourseView extends ItemView {
   // ─── Stub screens ─────────────────────────────────────────────────────────
 
   _renderAssignmentsStub(content) {
-    const placeholder = content.createDiv('hc-placeholder');
-    const icon = placeholder.createDiv({ cls: 'hc-placeholder-icon' });
-    setIcon(icon, 'construction');
-    placeholder.createDiv({ cls: 'hc-placeholder-text', text: 'Global assignments view coming in the next build.' });
+    const sem = this.plugin.getCurrentSemester();
+    if (!sem) {
+      const empty = content.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'No semester found.' });
+      return;
+    }
+
+    const SORT_OPTIONS = [
+      { key: 'due',    label: 'By due date' },
+      { key: 'class',  label: 'By class'    },
+      { key: 'status', label: 'By status'   },
+      { key: 'type',   label: 'By type'     },
+    ];
+    if (!sem.assignSort) sem.assignSort = 'due';
+    if (sem.assignShowDone === undefined) sem.assignShowDone = false;
+
+    const currentSort = SORT_OPTIONS.find(o => o.key === sem.assignSort) || SORT_OPTIONS[0];
+    const showDone    = sem.assignShowDone;
+    const classes     = sem.classes || [];
+
+    // ── Controls row ──────────────────────────────────────────────────────────
+    const controlRow = content.createDiv('hc-assign-controls hc-global-controls');
+
+    // Class filter dropdown
+    const filterWrap = controlRow.createDiv('hc-global-filter-wrap');
+    const filterBtn  = filterWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const filterIcon = filterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(filterIcon, 'filter');
+    const filterLabel = this.globalAssignFilterClassId
+      ? (classes.find(c => c.id === this.globalAssignFilterClassId)?.code || 'All classes')
+      : 'All classes';
+    filterBtn.createSpan({ cls: 'hc-global-filter-label', text: filterLabel });
+    const filterChev = filterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(filterChev, 'chevron-down');
+
+    let filterDropEl = null;
+    const closeFilterDrop = () => { if (filterDropEl) { filterDropEl.remove(); filterDropEl = null; } };
+    filterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (filterDropEl) { closeFilterDrop(); return; }
+      filterDropEl = filterWrap.createDiv('hc-sem-drop');
+
+      const allItem = filterDropEl.createDiv('hc-sem-drop-item');
+      if (!this.globalAssignFilterClassId) allItem.addClass('hc-sem-drop-item--active');
+      const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
+      if (!this.globalAssignFilterClassId) setIcon(allIcon, 'check');
+      allItem.createSpan({ text: 'All classes' });
+      allItem.addEventListener('click', () => {
+        this.globalAssignFilterClassId = null;
+        closeFilterDrop();
+        this.render();
+      });
+
+      filterDropEl.createDiv('hc-sem-drop-divider');
+
+      for (const cls of classes) {
+        const item = filterDropEl.createDiv('hc-sem-drop-item');
+        if (cls.id === this.globalAssignFilterClassId) item.addClass('hc-sem-drop-item--active');
+        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (cls.id === this.globalAssignFilterClassId) setIcon(icon, 'check');
+        const label = item.createSpan({ text: cls.code });
+        label.style.color = getColor(cls.colorIndex).accent;
+        item.addEventListener('click', () => {
+          this.globalAssignFilterClassId = cls.id;
+          closeFilterDrop();
+          this.render();
+        });
+      }
+
+      setTimeout(() => document.addEventListener('click', () => closeFilterDrop(), { once: true }), 0);
+    });
+
+    // Right side controls
+    const rightControls = controlRow.createDiv('hc-global-right-controls');
+
+    // Show done toggle
+    const doneToggle = rightControls.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const doneIcon = doneToggle.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(doneIcon, showDone ? 'eye-off' : 'eye');
+    doneToggle.createSpan({ text: showDone ? 'Hide done' : 'Show done' });
+    doneToggle.addEventListener('click', () => {
+      sem.assignShowDone = !sem.assignShowDone;
+      this.plugin.save();
+      this.render();
+    });
+
+    // Sort cycle button
+    const sortBtn = rightControls.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const sortIcon = sortBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(sortIcon, 'arrow-up-narrow-wide');
+    sortBtn.createSpan({ text: currentSort.label });
+    sortBtn.addEventListener('click', () => {
+      const idx = SORT_OPTIONS.findIndex(o => o.key === sem.assignSort);
+      sem.assignSort = SORT_OPTIONS[(idx + 1) % SORT_OPTIONS.length].key;
+      this.plugin.save();
+      this.render();
+    });
+
+    // ── Gather + filter + sort ────────────────────────────────────────────────
+    let allAssigns = getAllAssignments(sem);
+
+    if (this.globalAssignFilterClassId) {
+      allAssigns = allAssigns.filter(a => a.classId === this.globalAssignFilterClassId);
+    }
+    if (!showDone) {
+      allAssigns = allAssigns.filter(a => a.status !== 'done');
+    }
+
+    const STATUS_ORDER = { 'overdue': 0, 'today': 1, 'soon': 2, 'upcoming': 3, 'done': 4, 'none': 5 };
+    const getUrgency = (a) => a.dueDate ? (getDueInfo(a.dueDate)?.urgency || 'upcoming') : 'none';
+
+    if (sem.assignSort === 'due') {
+      allAssigns.sort((a, b) => {
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        return a.dueDate.localeCompare(b.dueDate);
+      });
+    } else if (sem.assignSort === 'class') {
+      allAssigns.sort((a, b) => {
+        const ca = a.classCode || '', cb = b.classCode || '';
+        if (ca !== cb) return ca.localeCompare(cb);
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        return a.dueDate.localeCompare(b.dueDate);
+      });
+    } else if (sem.assignSort === 'status') {
+      allAssigns.sort((a, b) => {
+        const ua = STATUS_ORDER[getUrgency(a)] ?? 5;
+        const ub = STATUS_ORDER[getUrgency(b)] ?? 5;
+        if (ua !== ub) return ua - ub;
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        return a.dueDate.localeCompare(b.dueDate);
+      });
+    } else if (sem.assignSort === 'type') {
+      allAssigns.sort((a, b) => {
+        const ta = a.type || '', tb = b.type || '';
+        if (ta !== tb) return ta.localeCompare(tb);
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        return a.dueDate.localeCompare(b.dueDate);
+      });
+    }
+
+    // ── List ──────────────────────────────────────────────────────────────────
+    const list = content.createDiv('hc-assign-list');
+
+    if (allAssigns.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({
+        cls: 'hc-empty-text',
+        text: showDone ? 'No assignments found.' : 'No pending assignments.',
+      });
+      return;
+    }
+
+    for (const a of allAssigns) {
+      const cls = classes.find(c => c.id === a.classId);
+      if (!cls) continue;
+
+      const typeStyle = ASSIGNMENT_TYPE_STYLE[a.type] || ASSIGNMENT_TYPE_STYLE['Other'];
+      const info      = a.dueDate ? getDueInfo(a.dueDate) : null;
+      const color     = getColor(cls.colorIndex);
+
+      const row = list.createDiv('hc-assign-row');
+      if (a.status === 'done') row.addClass('hc-assign-row--done');
+
+      // Type pill
+      const pill = row.createSpan({ cls: 'hc-assign-pill', text: a.type || 'Other' });
+      pill.style.color = typeStyle.color;
+      pill.style.background = typeStyle.bg;
+
+      // Middle: title, class chip + lecture context, status
+      const mid = row.createDiv('hc-assign-mid');
+      mid.createDiv({ cls: 'hc-assign-title', text: a.title });
+
+      const contextRow = mid.createDiv('hc-assign-context-row');
+      const classChip  = contextRow.createSpan({ cls: 'hc-assign-class-chip', text: cls.code });
+      classChip.style.color = color.accent;
+
+      let lecLabel = 'Class-level';
+      if (a.lectureId) {
+        const lec = (cls.lectures || []).find(l => l.id === a.lectureId);
+        if (lec) {
+          const sorted = getLecturesSorted(cls);
+          const num    = sorted.indexOf(lec) + 1;
+          lecLabel     = `L${num} — ${lec.title}`;
+        }
+      }
+      contextRow.createSpan({ cls: 'hc-assign-lecture', text: ` · ${lecLabel}` });
+
+      const statusEl = mid.createDiv({ cls: `hc-assign-status hc-assign-status--${a.status}` });
+      statusEl.setText(statusLabel(a.status));
+
+      // Right: due date
+      const right = row.createDiv('hc-assign-due');
+      if (info) {
+        right.createDiv({ cls: 'hc-assign-due-label', text: 'Due' });
+        const dateEl = right.createDiv({ cls: 'hc-assign-due-date', text: formatDate(a.dueDate) });
+        if (a.status !== 'done') {
+          dateEl.style.color = info.color;
+          if (info.urgency === 'overdue') {
+            right.createDiv({ cls: 'hc-assign-due-note', text: 'Overdue' }).style.color = info.color;
+          } else if (info.urgency !== 'upcoming') {
+            right.createDiv({ cls: 'hc-assign-due-note', text: info.note }).style.color = info.color;
+          } else {
+            right.createDiv({ cls: 'hc-assign-due-note', text: info.note });
+          }
+        }
+      }
+
+      row.addEventListener('click', () => this.navigate('assignment', cls.id, null, a.id));
+    }
   }
 
   _renderCalendarStub(content) {
