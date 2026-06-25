@@ -1,4 +1,4 @@
-/* --- Hold Course - v0.4.0 -------------------------------------------------- */
+/* --- Hold Course - v0.4.5 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -1343,4 +1343,180 @@
   background: var(--background-secondary);
   color: var(--text-muted);
   border-color: var(--background-modifier-border);
+}
+
+/* ─── Lecture reorder warning ───────────────────────────────────────────────── */
+
+.hc-lecture-reorder-warning {
+  font-size: 12px;
+  color: #854F0B;
+  background: #FAEEDA;
+  border: 1px solid #FAC775;
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin: 0 0 10px 0;
+  line-height: 1.4;
+}
+
+/* ─── Done row dimming ──────────────────────────────────────────────────────── */
+
+.hc-lecture-row--done {
+  opacity: 0.45;
+}
+
+.hc-assign-row--done {
+  opacity: 0.45;
+}
+
+/* ─── Assignment linked book ─────────────────────────────────────────────────── */
+
+.hc-assign-book-section {
+  margin-bottom: 16px;
+}
+
+.hc-assign-book-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+
+.hc-assign-book-link {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.hc-assign-book-link:hover .hc-assign-book-title {
+  text-decoration: underline;
+}
+
+.hc-assign-book-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-assign-book-author {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.hc-assign-book-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.hc-assign-book-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hc-assign-book-orphan {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ─── Resource picker in modals ──────────────────────────────────────────────── */
+
+.hc-resource-picker-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.hc-resource-picker-label {
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Resource referenced by ─────────────────────────────────────────────────── */
+
+.hc-resource-refs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.hc-resource-ref-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.hc-resource-ref-row:hover {
+  background: var(--background-secondary);
+}
+
+.hc-resource-ref-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.hc-resource-ref-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-resource-ref-lecture {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-resource-ref-chevron {
+  color: var(--text-faint);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+/* ─── Suggest modal footer ───────────────────────────────────────────────────── */
+
+.hc-suggest-footer {
+  padding: 8px 12px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+/* ─── Primary button ─────────────────────────────────────────────────────────── */
+
+.hc-btn--primary {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+}
+
+.hc-btn--primary:hover {
+  background: var(--interactive-accent-hover);
+  border-color: var(--interactive-accent-hover);
 }

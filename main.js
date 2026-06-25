@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.0 */ 
+/* --- Hold Course --- v0.4.5 */ 
 'use strict';
 
 const {
@@ -983,6 +983,7 @@ class HoldCourseView extends ItemView {
 
   _renderLectureRow(list, lec, num, color, sem, cls) {
     const row = list.createDiv('hc-lecture-row');
+    if (lec.status === 'done') row.addClass('hc-lecture-row--done');
 
     // Number badge
     const badge = row.createDiv('hc-lecture-badge');
@@ -1187,6 +1188,7 @@ class HoldCourseView extends ItemView {
     const info = assignment.dueDate ? getDueInfo(assignment.dueDate) : null;
 
     const row = container.createDiv('hc-assign-row');
+    if (assignment.status === 'done') row.addClass('hc-assign-row--done');
     if (assignment.type === 'Writing') row.addClass('hc-assign-row--writing');
 
     // Left: type pill
@@ -1339,13 +1341,64 @@ class HoldCourseView extends ItemView {
     // Linked book (Reading only)
     if (assignment.type === 'Reading') {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Linked Book' });
-      const bookInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
-      bookInput.placeholder = 'Book title (Library link coming later)';
-      bookInput.value = assignment.linkedBook || '';
-      bookInput.addEventListener('blur', () => {
-        assignment.linkedBook = bookInput.value;
-        this.plugin.save();
-      });
+      const bookSection = content.createDiv('hc-assign-book-section');
+
+      const classResources = (sem.resources || []).filter(r => (r.classIds || []).includes(cls.id));
+      const linkedResource = assignment.linkedBook ? (sem.resources || []).find(r => r.id === assignment.linkedBook) : null;
+      const isOrphaned = assignment.linkedBook && !linkedResource;
+
+      const renderBookSection = () => {
+        bookSection.empty();
+        const res = assignment.linkedBook ? (sem.resources || []).find(r => r.id === assignment.linkedBook) : null;
+
+        if (res) {
+          const bookRow = bookSection.createDiv('hc-assign-book-row');
+          const bookLink = bookRow.createDiv('hc-assign-book-link');
+          bookLink.createDiv({ cls: 'hc-assign-book-title', text: res.title });
+          if (res.author) bookLink.createDiv({ cls: 'hc-assign-book-author', text: res.author });
+          bookLink.addEventListener('click', () => this.navigate('resource', cls.id, null, null, null, res.id));
+
+          const bookActions = bookRow.createDiv('hc-assign-book-actions');
+          const changeBtn = bookActions.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Change' });
+          changeBtn.addEventListener('click', () => {
+            new ResourcePickSuggestModal(this.app, classResources, (resource) => {
+              assignment.linkedBook = resource.id;
+              this.plugin.save();
+              renderBookSection();
+            }, (titleHint) => {
+              new QuickAddResourceModal(this.app, this.plugin, sem.id, cls.id, titleHint, (resource) => {
+                assignment.linkedBook = resource.id;
+                this.plugin.save();
+                renderBookSection();
+              }).open();
+            }).open();
+          });
+          const removeBtn = bookActions.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Remove' });
+          removeBtn.addEventListener('click', () => {
+            assignment.linkedBook = '';
+            this.plugin.save();
+            renderBookSection();
+          });
+        } else {
+          const emptyRow = bookSection.createDiv('hc-assign-book-empty');
+          if (isOrphaned) emptyRow.createSpan({ cls: 'hc-assign-book-orphan', text: 'Book not found in Library. ' });
+          const selectBtn = emptyRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Select from Library' });
+          selectBtn.addEventListener('click', () => {
+            new ResourcePickSuggestModal(this.app, classResources, (resource) => {
+              assignment.linkedBook = resource.id;
+              this.plugin.save();
+              renderBookSection();
+            }, (titleHint) => {
+              new QuickAddResourceModal(this.app, this.plugin, sem.id, cls.id, titleHint, (resource) => {
+                assignment.linkedBook = resource.id;
+                this.plugin.save();
+                renderBookSection();
+              }).open();
+            }).open();
+          });
+        }
+      };
+      renderBookSection();
     }
 
     // Linked note (Writing only)
@@ -1734,6 +1787,48 @@ class HoldCourseView extends ItemView {
       }
     }
 
+    // Referenced by
+    const allRefs = [];
+    for (const c of (sem.classes || [])) {
+      for (const a of (c.assignments || [])) {
+        if (a.linkedBook === resource.id) {
+          allRefs.push({ assignment: a, refCls: c, lectureLabel: 'Class-level' });
+        }
+      }
+      const lecsSorted = getLecturesSorted(c);
+      lecsSorted.forEach((lec, i) => {
+        for (const a of (lec.assignments || [])) {
+          if (a.linkedBook === resource.id) {
+            allRefs.push({ assignment: a, refCls: c, lectureLabel: `L${i + 1} — ${lec.title}` });
+          }
+        }
+      });
+    }
+
+    if (allRefs.length > 0) {
+      content.createDiv({
+        cls: 'hc-lecture-section-label',
+        text: `Referenced by ${allRefs.length} assignment${allRefs.length === 1 ? '' : 's'}`,
+      });
+      const refList = content.createDiv('hc-resource-refs');
+      for (const { assignment, refCls, lectureLabel } of allRefs) {
+        const refRow = refList.createDiv('hc-resource-ref-row');
+
+        const chip = refRow.createSpan({ cls: 'hc-resource-class-chip', text: refCls.code });
+        chip.style.color = getColor(refCls.colorIndex).accent;
+        chip.style.background = getColor(refCls.colorIndex).bg;
+
+        const refInfo = refRow.createDiv('hc-resource-ref-info');
+        refInfo.createDiv({ cls: 'hc-resource-ref-title', text: assignment.title });
+        refInfo.createDiv({ cls: 'hc-resource-ref-lecture', text: lectureLabel });
+
+        const chevron = refRow.createSpan({ cls: 'hc-resource-ref-chevron' });
+        setIcon(chevron, 'chevron-right');
+
+        refRow.addEventListener('click', () => this.navigate('assignment', refCls.id, null, assignment.id));
+      }
+    }
+
     // Notes
     content.createDiv({ cls: 'hc-lecture-section-label', text: 'Notes' });
     const textarea = content.createEl('textarea', { cls: 'hc-lecture-notes' });
@@ -2010,9 +2105,35 @@ class AddLectureModal extends Modal {
       text.inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') this._save(); });
     });
 
+    const cls = this.plugin.findClass(this.semesterId, this.classId);
+    const existingSorted = cls ? getLecturesSorted(cls) : [];
+    const totalExisting = existingSorted.length;
+
+    const warning = contentEl.createDiv('hc-lecture-reorder-warning');
+    warning.style.display = 'none';
+
     new Setting(contentEl).setName('Date').addText(text => {
       text.inputEl.type = 'date';
-      text.onChange(v => this.formData.date = v);
+      const checkPosition = (v) => {
+        this.formData.date = v;
+        if (!cls || !v || totalExisting === 0) { warning.style.display = 'none'; return; }
+        // Simulate where this new lecture would land
+        const simulated = [...existingSorted, { date: v, _new: true }].sort((a, b) => {
+          if (!a.date && !b.date) return 0;
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return a.date.localeCompare(b.date);
+        });
+        const insertedPos = simulated.findIndex(l => l._new) + 1;
+        if (insertedPos !== totalExisting + 1) {
+          warning.setText(`⚠ This date inserts the lecture at position ${insertedPos} of ${totalExisting + 1}. Existing lecture numbers will update on save.`);
+          warning.style.display = 'block';
+        } else {
+          warning.style.display = 'none';
+        }
+      };
+      text.inputEl.addEventListener('input', e => checkPosition(e.target.value));
+      text.inputEl.addEventListener('change', e => checkPosition(e.target.value));
     });
 
     this._renderFooter(contentEl, 'Add lecture', () => this._save());
@@ -2051,10 +2172,38 @@ class EditLectureModal extends Modal {
       text.inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') this._save(); });
     });
 
+    const cls = this.plugin.findClass(this.semesterId, this.classId);
+    const sorted = cls ? getLecturesSorted(cls) : [];
+    const currentPos = sorted.findIndex(l => l.id === this.lec.id) + 1;
+
+    // Warning shown when new date would shift the lecture's position
+    const warning = contentEl.createDiv('hc-lecture-reorder-warning');
+    warning.style.display = 'none';
+
     new Setting(contentEl).setName('Date').addText(text => {
       text.inputEl.type = 'date';
       text.inputEl.value = this.formData.date;
-      text.onChange(v => this.formData.date = v);
+      const checkReorder = (v) => {
+        this.formData.date = v;
+        if (!cls || !v) { warning.style.display = 'none'; return; }
+        const simulated = [...(cls.lectures || [])].map(l =>
+          l.id === this.lec.id ? { ...l, date: v } : l
+        ).sort((a, b) => {
+          if (!a.date && !b.date) return 0;
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return a.date.localeCompare(b.date);
+        });
+        const newPos = simulated.findIndex(l => l.id === this.lec.id) + 1;
+        if (newPos !== currentPos) {
+          warning.setText(`⚠ This date moves the lecture from position ${currentPos} to ${newPos}. All lecture numbers will update on save.`);
+          warning.style.display = 'block';
+        } else {
+          warning.style.display = 'none';
+        }
+      };
+      text.inputEl.addEventListener('input', e => checkReorder(e.target.value));
+      text.inputEl.addEventListener('change', e => checkReorder(e.target.value));
     });
 
     this._renderFooter(contentEl, 'Save changes', () => this._save());
@@ -2177,10 +2326,42 @@ class AddAssignmentModal extends Modal {
     if (!container) return;
     container.empty();
     if (this.formData.type === 'Reading') {
-      new Setting(container).setName('Linked book').addText(text => {
-        text.setPlaceholder('Book title (Library link coming later)');
-        text.onChange(v => this.formData.linkedBook = v);
+      const sem = this.plugin.data.semesters.find(s => s.id === this.semesterId);
+      const classResources = sem ? (sem.resources || []).filter(r => (r.classIds || []).includes(this.cls.id)) : [];
+
+      const setting = new Setting(container).setName('Linked book');
+      const wrap = setting.controlEl.createDiv('hc-resource-picker-wrap');
+
+      const label = wrap.createSpan({ cls: 'hc-resource-picker-label' });
+      const clearBtn = wrap.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Clear', type: 'button' });
+
+      const updatePicker = () => {
+        const res = classResources.find(r => r.id === this.formData.linkedBook);
+        label.setText(res ? res.title : 'None selected');
+        label.style.color = res ? 'var(--text-normal)' : 'var(--text-faint)';
+        clearBtn.style.display = this.formData.linkedBook ? '' : 'none';
+      };
+      updatePicker();
+
+      const selectBtn = wrap.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Select', type: 'button' });
+      selectBtn.addEventListener('click', () => {
+        new ResourcePickSuggestModal(this.app, classResources, (resource) => {
+          this.formData.linkedBook = resource.id;
+          updatePicker();
+        }, (titleHint) => {
+          new QuickAddResourceModal(this.app, this.plugin, this.semesterId, this.cls.id, titleHint, (resource) => {
+            classResources.push(resource);
+            this.formData.linkedBook = resource.id;
+            updatePicker();
+          }).open();
+        }).open();
       });
+
+      clearBtn.addEventListener('click', () => {
+        this.formData.linkedBook = '';
+        updatePicker();
+      });
+
     } else if (this.formData.type === 'Writing') {
       new Setting(container).setName('Linked note').addText(text => {
         text.setPlaceholder('Note name (file picker coming later)');
@@ -2252,10 +2433,42 @@ class EditAssignmentModal extends Modal {
     if (!container) return;
     container.empty();
     if (this.formData.type === 'Reading') {
-      new Setting(container).setName('Linked book').addText(text => {
-        text.setValue(this.formData.linkedBook).setPlaceholder('Book title');
-        text.onChange(v => this.formData.linkedBook = v);
+      const sem = this.plugin.data.semesters.find(s => s.id === this.semesterId);
+      const classResources = sem ? (sem.resources || []).filter(r => (r.classIds || []).includes(this.cls.id)) : [];
+
+      const setting = new Setting(container).setName('Linked book');
+      const wrap = setting.controlEl.createDiv('hc-resource-picker-wrap');
+
+      const label = wrap.createSpan({ cls: 'hc-resource-picker-label' });
+      const clearBtn = wrap.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Clear', type: 'button' });
+
+      const updatePicker = () => {
+        const res = classResources.find(r => r.id === this.formData.linkedBook);
+        label.setText(res ? res.title : 'None selected');
+        label.style.color = res ? 'var(--text-normal)' : 'var(--text-faint)';
+        clearBtn.style.display = this.formData.linkedBook ? '' : 'none';
+      };
+      updatePicker();
+
+      const selectBtn = wrap.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Select', type: 'button' });
+      selectBtn.addEventListener('click', () => {
+        new ResourcePickSuggestModal(this.app, classResources, (resource) => {
+          this.formData.linkedBook = resource.id;
+          updatePicker();
+        }, (titleHint) => {
+          new QuickAddResourceModal(this.app, this.plugin, this.semesterId, this.cls.id, titleHint, (resource) => {
+            classResources.push(resource);
+            this.formData.linkedBook = resource.id;
+            updatePicker();
+          }).open();
+        }).open();
       });
+
+      clearBtn.addEventListener('click', () => {
+        this.formData.linkedBook = '';
+        updatePicker();
+      });
+
     } else if (this.formData.type === 'Writing') {
       new Setting(container).setName('Linked note').addText(text => {
         text.setValue(this.formData.linkedNote).setPlaceholder('Note name');
@@ -2517,6 +2730,90 @@ class VaultLinkSuggestModal extends FuzzySuggestModal {
   }
 }
 
+// ─── Resource picker suggester ───────────────────────────────────────────────
+
+class ResourcePickSuggestModal extends FuzzySuggestModal {
+  constructor(app, resources, onChoose, onQuickAdd) {
+    super(app);
+    this.resources = resources;
+    this.onChoose = onChoose;
+    this.onQuickAdd = onQuickAdd;
+    this.setPlaceholder('Type to search library resources…');
+  }
+
+  onOpen() {
+    super.onOpen();
+    const footer = this.modalEl.createDiv('hc-suggest-footer');
+    const addBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--sm', text: '+ Quick add to Library' });
+    addBtn.addEventListener('click', () => {
+      const titleHint = this.inputEl?.value?.trim() || '';
+      this.close();
+      this.onQuickAdd(titleHint);
+    });
+  }
+
+  getItems() { return this.resources; }
+
+  getItemText(resource) {
+    return resource.author ? `${resource.title} — ${resource.author}` : resource.title;
+  }
+
+  onChooseItem(resource) { this.onChoose(resource); }
+}
+
+// ─── Quick-add resource modal ─────────────────────────────────────────────────
+
+class QuickAddResourceModal extends Modal {
+  constructor(app, plugin, semesterId, classId, titleHint, onAdd) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.classId = classId;
+    this.title = titleHint;
+    this.onAdd = onAdd;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Quick add to Library' });
+    contentEl.createDiv({
+      cls: 'hc-modal-body',
+      text: 'Creates a minimal resource tagged to this class. Add details in Library later.',
+    });
+
+    new Setting(contentEl).setName('Title').addText(text => {
+      text.setValue(this.title).onChange(v => this.title = v);
+      text.inputEl.focus();
+      text.inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') this._save(); });
+    });
+
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const addBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: 'Add to Library' });
+    addBtn.addEventListener('click', () => this._save());
+  }
+
+  _save() {
+    if (!this.title.trim()) { new Notice('Title is required.'); return; }
+    const resource = this.plugin.addResource(this.semesterId, {
+      title: this.title.trim(),
+      author: '',
+      type: '',
+      classIds: [this.classId],
+      status: 'unread',
+      vaultLink: '',
+      url: '',
+    });
+    this.onAdd(resource);
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
 // ─── Resource modals ──────────────────────────────────────────────────────────
 
 class AddResourceModal extends Modal {
@@ -2544,8 +2841,16 @@ class AddResourceModal extends Modal {
       text.setPlaceholder('Author name').onChange(v => this.formData.author = v);
     });
 
-    new Setting(contentEl).setName('Type').addText(text => {
-      text.setPlaceholder('Book, PDF, Handout…').onChange(v => this.formData.type = v);
+    new Setting(contentEl).setName('Type').addDropdown(drop => {
+      drop.addOption('', '— Select type —');
+      drop.addOption('Book', 'Book');
+      drop.addOption('PDF', 'PDF');
+      drop.addOption('Handout', 'Handout');
+      drop.addOption('Article', 'Article');
+      drop.addOption('Online resource', 'Online resource');
+      drop.addOption('Other', 'Other');
+      drop.setValue(this.formData.type);
+      drop.onChange(v => this.formData.type = v);
     });
 
     new Setting(contentEl).setName('Status').addDropdown(drop => {
@@ -2634,8 +2939,16 @@ class EditResourceModal extends Modal {
       text.setValue(this.formData.author).onChange(v => this.formData.author = v);
     });
 
-    new Setting(contentEl).setName('Type').addText(text => {
-      text.setValue(this.formData.type).setPlaceholder('Book, PDF, Handout…').onChange(v => this.formData.type = v);
+    new Setting(contentEl).setName('Type').addDropdown(drop => {
+      drop.addOption('', '— Select type —');
+      drop.addOption('Book', 'Book');
+      drop.addOption('PDF', 'PDF');
+      drop.addOption('Handout', 'Handout');
+      drop.addOption('Article', 'Article');
+      drop.addOption('Online resource', 'Online resource');
+      drop.addOption('Other', 'Other');
+      drop.setValue(this.formData.type);
+      drop.onChange(v => this.formData.type = v);
     });
 
     new Setting(contentEl).setName('Status').addDropdown(drop => {
