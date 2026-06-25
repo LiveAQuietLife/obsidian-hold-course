@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.10 */ 
+/* --- Hold Course --- v0.4.11 */ 
 'use strict';
 
 const {
@@ -968,10 +968,12 @@ class HoldCourseView extends ItemView {
   }
 
   _renderLectureList(content, sem, cls, color) {
-    // Sort toggle row
+    if (cls.lectureShowDone === undefined) cls.lectureShowDone = true;
+    const showDone = cls.lectureShowDone;
     const sortDesc = cls.lectureSort === 'desc';
     const sorted = getLecturesSorted(cls);
-    const displayed = sortDesc ? [...sorted].reverse() : sorted;
+    const displayed = (sortDesc ? [...sorted].reverse() : sorted)
+      .filter(lec => showDone || lec.status !== 'done');
 
     const controlRow = content.createDiv('hc-lecture-controls');
 
@@ -981,6 +983,16 @@ class HoldCourseView extends ItemView {
     sortBtn.createSpan({ text: sortDesc ? 'Newest first' : 'Oldest first' });
     sortBtn.addEventListener('click', () => {
       cls.lectureSort = sortDesc ? 'asc' : 'desc';
+      this.plugin.save();
+      this.render();
+    });
+
+    const doneToggle = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const doneIcon = doneToggle.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(doneIcon, showDone ? 'eye-off' : 'eye');
+    doneToggle.createSpan({ text: showDone ? 'Hide done' : 'Show done' });
+    doneToggle.addEventListener('click', () => {
+      cls.lectureShowDone = !cls.lectureShowDone;
       this.plugin.save();
       this.render();
     });
@@ -1002,6 +1014,9 @@ class HoldCourseView extends ItemView {
     if (sorted.length === 0) {
       const empty = list.createDiv('hc-empty');
       empty.createDiv({ cls: 'hc-empty-text', text: 'No lectures yet. Add your first one above.' });
+    } else if (displayed.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'All lectures marked done.' });
     } else {
       for (const lec of displayed) {
         const chronNum = sorted.indexOf(lec) + 1;
@@ -1234,6 +1249,9 @@ class HoldCourseView extends ItemView {
   // ─── Assignment list ──────────────────────────────────────────────────────
 
   _renderAssignmentList(content, sem, cls, color) {
+    if (cls.assignShowDone === undefined) cls.assignShowDone = true;
+    const showDone = cls.assignShowDone;
+
     // Collect all assignments with lecture context
     const items = [];
     for (const a of (cls.assignments || [])) {
@@ -1246,7 +1264,28 @@ class HoldCourseView extends ItemView {
       }
     });
 
+    // Sort by due date
+    items.sort((a, b) => {
+      if (!a.assignment.dueDate && !b.assignment.dueDate) return 0;
+      if (!a.assignment.dueDate) return 1;
+      if (!b.assignment.dueDate) return -1;
+      return a.assignment.dueDate.localeCompare(b.assignment.dueDate);
+    });
+
+    const displayed = showDone ? items : items.filter(i => i.assignment.status !== 'done');
+
     const controlRow = content.createDiv('hc-assign-controls');
+
+    const doneToggle = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const doneIcon = doneToggle.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(doneIcon, showDone ? 'eye-off' : 'eye');
+    doneToggle.createSpan({ text: showDone ? 'Hide done' : 'Show done' });
+    doneToggle.addEventListener('click', () => {
+      cls.assignShowDone = !cls.assignShowDone;
+      this.plugin.save();
+      this.render();
+    });
+
     const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
     const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(addIcon, 'plus');
@@ -1263,15 +1302,11 @@ class HoldCourseView extends ItemView {
     if (items.length === 0) {
       const empty = list.createDiv('hc-empty');
       empty.createDiv({ cls: 'hc-empty-text', text: 'No assignments yet.' });
+    } else if (displayed.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'All assignments done.' });
     } else {
-      // Sort by due date
-      items.sort((a, b) => {
-        if (!a.assignment.dueDate && !b.assignment.dueDate) return 0;
-        if (!a.assignment.dueDate) return 1;
-        if (!b.assignment.dueDate) return -1;
-        return a.assignment.dueDate.localeCompare(b.assignment.dueDate);
-      });
-      for (const { assignment, lectureLabel } of items) {
+      for (const { assignment, lectureLabel } of displayed) {
         this._renderAssignmentRow(list, assignment, lectureLabel, sem, cls);
       }
     }
@@ -1581,6 +1616,9 @@ class HoldCourseView extends ItemView {
   // ─── Exam list ────────────────────────────────────────────────────────────
 
   _renderExamList(content, sem, cls, color) {
+    if (cls.examShowDone === undefined) cls.examShowDone = true;
+    const showDone = cls.examShowDone;
+
     const exams = [...(cls.exams || [])].sort((a, b) => {
       if (!a.dueDate && !b.dueDate) return 0;
       if (!a.dueDate) return 1;
@@ -1588,18 +1626,20 @@ class HoldCourseView extends ItemView {
       return a.dueDate.localeCompare(b.dueDate);
     });
 
-    const list = content.createDiv('hc-exam-list');
+    const displayed = showDone ? exams : exams.filter(e => e.status !== 'done');
 
-    if (exams.length === 0) {
-      const empty = list.createDiv('hc-empty');
-      empty.createDiv({ cls: 'hc-empty-text', text: 'No exams yet. Add your first one below.' });
-    } else {
-      for (const exam of exams) {
-        this._renderExamRow(list, exam, sem, cls);
-      }
-    }
+    const controlRow = content.createDiv('hc-assign-controls');
+    const doneToggle = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const doneIcon = doneToggle.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(doneIcon, showDone ? 'eye-off' : 'eye');
+    doneToggle.createSpan({ text: showDone ? 'Hide done' : 'Show done' });
+    doneToggle.addEventListener('click', () => {
+      cls.examShowDone = !cls.examShowDone;
+      this.plugin.save();
+      this.render();
+    });
 
-    const addBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-add-btn' });
+    const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
     const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(addIcon, 'plus');
     addBtn.createSpan({ text: 'Add exam' });
@@ -1609,6 +1649,20 @@ class HoldCourseView extends ItemView {
         this.render();
       }).open();
     });
+
+    const list = content.createDiv('hc-exam-list');
+
+    if (exams.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'No exams yet.' });
+    } else if (displayed.length === 0) {
+      const empty = list.createDiv('hc-empty');
+      empty.createDiv({ cls: 'hc-empty-text', text: 'All exams done.' });
+    } else {
+      for (const exam of displayed) {
+        this._renderExamRow(list, exam, sem, cls);
+      }
+    }
   }
 
   _renderExamRow(container, exam, sem, cls) {

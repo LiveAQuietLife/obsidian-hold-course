@@ -1,4 +1,4 @@
-/* --- Hold Course - v0.4.10 -------------------------------------------------- */
+/* --- Hold Course - v0.4.11 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -847,7 +847,7 @@
 
 .hc-lecture-notes {
   width: 100%;
-  min-height: 100px;
+  min-height: 140px;
   padding: 12px 14px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
