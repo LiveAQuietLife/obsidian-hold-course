@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.16 */ 
+/* --- Hold Course --- v0.4.17 */ 
 'use strict';
 
 const {
@@ -537,6 +537,7 @@ class HoldCourseView extends ItemView {
     this.previousScreen = null;
     this.globalAssignFilterClassId = null;
     this.globalAssignFilterType = null;
+    this.classAssignFilterType = null;
     this.libraryFilterClassId = null;
     // Calendar session state
     this.calView = 'month';
@@ -563,6 +564,7 @@ class HoldCourseView extends ItemView {
     if (screen === 'class' && classId !== this.currentClassId) {
       this.currentTab = 'Lectures';
       this.libraryFilterClassId = null;
+      this.classAssignFilterType = null;
     }
     this.previousScreen = this.screen;
     this.screen = screen;
@@ -1360,10 +1362,18 @@ class HoldCourseView extends ItemView {
       return a.assignment.dueDate.localeCompare(b.assignment.dueDate);
     });
 
-    const displayed = showDone ? items : items.filter(i => i.assignment.status !== 'done');
+    // Fixed type list for filter dropdown (matches ASSIGNMENT_TYPES)
+    const presentTypes = ASSIGNMENT_TYPES;
+
+    // Apply filters
+    let displayed = showDone ? items : items.filter(i => i.assignment.status !== 'done');
+    if (this.classAssignFilterType) {
+      displayed = displayed.filter(i => (i.assignment.type || 'Other') === this.classAssignFilterType);
+    }
 
     const controlRow = content.createDiv('hc-assign-controls');
 
+    // Hide done toggle
     const doneToggle = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
     const doneIcon = doneToggle.createSpan({ cls: 'hc-btn-icon' });
     setIcon(doneIcon, showDone ? 'eye-off' : 'eye');
@@ -1374,6 +1384,47 @@ class HoldCourseView extends ItemView {
       this.render();
     });
 
+    // Type filter dropdown
+    const typeFilterWrap = controlRow.createDiv('hc-cal-filter-wrap');
+    const typeFilterBtn = typeFilterWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const typeFilterIcon = typeFilterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(typeFilterIcon, 'filter');
+    typeFilterBtn.createSpan({ cls: 'hc-global-filter-label', text: this.classAssignFilterType || 'All types' });
+    const typeChevron = typeFilterBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(typeChevron, 'chevron-down');
+
+    let typeDropEl = null;
+    const closeTypeDrop = () => { if (typeDropEl) { typeDropEl.remove(); typeDropEl = null; } };
+
+    typeFilterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (typeDropEl) { closeTypeDrop(); return; }
+      typeDropEl = typeFilterWrap.createDiv('hc-sem-drop hc-cal-filter-drop');
+
+      const allItem = typeDropEl.createDiv('hc-sem-drop-item');
+      if (!this.classAssignFilterType) allItem.addClass('hc-sem-drop-item--active');
+      const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
+      if (!this.classAssignFilterType) setIcon(allIcon, 'check');
+      allItem.createSpan({ text: 'All types' });
+      allItem.addEventListener('click', () => { this.classAssignFilterType = null; closeTypeDrop(); this.render(); });
+
+      typeDropEl.createDiv('hc-sem-drop-divider');
+
+      for (const type of presentTypes) {
+        const item = typeDropEl.createDiv('hc-sem-drop-item');
+        if (type === this.classAssignFilterType) item.addClass('hc-sem-drop-item--active');
+        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (type === this.classAssignFilterType) setIcon(icon, 'check');
+        const style = getTypeStyle(type);
+        const lbl = item.createSpan({ text: type });
+        lbl.style.color = style.color;
+        item.addEventListener('click', () => { this.classAssignFilterType = type; closeTypeDrop(); this.render(); });
+      }
+
+      setTimeout(() => document.addEventListener('click', () => closeTypeDrop(), { once: true }), 0);
+    });
+
+    // Add assignment button
     const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
     const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(addIcon, 'plus');
@@ -1392,7 +1443,7 @@ class HoldCourseView extends ItemView {
       empty.createDiv({ cls: 'hc-empty-text', text: 'No assignments yet.' });
     } else if (displayed.length === 0) {
       const empty = list.createDiv('hc-empty');
-      empty.createDiv({ cls: 'hc-empty-text', text: 'All assignments done.' });
+      empty.createDiv({ cls: 'hc-empty-text', text: this.classAssignFilterType ? `No ${this.classAssignFilterType} assignments.` : 'All assignments done.' });
     } else {
       for (const { assignment, lectureLabel } of displayed) {
         this._renderAssignmentRow(list, assignment, lectureLabel, sem, cls);
@@ -1653,8 +1704,8 @@ class HoldCourseView extends ItemView {
       renderBookSection();
     }
 
-    // Linked note (Writing only)
-    if (assignment.type === 'Writing') {
+    // Linked note (all types)
+    {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Linked Note' });
       const noteSection = content.createDiv('hc-assign-note-section');
 
@@ -2613,10 +2664,17 @@ class HoldCourseView extends ItemView {
       for (const item of shown) {
         const style = getCalItemStyle(item);
         const overdue = this._isCalItemOverdue(item);
+        const done    = this._isCalItemDone(item);
         const pillCls = item.kind === 'lecture' ? 'hc-cal-pill hc-cal-pill--lecture' : 'hc-cal-pill';
         const pill = cell.createDiv(pillCls);
-        pill.style.background = style.bg;
-        pill.style.color = overdue ? '#E24B4A' : style.color;
+        if (done) {
+          pill.style.background = 'var(--background-modifier-border)';
+          pill.style.color = 'var(--text-muted)';
+          pill.style.textDecoration = 'line-through';
+        } else {
+          pill.style.background = style.bg;
+          pill.style.color = overdue ? '#E24B4A' : style.color;
+        }
         pill.setText(item.title);
       }
 
@@ -2659,10 +2717,17 @@ class HoldCourseView extends ItemView {
       for (const item of items) {
         const style = getCalItemStyle(item);
         const overdue = this._isCalItemOverdue(item);
+        const done    = this._isCalItemDone(item);
         const weekPillCls = item.kind === 'lecture' ? 'hc-cal-week-pill hc-cal-week-pill--lecture' : 'hc-cal-week-pill';
         const pill = cell.createDiv(weekPillCls);
-        pill.style.background = style.bg;
-        pill.style.color = overdue ? '#E24B4A' : style.color;
+        if (done) {
+          pill.style.background = 'var(--background-modifier-border)';
+          pill.style.color = 'var(--text-muted)';
+          pill.style.textDecoration = 'line-through';
+        } else {
+          pill.style.background = style.bg;
+          pill.style.color = overdue ? '#E24B4A' : style.color;
+        }
         pill.setText(item.title);
       }
     }
@@ -2728,6 +2793,13 @@ class HoldCourseView extends ItemView {
         && getDaysUntil(item.exam.dueDate) < 0
         && item.exam.status !== 'done';
     }
+    return false;
+  }
+
+  _isCalItemDone(item) {
+    if (item.kind === 'lecture')    return item.lec.status === 'done';
+    if (item.kind === 'assignment') return item.assignment.status === 'done';
+    if (item.kind === 'exam')       return item.exam.status === 'done';
     return false;
   }
 
