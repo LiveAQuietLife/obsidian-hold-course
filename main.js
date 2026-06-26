@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.17 */ 
+/* --- Hold Course --- v0.4.18 */ 
 'use strict';
 
 const {
@@ -383,6 +383,7 @@ class HoldCoursePlugin extends Plugin {
       dueDate: data.dueDate || '',
       status: 'not-started',
       notes: '',
+      grade: '',
       linkedBook: '',
       linkedNote: '',
     };
@@ -1638,6 +1639,16 @@ class HoldCourseView extends ItemView {
     textarea.placeholder = 'Add notes…';
     textarea.addEventListener('blur', () => {
       assignment.notes = textarea.value;
+      this.plugin.save();
+    });
+
+    // Grade
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Grade' });
+    const gradeInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+    gradeInput.placeholder = 'e.g. A, 92%, Pass';
+    gradeInput.value = assignment.grade || '';
+    gradeInput.addEventListener('blur', () => {
+      assignment.grade = gradeInput.value;
       this.plugin.save();
     });
 
@@ -3419,19 +3430,20 @@ class AddAssignmentModal extends Modal {
         updatePicker();
       });
 
-    } else if (this.formData.type === 'Writing') {
-      new Setting(container).setName('Linked note').addText(text => {
-        text.setPlaceholder('Note name (file picker coming later)');
-        text.onChange(v => this.formData.linkedNote = v);
-      });
     }
+
+    // Linked note — all types (set via detail screen; modal shows current value only)
+    new Setting(container).setName('Linked note').addText(text => {
+      text.setValue(this.formData.linkedNote).setPlaceholder('path/to/note.md');
+      text.onChange(v => this.formData.linkedNote = v);
+    });
   }
 
   _save() {
     if (!this.formData.title.trim()) { new Notice('Assignment title is required.'); return; }
     const assign = this.plugin.addAssignment(this.semesterId, this.cls.id, this.formData.lectureId, this.formData);
     if (assign && this.formData.linkedBook) assign.linkedBook = this.formData.linkedBook;
-    if (assign && this.formData.linkedNote) assign.linkedNote = this.formData.linkedNote;
+    if (assign) assign.linkedNote = this.formData.linkedNote;
     this.onSave();
     this.close();
   }
@@ -3527,12 +3539,13 @@ class EditAssignmentModal extends Modal {
         updatePicker();
       });
 
-    } else if (this.formData.type === 'Writing') {
-      new Setting(container).setName('Linked note').addText(text => {
-        text.setValue(this.formData.linkedNote).setPlaceholder('Note name');
-        text.onChange(v => this.formData.linkedNote = v);
-      });
     }
+
+    // Linked note — all types
+    new Setting(container).setName('Linked note').addText(text => {
+      text.setValue(this.formData.linkedNote).setPlaceholder('path/to/note.md');
+      text.onChange(v => this.formData.linkedNote = v);
+    });
   }
 
   _save() {
@@ -3542,7 +3555,7 @@ class EditAssignmentModal extends Modal {
       type: this.formData.type,
       dueDate: this.formData.dueDate,
       linkedBook: this.formData.type === 'Reading' ? this.formData.linkedBook : '',
-      linkedNote: this.formData.type === 'Writing' ? this.formData.linkedNote : '',
+      linkedNote: this.formData.linkedNote,
     });
     this.onSave();
     this.close();
