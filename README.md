@@ -25,10 +25,13 @@ Hold Course is an academic tracker for Obsidian. Add your semesters and classes,
 - [Assignments View](#assignments-view)
 - [HC Today Sidebar](#hc-today-sidebar)
 - [Linked Notes](#linked-notes)
+- [Data Storage](#data-storage)
 
 ---
 
 ## What It Is
+
+Hold Course grew out of a simple frustration: syllabi don't fit cleanly into task lists. I'm self-taught, working through courses and curricula on my own schedule, and what started as a manageable system of lists eventually became its own job — tracking lectures, chasing readings, and trying to remember what connected to what. Hold Course is what I personally needed: an academic tracker that lives inside my vault, where my notes and resources are a click away instead of scattered somewhere else entirely.
 
 Hold Course is built around a simple premise: you should always know exactly where you are in a course — which lectures you've attended, which assignments are coming, and what needs your attention today. It tells you where things stand. The rest is up to you.
 
@@ -54,9 +57,13 @@ On first launch you'll see the **Overview** — an empty workspace. Here's the t
 4. **Add exams** on the Exams tab for any high-stakes dates you need to track separately.
 5. **Add resources** to the Library as you encounter them, or quick-add them from within a lecture or assignment and fill in the details later.
 
-From there, it's a matter of advancing item statuses as the semester moves.
+From there, it's a matter of advancing item statuses as the semester moves. So turn this:
 
-![Overview with sidebar](screenshots/overview-sidebar.jpg) 
+<img src="screenshots/overview-blank.jpg" width="700" alt="Overview on Startup">
+
+into this:
+
+<img src="screenshots/overview-sidebar.jpg" width="700" alt="Overview with sidebar">
 
 ---
 
@@ -94,13 +101,14 @@ Inside a class, the **Lectures** tab lists all logged lectures in order.
 
 **Adding a lecture:** Click **+ Add Lecture** and fill in the title and date.
 
-**Status:** Each lecture has a status pill that cycles through **Not Started / In Progress / Done**. Click the pill to advance it. Done lectures appear with muted styling — present in the record, but visually stepped back so your attention goes to what's ahead. Completed lectures can be hidden completely by using the **Show Done/Hide Done** toggle.
+**Status:** Each lecture has a status pill that cycles through **Not Started / In Progress / Done**. Click the pill to advance it. Done lectures appear with muted styling — present in the record, but visually stepped back so your attention goes to what's ahead. Completed lectures can be hidden completely by using the **Show done/Hide done** toggle.
 
 **Sort order:** Use the sort toggle to switch between oldest-first and newest-first.
 
 **Lecture detail:** Click a lecture to open its detail screen, where you can edit fields, link the lecture to a note in your vault, or quick-add a resource to the Library.
 
-![Class](screenshots/class-detail.jpg)
+
+<img src="screenshots/class-detail.jpg" width="700" alt="Class">
 
 ---
 
@@ -114,13 +122,13 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Grade:** Assignments have an optional grade field. Fill it in after graded work is returned.
 
-**Filtering:** Use the **All types** dropdown to show only one kind of assignment. The **Show done** toggle works alongside the filter — they stack.
+**Filtering:** Use the **All types** dropdown to show only one kind of assignment. The **Show done/Hide Done** toggle works alongside the filter — they stack.
 
-**Status:** Each assignment has a status pill that cycles through **Not Started/In Progress/Done**. Click the pill to advance it. Done assignments appear with muted styling across all views. Completed assignments can be hidden completely by using the **Show Done/Hide Done** toggle. 
+**Status:** Each assignment has a status pill that cycles through **Not Started/In Progress/Done**. Click the pill to advance it. Done assignments appear with muted styling across all views. Completed assignments can be hidden completely by using the **Show done/Hide done** toggle. 
 
 **Assignment detail:** Click an assignment to open its detail screen, where you can edit all fields, link the assignment to a note in your vault, or quick-add a resource to the Library.
 
-![Assignments](screenshots/assignments.jpg)
+<img src="screenshots/assignments.jpg" width="700" alt="Assignments">
 
 ---
 
@@ -132,12 +140,11 @@ Inside a class, the **Exams** tab lists scheduled exams with their dates and a l
 
 **Countdowns:** Each exam shows how many days away it is, updated automatically.
 
-**Status:** Click an exam to open its detail screen, where you can mark it done. Done exams can be hidden using the **Hide done** toggle on the Exams tab.
+**Status:** Click an exam to open its detail screen, where you can mark it done. Done exams can be hidden using the **Show done/Hide done** toggle on the Exams tab.
 
 Exams appear on the Calendar in their own color, distinct from lectures and assignments.
 
-![Exams](screenshots/exams.jpg)
-
+<img src="screenshots/exams.jpg" width="700" alt="Exams">
 ---
 
 ## Library
@@ -154,9 +161,9 @@ The **Library** tab collects every resource associated with a class — books, a
 
 **Resource detail:** Click any resource to see everything associated with it: the classes it belongs to, its type, and every lecture and assignment that references it — each one clickable through to the item itself.
 
-![Library](screenshots/library.jpg)
+<img src="screenshots/library.jpg" width="700" alt="Library">
 
-![Book Detail](screenshots/book-detail.jpg)
+<img src="screenshots/book-detail.jpg" width="700" alt="Book Detail">
 
 ---
 
@@ -174,9 +181,9 @@ The **Calendar** shows all your lectures, assignments, and exams across all clas
 
 Done items appear with strikethrough and muted styling in both the calendar and the day detail popover.
 
-![Calendar Week](screenshots/calendar-week.jpg)
+<img src="screenshots/calendar-week.jpg" width="700" alt="Weekly View Calendar">
 
-![Calendar Month](screenshots/calendar-month.jpg)
+<img src="screenshots/calendar-month.jpg" width="700" alt="Monthly View Calendar">
 
 ---
 
@@ -186,7 +193,7 @@ The **Assignments** button in the toolbar opens a cross-class view of every assi
 
 **Filtering:** Use the class filter to narrow to a single class, and the type filter to show only one assignment type. Both filters stack.
 
-**Sorting:** Cycle through three sort modes — by due date, by class, or by status.
+**Sorting:** Cycle through three sort modes — by due date, by class, or by status. Hold Course will remember your last choice. 
 
 **Show done:** Use the **Show done** toggle to include completed assignments in the list.
 
@@ -206,7 +213,6 @@ Each item shows its title and a subtitle line with the class name and item type.
 
 **Auto-refresh:** The sidebar updates automatically whenever you make a change in Hold Course. You don't need to refresh it manually.
 
-<!-- screenshot: HC Today sidebar -->
 
 ---
 
