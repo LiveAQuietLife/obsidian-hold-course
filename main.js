@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.4.18 */ 
+/* --- Hold Course --- v0.5.1 */ 
 'use strict';
 
 const {
@@ -15,6 +15,7 @@ const {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const VIEW_TYPE = 'hold-course-view';
+const TODAY_VIEW_TYPE = 'hold-course-today';
 
 const COLOR_PALETTE = [
   { name: 'amber',  accent: '#BA7517', light: '#FAC775', bg: '#FAEEDA', text: '#633806' },
@@ -255,13 +256,25 @@ class HoldCoursePlugin extends Plugin {
     this.data = await this.loadData() || { currentSemesterId: null, semesters: [] };
 
     this.registerView(VIEW_TYPE, (leaf) => new HoldCourseView(leaf, this));
+    this.registerView(TODAY_VIEW_TYPE, (leaf) => new HoldCourseTodayView(leaf, this));
 
     this.addRibbonIcon('graduation-cap', 'Hold Course', () => this.activateView());
+    this.addRibbonIcon('calendar-clock', 'Hold Course — Today', () => this.activateTodayView());
 
     this.addCommand({
       id: 'open-hold-course',
       name: 'Open Hold Course',
       callback: () => this.activateView(),
+    });
+
+    this.addCommand({
+      id: 'open-hold-course-today',
+      name: 'Open Hold Course — Today',
+      callback: () => this.activateTodayView(),
+    });
+
+    this.app.workspace.onLayoutReady(() => {
+      this.activateTodayView();
     });
   }
 
@@ -277,8 +290,24 @@ class HoldCoursePlugin extends Plugin {
     workspace.revealLeaf(leaf);
   }
 
+  async activateTodayView() {
+    const { workspace } = this.app;
+    if (workspace.getLeavesOfType(TODAY_VIEW_TYPE).length) return;
+    const leaf = workspace.getRightLeaf(false);
+    await leaf.setViewState({ type: TODAY_VIEW_TYPE, active: true });
+    workspace.revealLeaf(leaf);
+  }
+
+  refreshTodayView() {
+    const leaves = this.app.workspace.getLeavesOfType(TODAY_VIEW_TYPE);
+    for (const leaf of leaves) {
+      if (leaf.view instanceof HoldCourseTodayView) leaf.view.render();
+    }
+  }
+
   async save() {
     await this.saveData(this.data);
+    this.refreshTodayView();
   }
 
   // ─── Semester helpers ──────────────────────────────────────────────────────
@@ -3431,19 +3460,12 @@ class AddAssignmentModal extends Modal {
       });
 
     }
-
-    // Linked note — all types (set via detail screen; modal shows current value only)
-    new Setting(container).setName('Linked note').addText(text => {
-      text.setValue(this.formData.linkedNote).setPlaceholder('path/to/note.md');
-      text.onChange(v => this.formData.linkedNote = v);
-    });
   }
 
   _save() {
     if (!this.formData.title.trim()) { new Notice('Assignment title is required.'); return; }
     const assign = this.plugin.addAssignment(this.semesterId, this.cls.id, this.formData.lectureId, this.formData);
     if (assign && this.formData.linkedBook) assign.linkedBook = this.formData.linkedBook;
-    if (assign) assign.linkedNote = this.formData.linkedNote;
     this.onSave();
     this.close();
   }
@@ -3540,12 +3562,6 @@ class EditAssignmentModal extends Modal {
       });
 
     }
-
-    // Linked note — all types
-    new Setting(container).setName('Linked note').addText(text => {
-      text.setValue(this.formData.linkedNote).setPlaceholder('path/to/note.md');
-      text.onChange(v => this.formData.linkedNote = v);
-    });
   }
 
   _save() {
@@ -4120,6 +4136,104 @@ class DeleteResourceModal extends Modal {
   }
 
   onClose() { this.contentEl.empty(); }
+}
+
+// ─── Today Sidebar View ───────────────────────────────────────────────────────
+
+class HoldCourseTodayView extends ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+  }
+
+  getViewType()    { return TODAY_VIEW_TYPE; }
+  getDisplayText() { return 'Hold Course — Today'; }
+  getIcon()        { return 'calendar-clock'; }
+
+  async onOpen()  { this.render(); }
+  async onClose() { this.contentEl.empty(); }
+
+  render() {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    const root = contentEl.createDiv('hc-today-root');
+
+    const sem = this.plugin.getCurrentSemester();
+    if (!sem) {
+      root.createDiv({ cls: 'hc-today-empty', text: 'No semester found.' });
+      return;
+    }
+
+    const todayISO    = getTodayISO();
+    const tomorrowISO = addDaysISO(todayISO, 1);
+
+    this._renderSection(root, sem, todayISO, 'Today');
+    this._renderSection(root, sem, tomorrowISO, 'Tomorrow');
+  }
+
+  _renderSection(root, sem, dateISO, label) {
+    const items = getItemsForDate(sem, dateISO, null);
+
+    const section = root.createDiv('hc-today-section');
+    section.createDiv({ cls: 'hc-today-section-label', text: label });
+
+    if (items.length === 0) {
+      section.createDiv({ cls: 'hc-today-empty-msg', text: `Nothing ${label === 'Today' ? 'today' : 'tomorrow'}.` });
+      return;
+    }
+
+    for (const item of items) {
+      const style   = getCalItemStyle(item);
+      const isDone  = this._isItemDone(item);
+      const row     = section.createDiv('hc-today-item');
+
+      const pill = row.createDiv('hc-today-pill');
+      if (isDone) {
+        pill.style.background = 'var(--background-modifier-border)';
+        pill.style.color      = 'var(--text-muted)';
+      } else {
+        pill.style.background = style.bg;
+        pill.style.color      = style.color;
+      }
+      if (item.kind === 'lecture') pill.addClass('hc-today-pill--lecture');
+
+      const titleEl = pill.createDiv({ cls: 'hc-today-item-title', text: item.title });
+      if (isDone) titleEl.style.textDecoration = 'line-through';
+
+      const meta = pill.createDiv({ cls: 'hc-today-item-meta' });
+      meta.setText(item.cls.code + (item.kind !== 'lecture' ? ` · ${item.kind === 'exam' ? 'Exam' : item.assignment.type}` : ' · Lecture'));
+
+      row.addEventListener('click', () => this._navigateToItem(item));
+    }
+  }
+
+  _isItemDone(item) {
+    if (item.kind === 'lecture')    return item.lec.status === 'done';
+    if (item.kind === 'assignment') return item.assignment.status === 'done';
+    if (item.kind === 'exam')       return item.exam.status === 'done';
+    return false;
+  }
+
+  async _navigateToItem(item) {
+    const { workspace } = this.app;
+
+    // Ensure main HC tab is open
+    let mainLeaf = workspace.getLeavesOfType(VIEW_TYPE)[0];
+    if (!mainLeaf) {
+      mainLeaf = workspace.getLeaf('tab');
+      await mainLeaf.setViewState({ type: VIEW_TYPE, active: true });
+    }
+    workspace.revealLeaf(mainLeaf);
+
+    // Navigate to the item
+    const view = mainLeaf.view;
+    if (!(view instanceof HoldCourseView)) return;
+
+    if (item.kind === 'lecture')    view.navigate('lecture',    item.cls.id, item.lec.id);
+    if (item.kind === 'assignment') view.navigate('assignment', item.cls.id, item.lectureId, item.assignment.id);
+    if (item.kind === 'exam')       view.navigate('exam',       item.cls.id, null, null, item.exam.id);
+  }
 }
 
 // ─── Shared modal behaviours — attach after all class definitions ─────────────

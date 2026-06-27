@@ -1,4 +1,4 @@
-/* --- Hold Course - v0.4.18 -------------------------------------------------- */
+/* --- Hold Course - v0.5.1 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -2087,4 +2087,79 @@
 .hc-cal-filter-drop {
   bottom: calc(100% + 6px);
   top: auto;
+}
+
+/* --- Today Sidebar View ---------------------------------------------------- */
+
+.hc-today-root {
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hc-today-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hc-today-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  margin-bottom: 2px;
+}
+
+.hc-today-empty-msg {
+  font-size: 12px;
+  color: var(--text-faint);
+  padding: 4px 0;
+}
+
+.hc-today-item {
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.hc-today-item:hover .hc-today-pill {
+  filter: brightness(0.95);
+}
+
+.hc-today-pill {
+  padding: 6px 8px;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hc-today-pill--lecture {
+  border-radius: 20px;
+  padding: 6px 10px;
+}
+
+.hc-today-item-title {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-today-item-meta {
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.hc-today-empty {
+  font-size: 13px;
+  color: var(--text-muted);
+  padding: 16px;
+  text-align: center;
 }

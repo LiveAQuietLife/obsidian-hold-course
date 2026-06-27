@@ -1,9 +1,9 @@
 {
   "id": "hold-course",
   "name": "Hold Course",
-  "version": "0.4.18",
+  "version": "0.5.1",
   "minAppVersion": "0.13.1",
-  "description": "Academic assignment and lecture tracker. Always know where you left off.",
+  "description": "Academic assignment and lecture tracker. Always know where you're heading.",
   "author": "LiveAQuietLife",
   "authorUrl": "https://github.com/LiveAQuietLife/obsidian-hold-course",
   "isDesktopOnly": true
