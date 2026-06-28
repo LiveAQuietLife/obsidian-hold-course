@@ -24,6 +24,7 @@ Hold Course is an academic tracker for Obsidian. Add your semesters and classes,
 - [Calendar View](#calendar-view)
 - [Assignments View](#assignments-view)
 - [HC Today Sidebar](#hc-today-sidebar)
+- [Command Palette Shortcuts](#command-palette-shortcuts)
 - [Linked Notes](#linked-notes)
 - [Data Storage](#data-storage)
 
@@ -213,6 +214,20 @@ Each item shows its title and a subtitle line with the class name and item type.
 
 **Auto-refresh:** The sidebar updates automatically whenever you make a change in Hold Course. You don't need to refresh it manually.
 
+---
+
+## Command Palette Shortcuts
+
+Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P) for quick access without opening the plugin first:
+
+Open Hold Course — opens the main tab
+Open Hold Course — Today — opens the Today sidebar
+Add a class — opens the Add Class dialog for the active semester
+Open calendar — opens the main tab and navigates directly to Calendar view
+Show global assignments — opens the main tab and navigates to the Assignments view
+Add a library resource — opens the Add Resource dialog for the active semester
+
+All commands are hotkey-bindable via Settings > Hotkeys.
 
 ---
 
