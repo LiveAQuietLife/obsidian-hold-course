@@ -1,4 +1,4 @@
-/* --- Hold Course --- v0.5.1 */ 
+/* --- Hold Course --- v0.5.2 */ 
 'use strict';
 
 const {
@@ -273,6 +273,38 @@ class HoldCoursePlugin extends Plugin {
       callback: () => this.activateTodayView(),
     });
 
+    this.addCommand({
+      id: 'hc-add-class',
+      name: 'Add a class',
+      callback: () => {
+        const sem = this._getActiveSemester();
+        if (!sem) { new Notice('No active semester. Create one in Hold Course first.'); return; }
+        new AddClassModal(this.app, this, sem.id, () => this.save()).open();
+      },
+    });
+
+    this.addCommand({
+      id: 'hc-open-calendar',
+      name: 'Open calendar',
+      callback: () => this.activateAndNavigate('calendar'),
+    });
+
+    this.addCommand({
+      id: 'hc-show-global-assignments',
+      name: 'Show global assignments',
+      callback: () => this.activateAndNavigate('assignments'),
+    });
+
+    this.addCommand({
+      id: 'hc-add-library-resource',
+      name: 'Add a library resource',
+      callback: () => {
+        const sem = this._getActiveSemester();
+        if (!sem) { new Notice('No active semester. Create one in Hold Course first.'); return; }
+        new AddResourceModal(this.app, this, sem.id, sem.classes, () => this.save()).open();
+      },
+    });
+
     this.app.workspace.onLayoutReady(() => {
       this.activateTodayView();
     });
@@ -296,6 +328,17 @@ class HoldCoursePlugin extends Plugin {
     const leaf = workspace.getRightLeaf(false);
     await leaf.setViewState({ type: TODAY_VIEW_TYPE, active: true });
     workspace.revealLeaf(leaf);
+  }
+
+  async activateAndNavigate(screen) {
+    await this.activateView();
+    const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+    if (leaf?.view instanceof HoldCourseView) leaf.view.navigate(screen);
+  }
+
+  _getActiveSemester() {
+    const id = this.data.currentSemesterId;
+    return this.data.semesters.find(s => s.id === id) || null;
   }
 
   refreshTodayView() {
