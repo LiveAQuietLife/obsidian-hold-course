@@ -94,6 +94,8 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 
 > **Note:** The professor email link requires a default mail client configured on your system (such as Mail on macOS or Outlook on Windows). If no default mail client is set, the link may not open.
 
+**Course page URL:** If a URL is saved to the class, it appears as a quiet external-link icon next to the class name on the dashboard card, and as a "Course page" link in the class header. Useful for linking to a course portal, Coursera page, or syllabus hosted online.
+
 ---
 
 ## Lectures
@@ -226,6 +228,8 @@ Add a class — opens the Add Class dialog for the active semester
 Open calendar — opens the main tab and navigates directly to Calendar view
 Show global assignments — opens the main tab and navigates to the Assignments view
 Add a library resource — opens the Add Resource dialog for the active semester
+Add a lecture — opens the Add Lecture dialog for the current class (requires an open class screen)
+Add an assignment — opens the Add Assignment dialog for the current class (requires an open class screen)
 
 All commands are hotkey-bindable via Settings > Hotkeys.
 
