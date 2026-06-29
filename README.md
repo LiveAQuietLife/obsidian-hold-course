@@ -222,14 +222,14 @@ Each item shows its title and a subtitle line with the class name and item type.
 
 Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P) for quick access without opening the plugin first:
 
-Open Hold Course — opens the main tab
-Open Hold Course — Today — opens the Today sidebar
-Add a class — opens the Add Class dialog for the active semester
-Open calendar — opens the main tab and navigates directly to Calendar view
-Show global assignments — opens the main tab and navigates to the Assignments view
-Add a library resource — opens the Add Resource dialog for the active semester
-Add a lecture — opens the Add Lecture dialog for the current class (requires an open class screen)
-Add an assignment — opens the Add Assignment dialog for the current class (requires an open class screen)
+- Open Hold Course — opens the main tab
+- Open Hold Course — Today — opens the Today sidebar
+- Add a class — opens the Add Class dialog for the active semester
+- Open calendar — opens the main tab and navigates directly to Calendar view
+- Show global assignments — opens the main tab and navigates to the Assignments view
+- Add a library resource — opens the Add Resource dialog for the active semester
+- Add a lecture — opens the Add Lecture dialog for the current class (requires an open class screen)
+- Add an assignment — opens the Add Assignment dialog for the current class (requires an open class screen)
 
 All commands are hotkey-bindable via Settings > Hotkeys.
 
