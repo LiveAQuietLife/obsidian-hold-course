@@ -1,6 +1,6 @@
 # Hold Course
 
-Always know where you're heading.
+Always know where you are.
 
 ---
 
