@@ -14,6 +14,7 @@ Hold Course is an academic tracker for Obsidian. Add your semesters and classes,
 
 - [What It Is](#what-it-is)
 - [Installation](#installation)
+- [Today Strip](#today-strip)
 - [Getting Started](#getting-started)
 - [Semesters](#semesters)
 - [Classes](#classes)
@@ -32,7 +33,7 @@ Hold Course is an academic tracker for Obsidian. Add your semesters and classes,
 
 ## What It Is
 
-Hold Course grew out of a simple frustration: syllabi don't fit cleanly into task lists. I'm self-taught, working through courses and curricula on my own schedule, and what started as a manageable system of lists eventually became its own job — tracking lectures, chasing readings, and trying to remember what connected to what. Hold Course is what I personally needed: an academic tracker that lives inside my vault, where my notes and resources are a click away instead of scattered somewhere else entirely.
+Hold Course grew out of a simple frustration: syllabi don't fit cleanly into task lists. I'm a self-learner, working through courses and curricula on my own schedule, and what started as a manageable system of lists eventually became its own job — tracking lectures, chasing readings, and trying to remember what connected to what. Hold Course is what I personally needed: an academic tracker that lives inside my vault, where my notes and resources are a click away instead of scattered somewhere else entirely.
 
 Hold Course is built around a simple premise: you should always know exactly where you are in a course — which lectures you've attended, which assignments are coming, and what needs your attention today. It tells you where things stand. The rest is up to you.
 
@@ -68,6 +69,20 @@ into this:
 
 ---
 
+## Today Strip
+
+The Overview opens with a strip summarizing what needs attention right now, drawn from assignments across every class in the active semester.
+
+**Overdue:** Any assignment past its due date and not marked done, oldest first. This column only appears when something is actually overdue — no overdue work, no column.
+
+**Due Today:** Assignments due today.
+
+**Coming Up:** The next several assignments due after today, soonest first.
+
+Click any item in the strip to jump straight to its detail screen.
+
+---
+
 ## Semesters
 
 The semester dropdown at the top of the Overview lets you switch between semesters or create a new one. Only one semester is active at a time, but your data from previous semesters stays in place.
@@ -75,6 +90,10 @@ The semester dropdown at the top of the Overview lets you switch between semeste
 **Creating a semester:** Open the dropdown and click **+ New Semester**.
 
 **Switching semesters:** Select any semester from the dropdown.
+
+**Renaming a semester:** Open the dropdown and select **Rename Semester**.
+
+**Deleting a semester:** Open the dropdown and select **Delete Semester**. Since this removes every class, lecture, assignment, exam, and library resource under that semester, the confirmation dialog states exactly how much is about to be deleted. This cannot be undone.
 
 ---
 
@@ -104,7 +123,7 @@ Inside a class, the **Lectures** tab lists all logged lectures in order.
 
 **Adding a lecture:** Click **+ Add Lecture** and fill in the title and date.
 
-**Status:** Each lecture has a status pill that cycles through **Not Started / In Progress / Done**. Click the pill to advance it. Done lectures appear with muted styling — present in the record, but visually stepped back so your attention goes to what's ahead. Completed lectures can be hidden completely by using the **Show done/Hide done** toggle.
+**Status:** Each lecture has a status pill that cycles through **Not Started / In Progress / Done**. Click the pill — from the list or the detail screen — to advance it. Done lectures appear with muted styling — present in the record, but visually stepped back so your attention goes to what's ahead. Completed lectures can be hidden completely by using the **Show done/Hide done** toggle.
 
 **Sort order:** Use the sort toggle to switch between oldest-first and newest-first.
 
@@ -123,11 +142,11 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Assignment types:** Each assignment has a type — Reading, Writing, Project, Discussion, or Other — color-coded throughout the plugin so you can scan quickly.
 
-**Grade:** Assignments have an optional grade field. Fill it in after graded work is returned.
+**Grade:** Assignments have an optional grade field. Fill it in after graded work is returned. Once an assignment is marked done, a recorded grade appears as a quiet pill next to its title in every list view.
 
 **Filtering:** Use the **All types** dropdown to show only one kind of assignment. The **Show done/Hide Done** toggle works alongside the filter — they stack.
 
-**Status:** Each assignment has a status pill that cycles through **Not Started/In Progress/Done**. Click the pill to advance it. Done assignments appear with muted styling across all views. Completed assignments can be hidden completely by using the **Show done/Hide done** toggle. 
+**Status:** Each assignment has a status pill that cycles through **Not Started/In Progress/Done**. Click the pill — from any list or the detail screen — to advance it. Done assignments appear with muted styling across all views. Completed assignments can be hidden completely by using the **Show done/Hide done** toggle. 
 
 **Assignment detail:** Click an assignment to open its detail screen, where you can edit all fields, link the assignment to a note in your vault, or quick-add a resource to the Library.
 
@@ -143,11 +162,12 @@ Inside a class, the **Exams** tab lists scheduled exams with their dates and a l
 
 **Countdowns:** Each exam shows how many days away it is, updated automatically.
 
-**Status:** Click an exam to open its detail screen, where you can mark it done. Done exams can be hidden using the **Show done/Hide done** toggle on the Exams tab.
+**Status:** Exams are a simple done / not done toggle — click the status control on the exam row, or open the detail screen and use the Mark done button. A recorded grade appears as a quiet pill on done exams. Done exams can be hidden using the **Show done/Hide done** toggle on the Exams tab.
 
 Exams appear on the Calendar in their own color, distinct from lectures and assignments.
 
 <img src="screenshots/exams.jpg" width="700" alt="Exams">
+
 ---
 
 ## Library
@@ -214,7 +234,7 @@ Each item shows its title and a subtitle line with the class name and item type.
 
 **Navigating:** Click any item to open the main Hold Course tab and navigate directly to that item's detail screen.
 
-**Auto-refresh:** The sidebar updates automatically whenever you make a change in Hold Course. You don't need to refresh it manually.
+**Auto-refresh:** The sidebar updates automatically whenever you make a change in Hold Course, and again on its own if the date rolls over while Obsidian is left open — so Today and Tomorrow stay accurate even overnight. You don't need to refresh it manually.
 
 ---
 
