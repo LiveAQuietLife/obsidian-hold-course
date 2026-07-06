@@ -1,7 +1,7 @@
 {
 	"id": "hold-course",
 	"name": "Hold Course",
-	"version": "1.1.1",
+	"version": "1.1.2",
 	"minAppVersion": "1.13.1",
 	"description": "Academic assignment and lecture tracker. Always know where you are.",
 	"author": "LiveAQuietLife",
