@@ -1,10 +1,10 @@
 {
-  "id": "hold-course",
-  "name": "Hold Course",
-  "version": "1.0.1",
-  "minAppVersion": "0.13.1",
-  "description": "Academic assignment and lecture tracker. Always know where you are.",
-  "author": "LiveAQuietLife",
-  "authorUrl": "https://github.com/LiveAQuietLife",
-  "isDesktopOnly": true
+	"id": "hold-course",
+	"name": "Hold Course",
+	"version": "1.1.0",
+	"minAppVersion": "1.13.1",
+	"description": "Academic assignment and lecture tracker. Always know where you are.",
+	"author": "LiveAQuietLife",
+	"authorUrl": "https://github.com/LiveAQuietLife",
+	"isDesktopOnly": true
 }
