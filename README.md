@@ -101,11 +101,11 @@ The semester dropdown at the top of the Overview lets you switch between semeste
 
 Inside a semester, each class appears as a card on the Overview showing the class name, course code, and instructor.
 
-**Adding a class:** Click **+ Add Class** and fill in the details — name, course code, instructor, and professor email if you have it.
+**Adding a class:** Click **+ Add Class** and fill in the details — name, course code, course page URL, professor name and email, office hours, TA name and email and office hours, meeting days, and a meeting link. Only the class name is required; fill in the rest as you have it.
 
 **Opening a class:** Click the class card. Each class has four tabs: **Lectures**, **Assignments**, **Exams**, and **Library**.
 
-**Editing or deleting a class:** Open the class and use the Edit or Delete buttons in the detail screen.
+**Editing or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. A class can also be edited from the **Edit** button in its detail screen.
 
 **Lecture progress:** Once you've marked at least one lecture done, the class card shows a progress fraction — lectures completed out of total logged.
 
@@ -115,6 +115,12 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 
 **Course page URL:** If a URL is saved to the class, it appears as a quiet external-link icon next to the class name on the dashboard card, and as a "Course page" link in the class header. Useful for linking to a course portal, Coursera page, or syllabus hosted online.
 
+**Meeting link:** A recurring meeting link — Zoom or similar — kept separate from the course page URL, since a course portal and a place to join class are different things. It appears in the class header next to the meeting days, because when class happens and how you get there is really one question.
+
+**Office hours and TA:** A class can record office hours for the professor, and a name, email, and office hours for a teaching assistant. The class header shows the professor and the TA side by side as labeled blocks of equal weight, with a divider between them.
+
+All of this is optional, and nothing is drawn until it has content. A person appears once any one of their fields is filled in. The TA block is absent entirely until it has something to show. The divider appears only when there are two blocks to divide. A class with nothing but a name shows a header with nothing but a name.
+
 ---
 
 ## Lectures
@@ -123,11 +129,17 @@ Inside a class, the **Lectures** tab lists all logged lectures in order.
 
 **Adding a lecture:** Click **+ Add Lecture** and fill in the title and date.
 
+**Bulk adding lectures:** Click **Bulk add** to open a paste box for entering a whole schedule at once — one lecture per line.
+
+Dates can be filled in for you. Pick the first day of class, confirm the meeting days, and dates walk the calendar from there, one lecture per meeting. A blank line skips a meeting, which is how you handle a reading week or a holiday. A date at the end of a line marks that lecture as an out-of-band session — a guest lecture or a makeup — placing it on that date without consuming a meeting slot. ISO (`2026-08-24`), `Aug 24` / `24 Aug`, and numeric (`8/24`) formats are all accepted.
+
+A live preview shows every parsed lecture and the date it will land on before anything is added. Short titles are highlighted for a second look, since a pasted line break can quietly split one lecture into two. A bulk add can't be undone in a single step, so the preview is worth reading.
+
 **Status:** Each lecture has a status pill that cycles through **Not Started / In Progress / Done**. Click the pill — from the list or the detail screen — to advance it. Done lectures appear with muted styling — present in the record, but visually stepped back so your attention goes to what's ahead. Completed lectures can be hidden completely by using the **Show done/Hide done** toggle.
 
 **Sort order:** Use the sort toggle to switch between oldest-first and newest-first.
 
-**Lecture detail:** Click a lecture to open its detail screen, where you can edit fields, link the lecture to a note in your vault, or quick-add a resource to the Library.
+**Lecture detail:** Click a lecture to open its detail screen, where you can edit its fields, jot key concepts and lesson goals, link the lecture to a note in your vault, and see every assignment attached to it. Assignments can be added here one at a time or in bulk.
 
 
 <img src="screenshots/class-detail.jpg" width="700" alt="Class">
@@ -139,6 +151,8 @@ Inside a class, the **Lectures** tab lists all logged lectures in order.
 Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Adding an assignment:** Click **+ Add Assignment** and fill in the title, due date, type, and any other details.
+
+**Bulk adding assignments:** Open a lecture and click **Bulk add** in its Assignments section. One assignment per line — each becomes an assignment attached to that lecture and inherits the lecture's date as its due date. One type applies to the whole batch, so paste one kind at a time. A live preview shows every assignment before anything is added, and the same caution applies: check the rows, because a bulk add can't be undone in a single step.
 
 **Assignment types:** Each assignment has a type — Reading, Writing, Project, Discussion, or Other — color-coded throughout the plugin so you can scan quickly.
 
