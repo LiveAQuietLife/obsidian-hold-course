@@ -1,9 +1,9 @@
 {
 	"id": "hold-course",
 	"name": "Hold Course",
-	"version": "1.5.0",
+	"version": "1.5.1",
 	"minAppVersion": "1.13.1",
-	"description": "Academic assignment and lecture tracker. Always know where you are.",
+	"description": "Hold Course is an academic tracker. Add your semesters and classes, log your lectures, and track your assignments and exams.",
 	"author": "LiveAQuietLife",
 	"authorUrl": "https://github.com/LiveAQuietLife",
 	"isDesktopOnly": true
