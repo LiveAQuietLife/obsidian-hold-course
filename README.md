@@ -18,6 +18,7 @@ Hold Course is an academic tracker for Obsidian. Add your semesters and classes,
 - [Getting Started](#getting-started)
 - [Semesters](#semesters)
 - [Classes](#classes)
+- [Moving a Class](#moving-a-class)
 - [Lectures](#lectures)
 - [Assignments](#assignments)
 - [Exams](#exams)
@@ -85,13 +86,17 @@ Click any item in the strip to jump straight to its detail screen.
 
 ## Semesters
 
-The semester dropdown at the top of the Overview lets you switch between semesters or create a new one. Only one semester is active at a time, but your data from previous semesters stays in place.
+The semester dropdown at the top of the Overview lets you switch between semesters or create a new one. Only one semester is active at a time, but your data from previous semesters stays in place. Semesters are listed oldest to newest by term and year, not by the order you created them.
 
 **Creating a semester:** Open the dropdown and click **+ New Semester**.
 
 **Switching semesters:** Select any semester from the dropdown.
 
 **Renaming a semester:** Open the dropdown and select **Rename Semester**.
+
+**Removing a semester from the list:** Open the dropdown and select **Remove from list**. This clears the semester out of the dropdown so old terms don't pile up — it doesn't delete anything. Every class, lecture, assignment, and resource stays exactly where it was. Only appears when more than one semester is visible.
+
+**Restoring a removed semester:** Open the dropdown and select **Show removed semesters**, then choose the one you want back. Restoring a semester also switches you to it. Only appears when at least one semester is removed.
 
 **Deleting a semester:** Open the dropdown and select **Delete Semester**. Since this removes every class, lecture, assignment, exam, and library resource under that semester, the confirmation dialog states exactly how much is about to be deleted. This cannot be undone.
 
@@ -120,6 +125,20 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 **Office hours and TA:** A class can record office hours for the professor, and a name, email, and office hours for a teaching assistant. The class header shows the professor and the TA side by side as labeled blocks of equal weight, with a divider between them.
 
 All of this is optional, and nothing is drawn until it has content. A person appears once any one of their fields is filled in. The TA block is absent entirely until it has something to show. The divider appears only when there are two blocks to divide. A class with nothing but a name shows a header with nothing but a name.
+
+---
+
+## Moving a Class
+
+A class can move to a different semester without losing anything logged under it — lectures, assignments, exams, contacts, and notes all travel with it.
+
+This is most useful if you're building your own curriculum across terms — a class you planned yourself gets pushed to a later term instead of dropped, and everything already typed into it needs to survive the move. If you're taking classes on a school's own semester schedule, you likely won't need this.
+
+**Moving a class:** Right-click a class in the Courses view, or open its card menu on the Overview and select **Move to semester**. Choose a target semester and confirm.
+
+**Resources:** A resource used only by the moving class moves with it. A resource shared with other classes staying behind is copied instead, so the classes that stay keep their copy and nothing breaks on either side.
+
+> **Note:** A class can move out of a removed semester, but not into one. Restore the semester first if you want to move a class there.
 
 ---
 
