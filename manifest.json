@@ -1,7 +1,7 @@
 {
 	"id": "hold-course",
 	"name": "Hold Course",
-	"version": "1.5.1",
+	"version": "1.6.0",
 	"minAppVersion": "1.13.1",
 	"description": "Track semesters, classes, lectures, assignments, and exams, with a cross-semester course view, calendar, and daily overview to keep coursework visible without extra upkeep.",
 	"author": "LiveAQuietLife",
