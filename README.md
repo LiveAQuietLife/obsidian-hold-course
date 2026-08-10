@@ -106,11 +106,19 @@ The semester dropdown at the top of the Overview lets you switch between semeste
 
 Inside a semester, each class appears as a card on the Overview showing the class name, course code, and instructor.
 
-**Adding a class:** Click **+ Add Class** and fill in the details — name, course code, course page URL, professor name and email, office hours, TA name and email and office hours, meeting days, and a meeting link. Only the class name is required; fill in the rest as you have it.
+**Adding a class:** Click **+ Add Class** to open the Add Class dialog, organized into three tabs so the form never requires scrolling to find Save:
+
+- **Details** — class name, class code, course page URL
+- **People** — professor name and email, office hours, TA name and email and office hours
+- **Schedule** — meeting days, location, start/end date, start/end time, and a meeting link
+
+Only the class name is required; fill in the rest as you have it.
 
 **Opening a class:** Click the class card. Each class has four tabs: **Lectures**, **Assignments**, **Exams**, and **Library**.
 
-**Editing or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. A class can also be edited from the **Edit** button in its detail screen.
+**Editing or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. A class can also be edited from the **Edit** button in its detail screen — editing uses the same Details/People/Schedule tabs as adding a class.
+
+**Class schedule:** When a class has meeting days, a start and end time, and a start and end date all set, Hold Course knows exactly when that class meets. Log a lecture on a day that matches, and its meeting time is shown automatically — no need to re-enter it per lecture. Leave any one of those fields blank and nothing changes: this is entirely opt-in, and existing classes are unaffected until you fill them in. Times are entered with a custom picker — hour and minute dropdowns with an AM/PM toggle — to match the rest of the plugin.
 
 **Lecture progress:** Once you've marked at least one lecture done, the class card shows a progress fraction — lectures completed out of total logged.
 
@@ -121,6 +129,8 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 **Course page URL:** If a URL is saved to the class, it appears as a quiet external-link icon next to the class name on the dashboard card, and as a "Course page" link in the class header. Useful for linking to a course portal, Coursera page, or syllabus hosted online.
 
 **Meeting link:** A recurring meeting link — Zoom or similar — kept separate from the course page URL, since a course portal and a place to join class are different things. It appears in the class header next to the meeting days, because when class happens and how you get there is really one question.
+
+**Meeting time, location, and date range on the card:** When a class has meeting days set, they appear as day chips on the class card. If a start and end time are also set, the meeting time shows inline with the chips, no extra height added. Location and date range appear as a separate row on the card, but only when at least one of them is set — useful for a partial-term class or telling an in-person class from an online one at a glance.
 
 **Office hours and TA:** A class can record office hours for the professor, and a name, email, and office hours for a teaching assistant. The class header shows the professor and the TA side by side as labeled blocks of equal weight, with a divider between them.
 
@@ -232,6 +242,12 @@ The **Calendar** shows all your lectures, assignments, and exams across all clas
 **Legend:** The top of the calendar shows a color key — lectures listed by class, assignments listed by type (Reading, Writing, Discussion, Project, Exam, Other). Exams from the Exams tab appear in their own color.
 
 **Class filter:** Use the **All classes** dropdown at the bottom to narrow the calendar to a single class.
+
+**Show filter:** Narrow the calendar by item kind — **All**, **Lectures**, **Assignments**, or **Exams**.
+
+**Type filter:** Appears once the Show filter is narrowed to Assignments, letting you further narrow to a single assignment type (Reading, Writing, Project, Discussion, Other).
+
+**Meeting time on lecture entries:** When a class's schedule fields are filled in (meeting days, start/end time, start/end date) and a lecture falls on a matching day, the calendar shows that meeting time directly on the lecture entry in both week and month view.
 
 **Day detail:** Click any day to open a popover listing every item scheduled for that date, each labeled with its type and class. Click any item in the popover to view its full detail screen.
 
