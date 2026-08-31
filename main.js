@@ -3,6 +3,7 @@
 
 const {
   Plugin,
+  PluginSettingTab,
   ItemView,
   Modal,
   Setting,
@@ -254,6 +255,10 @@ function getCalItemStyle(item) {
 class HoldCoursePlugin extends Plugin {
   async onload() {
     this.data = await this.loadData() || { currentSemesterId: null, semesters: [] };
+    this.data.settings = this.data.settings || { einkMode: false };
+    this.applyEinkClass();
+
+    this.addSettingTab(new HoldCourseSettingTab(this.app, this));
 
     this.registerView(VIEW_TYPE, (leaf) => new HoldCourseView(leaf, this));
     this.registerView(TODAY_VIEW_TYPE, (leaf) => new HoldCourseTodayView(leaf, this));
@@ -310,7 +315,13 @@ class HoldCoursePlugin extends Plugin {
     });
   }
 
-  onunload() {}
+  onunload() {
+    document.body.classList.remove('hc-eink');
+  }
+
+  applyEinkClass() {
+    document.body.classList.toggle('hc-eink', this.data.settings.einkMode);
+  }
 
   async activateView() {
     const { workspace } = this.app;
@@ -591,6 +602,31 @@ class HoldCoursePlugin extends Plugin {
   findResource(semesterId, resourceId) {
     const sem = this.data.semesters.find(s => s.id === semesterId);
     return sem ? (sem.resources || []).find(r => r.id === resourceId) : null;
+  }
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+class HoldCourseSettingTab extends PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    new Setting(containerEl)
+      .setName('E-ink display mode')
+      .setDesc('Increases text contrast and size for e-ink displays (e.g. Boox tablets), where low-contrast text can wash out under fast refresh.')
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.data.settings.einkMode)
+        .onChange(async (value) => {
+          this.plugin.data.settings.einkMode = value;
+          this.plugin.applyEinkClass();
+          await this.plugin.save();
+        }));
   }
 }
 
