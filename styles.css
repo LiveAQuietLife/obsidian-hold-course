@@ -2170,7 +2170,11 @@ body.hc-eink {
   --hc-dim-faint: var(--text-faint);
 }
 
-body.hc-eink .hc-root {
+/* .hc-today-root (HoldCourseTodayView, the sidebar view that auto-opens on
+   load) is a sibling container, not nested under .hc-root — needs the same
+   treatment explicitly, flagged in PR #10 review. */
+body.hc-eink .hc-root,
+body.hc-eink .hc-today-root {
   /* ponytail: flat 5% bump, not calibrated per device */
   font-size: 1.05em;
   /* e-ink displays wash out low-contrast text under fast refresh; bump the
@@ -2178,6 +2182,13 @@ body.hc-eink .hc-root {
      elements (icons, separators, placeholders) are restored below. */
   --text-muted: var(--text-normal);
   --text-faint: var(--text-normal);
+}
+
+/* .hc-today-item-meta (class code + lecture/assignment type — load-bearing,
+   not decorative) dims via opacity instead of --text-muted/--text-faint, so
+   the var swap above doesn't reach it. */
+body.hc-eink .hc-today-item-meta {
+  opacity: 1;
 }
 
 body.hc-eink .hc-bc-sep,
