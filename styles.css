@@ -2157,33 +2157,41 @@
   opacity: 0.75;
 }
 
-/* --- Mobile / e-ink (scoped to .is-mobile, does not affect desktop) -------- */
+/* --- E-ink displays only (does not affect regular mobile/tablet screens) --- */
+/* `update: slow` is the CSS media feature for slow-refresh displays like
+   e-ink — it's what actually distinguishes a Boox tablet from a normal
+   phone/tablet, not screen size or .is-mobile. On a regular phone/tablet
+   this block simply doesn't apply. */
 
-.is-mobile {
-  /* preserve the original dim colors for elements that should stay decorative below */
-  --hc-dim-muted: var(--text-muted);
-  --hc-dim-faint: var(--text-faint);
-}
+@media (update: slow) {
+  .is-mobile {
+    /* preserve the original dim colors for elements that should stay decorative below */
+    --hc-dim-muted: var(--text-muted);
+    --hc-dim-faint: var(--text-faint);
+  }
 
-.is-mobile .hc-root {
-  font-size: 1.05em;
-  /* e-ink displays wash out low-contrast text under fast refresh; bump the
-     baseline so status/date/count text stays readable. True decorative
-     elements (icons, separators, placeholders) are restored below. */
-  --text-muted: var(--text-normal);
-  --text-faint: var(--text-normal);
-}
+  .is-mobile .hc-root {
+    /* ponytail: flat 5% bump, not calibrated per device — an e-ink mode
+       toggle in settings would let this be tuned per-device instead */
+    font-size: 1.05em;
+    /* e-ink displays wash out low-contrast text under fast refresh; bump the
+       baseline so status/date/count text stays readable. True decorative
+       elements (icons, separators, placeholders) are restored below. */
+    --text-muted: var(--text-normal);
+    --text-faint: var(--text-normal);
+  }
 
-.is-mobile .hc-bc-sep,
-.is-mobile .hc-sem-chevron,
-.is-mobile .hc-placeholder-icon,
-.is-mobile .hc-drag-bar-label,
-.is-mobile .hc-lecture-chevron,
-.is-mobile .hc-lecture-notes::placeholder,
-.is-mobile .hc-assign-link-input::placeholder,
-.is-mobile .hc-resource-ref-chevron,
-.is-mobile .hc-cal-legend-grouplabel {
-  color: var(--hc-dim-faint);
+  .is-mobile .hc-bc-sep,
+  .is-mobile .hc-sem-chevron,
+  .is-mobile .hc-placeholder-icon,
+  .is-mobile .hc-drag-bar-label,
+  .is-mobile .hc-lecture-chevron,
+  .is-mobile .hc-lecture-notes::placeholder,
+  .is-mobile .hc-assign-link-input::placeholder,
+  .is-mobile .hc-resource-ref-chevron,
+  .is-mobile .hc-cal-legend-grouplabel {
+    color: var(--hc-dim-faint);
+  }
 }
 
 .is-mobile .hc-resource-source-icon {
