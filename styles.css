@@ -1,4 +1,4 @@
-/* --- Hold Course - v1.0.0 -------------------------------------------------- */
+/* --- Hold Course - v1.8.0 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -61,6 +61,14 @@
   color: var(--text-faint);
   user-select: none;
   flex-shrink: 0;
+}
+
+/* Semester segment. Same size and weight as the links, but muted and not
+   interactive — it is orientation, not a destination. */
+.hc-bc-sem {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 /* Nav */
@@ -212,11 +220,13 @@
   padding: 12px 16px;
   margin-bottom: 24px;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
 }
 
 .hc-today-col { min-width: 0; }
+
+.hc-today-label--overdue { color: #E24B4A; }
 
 .hc-today-label {
   font-size: 11px;
@@ -276,7 +286,7 @@
 
 .hc-class-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -286,6 +296,9 @@
   border-radius: 10px;
   cursor: pointer;
   transition: border-color 0.15s;
+  /* Truncation fix: let the card shrink to its track so long
+     assignment titles ellipsize instead of widening the card */
+  min-width: 0;
 }
 
 .hc-class-card:hover {
@@ -331,11 +344,35 @@
 .hc-card-more-btn:hover { background: var(--background-secondary); color: var(--text-normal); }
 .hc-card-more-btn svg { width: 14px; height: 14px; }
 
+.hc-class-name-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
 .hc-class-name {
   font-size: 14px;
   color: var(--text-normal);
   line-height: 1.4;
-  margin-bottom: 8px;
+  flex: 1;
+}
+
+.hc-class-url-btn {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-faint);
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+  padding: 2px;
+  border-radius: 4px;
+}
+
+.hc-class-url-btn:hover {
+  opacity: 1;
+  color: var(--text-muted);
 }
 
 .hc-class-prof {
@@ -349,6 +386,7 @@
 
 .hc-class-days {
   display: flex;
+  align-items: center;
   gap: 4px;
   margin-bottom: 10px;
   flex-wrap: wrap;
@@ -360,6 +398,27 @@
   border-radius: 100px;
   background: var(--background-secondary);
   color: var(--text-muted);
+}
+
+.hc-class-days-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.hc-class-schedule-row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.hc-class-schedule-item {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .hc-class-divider {
@@ -428,11 +487,33 @@
 }
 
 .hc-class-header-name {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   font-size: 20px;
   font-weight: 500;
   color: var(--text-normal);
   line-height: 1.3;
   margin-bottom: 12px;
+}
+
+.hc-class-header-name-text {
+  min-width: 0;
+}
+
+/* Renders only for completed / dropped. Caption weight, no colour coding —
+   a fact about the class, not an alert about it. */
+.hc-class-status-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  line-height: 1.6;
 }
 
 .hc-class-header-meta {
@@ -451,6 +532,39 @@
 
 .hc-class-meta-item a { text-decoration: none; }
 .hc-class-meta-item a:hover { text-decoration: underline; }
+
+.hc-class-people-row {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.hc-class-person {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* Divider appears only when there is a second block to divide from */
+.hc-class-person + .hc-class-person {
+  border-left: 1px solid var(--background-modifier-border);
+  padding-left: 32px;
+}
+
+.hc-class-person-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.hc-class-person-items {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
 
 /* --- Tabs ------------------------------------------------------------------ */
 
@@ -548,31 +662,6 @@
   color: var(--text-muted);
 }
 
-/* --- Placeholder (stub screens) -------------------------------------------- */
-
-.hc-placeholder {
-  text-align: center;
-  padding: 56px 24px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-}
-
-.hc-placeholder-icon {
-  color: var(--text-faint);
-  margin-bottom: 4px;
-}
-
-.hc-placeholder-icon svg { width: 28px; height: 28px; }
-
-.hc-placeholder-text {
-  font-size: 13px;
-  color: var(--text-muted);
-  max-width: 280px;
-  line-height: 1.5;
-}
-
 /* --- Modals ---------------------------------------------------------------- */
 
 .hc-modal { padding: 0; }
@@ -637,11 +726,164 @@
   flex-wrap: wrap;
 }
 
-/* Wider text inputs in HC modals */
+/* Wider text inputs in HC modals.
+   input[type="url"] is included deliberately: fields that call
+   text.inputEl.type = 'url' after creation (Course page URL and Meeting link
+   in Add/Edit Class) previously fell outside this list and silently inherited
+   Obsidian's default width. Any new type added via inputEl.type must be
+   added here too. */
 .hc-modal .setting-item-control input[type="text"],
 .hc-modal .setting-item-control input[type="email"],
-.hc-modal .setting-item-control input[type="date"] {
+.hc-modal .setting-item-control input[type="date"],
+.hc-modal .setting-item-control input[type="url"] {
   width: 320px;
+}
+
+/* Add/Edit Resource modals — Title and URL routinely overflow the shared
+   320px width (long book titles with subtitles, full archive.org links),
+   so the frame widens and every text input stretches to fill its row.
+   Goes on modalEl, not contentEl: contentEl is the inner box, so sizing
+   it overflows the frame and produces a horizontal scrollbar instead. */
+.hc-resource-modal-frame {
+  width: 620px;
+  max-width: 90vw;
+}
+
+/* Pin the label column to a fixed width so every input in the modal
+   starts at the same left edge. Obsidian's .setting-item-info defaults to
+   flex:1, which would let each label claim the row's slack and leave the
+   inputs starting at ragged, label-length-dependent positions. */
+.hc-resource-modal .setting-item-info {
+  flex: 0 0 95px;
+}
+
+/* #11: First attempt floored the input (min-width: 90px) and locked the
+   button (flex-shrink: 0) so neither could shrink. On the real device that
+   backfired — with no "give" left in either element, the row overflowed
+   instead of squeezing: the input got pushed out of view entirely and
+   Browse stretched to fill the line on its own. Switched approach —
+   instead of fighting over who shrinks, let the row wrap: if input+button
+   don't both fit, the input drops to its own full-width line above the
+   button instead of overflowing or disappearing. (LiveAQuietLife/Claude,
+   2026-08-30 — confirm on device before closing) */
+.hc-resource-modal .setting-item-control {
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Full-width inputs give a flush left and right edge down the whole form.
+   Dropdowns and class chips are untouched — Obsidian right-aligns them
+   inside the control column, so they still land on the same right edge. */
+.hc-resource-modal .setting-item-control input[type="text"],
+.hc-resource-modal .setting-item-control input[type="email"],
+.hc-resource-modal .setting-item-control input[type="date"],
+.hc-resource-modal .setting-item-control input[type="url"] {
+  flex: 1 1 160px;
+  min-width: 0;
+  width: auto;
+}
+
+/* #11: Browse doesn't need flex-shrink: 0 anymore — wrapping means it never
+   has to compete with the input for space on the same line. It does need
+   an explicit width, though: once it wraps onto its own line, Obsidian's
+   own mobile styling stretches a lone button to fill the full row (same
+   as the Unread dropdown above it) — but Cancel/Add resource at the
+   footer stay compact, so a full-width Browse reads as inconsistent
+   inside the same modal. Locked to its natural content size instead.
+   (LiveAQuietLife/Claude, 2026-08-30 — confirm on device) */
+.hc-resource-modal .setting-item-control button {
+  width: auto;
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
+
+/* Add/Edit Class modals — same treatment as Resource, with a wider label
+   column. Class's longest labels ("Course page URL", "Professor email",
+   "TA office hours") are wider than Resource's "Vault link", so 95px wraps
+   here; 115px is the floor before that starts.
+
+   This replaces four inline `text.inputEl.style.width = '100%'` calls on the
+   URL fields. Those forced the URL input to fill its control column while
+   every sibling sat at a right-aligned fixed 320px, producing the ragged
+   left edge. Inline style also beat the global width rule, so the URL fields
+   were never picking it up. Width belongs here, not at the call sites. */
+.hc-class-modal-frame {
+  width: 620px;
+  max-width: 90vw;
+}
+
+.hc-class-modal .setting-item-info {
+  flex: 0 0 115px;
+}
+
+.hc-class-modal .setting-item-control {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Every input stretches, dates included. Day chips and the custom time
+   pickers are untouched — Obsidian right-aligns them inside the control
+   column, so they already land on the same right edge. */
+.hc-class-modal .setting-item-control input[type="text"],
+.hc-class-modal .setting-item-control input[type="email"],
+.hc-class-modal .setting-item-control input[type="date"],
+.hc-class-modal .setting-item-control input[type="url"] {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+}
+
+/* Custom time picker — hour/minute dropdowns + AM/PM toggle, styled like
+   the day-toggle chips instead of the native OS time control. */
+.hc-time-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hc-time-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 100px;
+  padding: 4px 10px;
+  color: var(--text-normal);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.hc-time-colon {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.hc-time-period-toggle {
+  display: flex;
+  gap: 5px;
+  margin-left: 4px;
+}
+
+.hc-time-period-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 100px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-family: inherit;
+  transition: all 0.1s;
+}
+
+.hc-time-period-btn--active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
 }
 
 .hc-day-toggle {
@@ -772,7 +1014,19 @@
   color: var(--text-faint);
 }
 
-.hc-lecture-add-btn {
+/* Linked-note flag on a lecture row. Renders only when lec.vaultLink is set;
+   there is no empty or placeholder state, so absence is silent. Styled to
+   match .hc-lecture-assign-count so the two read as one quiet metadata line
+   rather than competing badges. */
+.hc-lecture-note-flag {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.hc-lecture-assign-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 4px;
 }
 
@@ -1139,6 +1393,9 @@
   min-width: 60px;
 }
 
+/* Status now lives here (matches lecture/exam rows), due date follows below it */
+.hc-assign-due .hc-assign-status { margin-bottom: 4px; }
+
 .hc-assign-due-label {
   font-size: 11px;
   color: var(--text-faint);
@@ -1209,6 +1466,35 @@
   color: var(--text-faint);
 }
 
+/* #8: read-only companion to .hc-assign-link-input, shown once a vault
+   link path is set. Used in two different flex-row contexts — the
+   detail-view rows (.hc-assign-note-row) and the Add/Edit Resource form's
+   Obsidian Setting rows (.setting-item-control) — so it needs its own
+   flex sizing rather than relying on a wrapper that's only present in one
+   of those two contexts. width: 100% alone did nothing here: as a plain
+   flex item with no flex-basis, it just shrank to its text content and
+   got shoved to the row's right edge by Obsidian's default
+   justify-content: flex-end, which is what actually happened when this
+   first shipped. flex: 1 1 160px matches the sizing already used for the
+   input this replaces, so both states occupy the same space in the row.
+   (LiveAQuietLife/Claude, 2026-08-30) */
+.hc-assign-link-display {
+  flex: 1 1 160px;
+  min-width: 0;
+  width: auto;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  font-size: 14px;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hc-assign-conditional { /* structural container for conditional modal fields */ }
 
 .hc-assign-note-section {
@@ -1224,6 +1510,95 @@
 .hc-assign-note-input-wrap {
   flex: 1;
   min-width: 0;
+}
+
+/* --- Readings list -----------------------------------------------------------
+   #9: split out of the Assignments tab — a reading is prep tied to a
+   lecture, not graded/deadline work. Same underlying assignment records
+   (type: 'Reading'); this is a new list, not a new data shape. Row layout
+   mirrors .hc-assign-row (padding, border, radius, due/status column) so it
+   still reads as the same app; the middle column trades the type pill and
+   grade chip for a lecture-prep context line and a linked-book line — a
+   reading never carries a grade, so there's no field to gate off here.
+   (Veronica, 2026-09-01) --------------------------------------------------- */
+
+.hc-reading-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.hc-reading-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.1s;
+}
+
+.hc-reading-row:hover {
+  border-color: var(--background-modifier-border-hover);
+  background: var(--background-secondary);
+}
+
+.hc-reading-row--done {
+  opacity: 0.45;
+}
+
+.hc-reading-icon {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.hc-reading-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.hc-reading-mid {
+  flex: 1;
+  min-width: 0;
+}
+
+.hc-reading-title {
+  font-size: 14px;
+  color: var(--text-normal);
+  margin-bottom: 2px;
+}
+
+.hc-reading-context {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.hc-reading-book {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-reading-book--orphan {
+  font-style: italic;
+}
+
+/* Reuses .hc-lecture-note-flag (defined under the Lectures list) — same
+   quiet metadata treatment, just a bit of breathing room above it here
+   since it follows the book line rather than a title. */
+.hc-reading-mid .hc-lecture-note-flag {
+  margin-top: 4px;
 }
 
 /* --- Exam list -------------------------------------------------------------- */
@@ -1593,6 +1968,20 @@
 
 /* ─── Resource picker in modals ──────────────────────────────────────────────── */
 
+/* Obsidian's default .setting-item-info has flex:1, so without this the
+   "Linked book" label column hogs all the row's extra width and the
+   control column (title + Clear/Select) gets squeezed to its bare
+   minimum, collapsing the ellipsis label toward nothing. Pin info to its
+   content size and let control take the growable space instead. */
+.hc-linked-book-info {
+  flex: 0 0 auto;
+}
+
+.hc-linked-book-control {
+  flex: 1;
+  min-width: 0;
+}
+
 .hc-resource-picker-wrap {
   display: flex;
   align-items: center;
@@ -1600,13 +1989,24 @@
   width: 100%;
 }
 
+/* Boxed to match the vault-link display fields (.hc-assign-link-display)
+   elsewhere in these modals — purely cosmetic consistency. Linked Book
+   is a different kind of field (a citation record, not a vault path,
+   with Clear/Select instead of Browse/Remove), so this doesn't share
+   any logic with those fields — just the look. (LiveAQuietLife/Claude,
+   2026-08-30) */
 .hc-resource-picker-label {
-  font-size: 13px;
+  font-size: 14px;
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-primary);
+  box-sizing: border-box;
 }
 
 /* ─── Resource referenced by ─────────────────────────────────────────────────── */
@@ -2002,6 +2402,12 @@
   color: var(--text-faint);
 }
 
+.hc-cal-popover-time {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-bottom: 2px;
+}
+
 .hc-cal-popover-item--overdue .hc-cal-popover-title {
   color: #E24B4A;
 }
@@ -2121,6 +2527,17 @@
   padding: 4px 0;
 }
 
+/* §1.3 — sub-band label above the untimed items, shown only when the
+   section is actually split between untimed and timed content. */
+.hc-today-band-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+
 .hc-today-item {
   cursor: pointer;
   border-radius: 6px;
@@ -2162,4 +2579,316 @@
   color: var(--text-muted);
   padding: 16px;
   text-align: center;
+}
+
+/* --- v1.1.0 additions ------------------------------------------------------- */
+
+/* Clickable status chips — cycle status without opening the detail screen */
+.hc-status-clickable { cursor: pointer; }
+.hc-status-clickable:hover { opacity: 0.72; }
+
+/* Grade chip — quiet earned information on done rows */
+.hc-grade-chip {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  padding: 1px 7px;
+  border-radius: 100px;
+  display: inline-block;
+  margin-left: 6px;
+  width: fit-content;
+}
+
+/* Inside the exam row's column layout, the chip stands alone */
+.hc-grade-chip--exam { margin-left: 0; }
+
+/* Exam row status toggle sits at the far right */
+.hc-exam-status {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Destructive item in the semester dropdown */
+.hc-sem-drop-item--danger { color: var(--text-error); }
+
+/* --- Dark theme adjustments -------------------------------------------------
+   Accent colors used as text on the theme background were tuned for light
+   themes; brighten them on dark. Pastel pills are self-contained and unchanged. */
+.theme-dark .hc-logo-accent { color: #E5A34F; }
+.theme-dark .hc-sem-drop-item--active { color: #E5A34F; }
+.theme-dark .hc-lecture-status--done { color: #97C95E; }
+.theme-dark .hc-lecture-status--in-progress { color: #E5A34F; }
+
+/* --- Bulk add lectures ------------------------------------------------------ */
+
+.hc-lecture-controls-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hc-bulk-modal { width: 520px; max-width: 90vw; }
+
+.hc-bulk-hint {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.hc-bulk-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+  margin-bottom: 6px;
+}
+
+.hc-bulk-summary {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 14px 0 6px;
+  color: var(--text-normal);
+}
+
+.hc-bulk-preview {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.hc-bulk-preview:empty { display: none; }
+
+.hc-bulk-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.hc-bulk-row:last-child { border-bottom: none; }
+
+.hc-bulk-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-bulk-row-date {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-bulk-row-date--none { color: var(--text-faint); font-style: italic; }
+
+.hc-bulk-row--skip .hc-bulk-row-title {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.hc-bulk-existing-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 8px;
+}
+
+.hc-bulk-existing-note:empty { display: none; }
+
+.hc-bulk-warning {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.hc-bulk-row--short {
+  border-left: 2px solid var(--color-orange, #BA7517);
+  padding-left: 8px;
+}
+
+.hc-bulk-row--short .hc-bulk-row-title {
+  color: var(--color-orange, #BA7517);
+}
+
+/* --- Courses view ---------------------------------------------------------- */
+
+.hc-courses-title {
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--text-normal);
+  padding-left: 4px;
+}
+
+.hc-courses-table {
+  display: flex;
+  flex-direction: column;
+}
+
+.hc-courses-head,
+.hc-courses-row {
+  display: grid;
+  grid-template-columns: 130px 104px minmax(0, 1fr) 120px;
+  align-items: center;
+  gap: 12px;
+}
+
+.hc-courses-head {
+  padding: 0 14px 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.hc-courses-th {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hc-courses-th:hover { color: var(--text-muted); }
+.hc-courses-th--active { color: var(--text-muted); }
+
+.hc-courses-sort-icon {
+  display: flex;
+  align-items: center;
+}
+
+.hc-courses-sort-icon svg { width: 12px; height: 12px; }
+
+.hc-courses-row {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.hc-courses-row:hover { background: var(--background-secondary); }
+
+/* Marks where the semester changes — only drawn while the table is sorted by
+   semester. A heavier rule than the between-row line, no text. */
+.hc-courses-row--seam {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.hc-courses-row--inactive { opacity: 0.55; }
+
+.hc-courses-sem {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-courses-sem-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-faint);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.hc-courses-code {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-courses-name {
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A div, not a button — every clickable thing in HC is a div, and <button>
+   drags in Obsidian chrome that outranks a single class selector. */
+.hc-courses-status {
+  justify-self: start;
+  font-size: 12px;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.hc-courses-status:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+/* Completed and dropped read identically — the difference is the word, not a
+   colour. Neither is a warning. */
+.hc-courses-status--completed,
+.hc-courses-status--dropped {
+  color: var(--text-faint);
+}
+
+/* Unset. The dash needs enough presence to read as a control rather than a
+   blank cell — the hover state does the rest. */
+.hc-courses-status--unset {
+  color: var(--text-faint);
+  border-color: var(--background-modifier-border);
+  border-style: dashed;
+}
+
+/* ─── Removed semesters modal ─────────────────────────────────────────────── */
+
+.hc-removed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.hc-removed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+}
+
+.hc-removed-info {
+  min-width: 0;
+}
+
+.hc-removed-name {
+  font-size: 13px;
+  color: var(--text-normal);
+}
+
+.hc-removed-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
 }
