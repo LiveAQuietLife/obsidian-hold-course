@@ -618,8 +618,8 @@ class HoldCourseSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName('E-ink display mode')
-      .setDesc('Increases text contrast and size for e-ink displays (e.g. Boox tablets), where low-contrast text can wash out under fast refresh.')
+      .setName('Grayscale display mode')
+      .setDesc('Increases text contrast and size for e-ink displays (e.g. Boox tablets) or a phone/tablet set to grayscale — both wash out low-contrast text the same way.')
       .addToggle((toggle) => toggle
         .setValue(this.plugin.data.settings.einkMode)
         .onChange(async (value) => {
