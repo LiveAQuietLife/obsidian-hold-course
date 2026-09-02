@@ -21,6 +21,7 @@ Hold Course is an academic tracker for Obsidian. Add your semesters and classes,
 - [Moving a Class](#moving-a-class)
 - [Lectures](#lectures)
 - [Assignments](#assignments)
+- [Readings](#readings)
 - [Exams](#exams)
 - [Library](#library)
 - [Calendar View](#calendar-view)
@@ -60,13 +61,9 @@ On first launch you'll see the **Overview** — an empty workspace. Here's the t
 4. **Add exams** on the Exams tab for any high-stakes dates you need to track separately.
 5. **Add resources** to the Library as you encounter them, or quick-add them from within a lecture or assignment and fill in the details later.
 
-From there, it's a matter of advancing item statuses as the semester moves. So turn this:
+From there, it's a matter of advancing item statuses as the semester moves until finally you end with this:
 
-<img src="screenshots/overview-blank.jpg" width="700" alt="Overview on Startup">
-
-into this:
-
-<img src="screenshots/overview-sidebar.jpg" width="700" alt="Overview with sidebar">
+<img src="screenshots/Main Dashboard View.jpg" width="700" alt="Main Dashboard">
 
 ---
 
@@ -108,13 +105,13 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 
 **Adding a class:** Click **+ Add Class** to open the Add Class dialog, organized into three tabs so the form never requires scrolling to find Save:
 
-- **Details** — class name, class code, course page URL
+- **Details** — class name, class code, course page URL, track grades
 - **People** — professor name and email, office hours, TA name and email and office hours
 - **Schedule** — meeting days, location, start/end date, start/end time, and a meeting link
 
 Only the class name is required; fill in the rest as you have it.
 
-**Opening a class:** Click the class card. Each class has four tabs: **Lectures**, **Assignments**, **Exams**, and **Library**.
+**Opening a class:** Click the class card. Each class has five tabs: **Lectures**, **Assignments**, **Readings**, **Exams**, and **Library**.
 
 **Editing or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. A class can also be edited from the **Edit** button in its detail screen — editing uses the same Details/People/Schedule tabs as adding a class.
 
@@ -171,7 +168,7 @@ A live preview shows every parsed lecture and the date it will land on before an
 **Lecture detail:** Click a lecture to open its detail screen, where you can edit its fields, jot key concepts and lesson goals, link the lecture to a note in your vault, and see every assignment attached to it. Assignments can be added here one at a time or in bulk.
 
 
-<img src="screenshots/class-detail.jpg" width="700" alt="Class">
+<img src="screenshots/Lectures List.jpg" width="700" alt="Lectures">
 
 ---
 
@@ -185,7 +182,7 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Assignment types:** Each assignment has a type — Reading, Writing, Project, Discussion, or Other — color-coded throughout the plugin so you can scan quickly.
 
-**Grade:** Assignments have an optional grade field. Fill it in after graded work is returned. Once an assignment is marked done, a recorded grade appears as a quiet pill next to its title in every list view.
+**Grade:** Assignments have an optional grade field. Fill it in after graded work is returned. Once an assignment is marked done, a recorded grade appears as a quiet pill next to its title in every list view. Grade doesn't apply to Readings, so the field is never shown there. You can also turn grading off entirely for a class — see the Track grades toggle under Classes — which hides the Grade field and chip everywhere for that class, useful for self-study or audited classes with no assigned grades.
 
 **Filtering:** Use the **All types** dropdown to show only one kind of assignment. The **Show done/Hide Done** toggle works alongside the filter — they stack.
 
@@ -193,7 +190,23 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Assignment detail:** Click an assignment to open its detail screen, where you can edit all fields, link the assignment to a note in your vault, or quick-add a resource to the Library.
 
-<img src="screenshots/assignments.jpg" width="700" alt="Assignments">
+---
+
+## Readings
+
+Inside a class, the **Readings** tab lists everything assigned as reading — pulled out of Assignments into its own view, since a reading is prep tied to a lecture rather than graded, deadline-driven work.
+
+**Adding a reading:** Click **+ Add Reading**. Since this tab is reading-only, there's no type to choose — it's locked in for you.
+
+**Context:** Each reading shows either **Class-level** or the lecture it's attached to (**Before Lecture 3 — Cell Structure**, for example), so you know what it's tied to at a glance.
+
+**Linked Book:** Link a reading directly to a resource in the Library to see its title and author right on the row. Unlinked readings show **No linked book**.
+
+**Status and due date:** Readings use the same **Not Started / In Progress / Done** status pill and due-date display as Assignments. Use the **Show done/Hide done** toggle to declutter a finished reading list.
+
+Readings never show a grade field or grade chip — grading doesn't apply to them.
+
+<img src="screenshots/Readings View.jpg" width="700" alt="Readings">
 
 ---
 
@@ -209,7 +222,7 @@ Inside a class, the **Exams** tab lists scheduled exams with their dates and a l
 
 Exams appear on the Calendar in their own color, distinct from lectures and assignments.
 
-<img src="screenshots/exams.jpg" width="700" alt="Exams">
+<img src="screenshots/Exams View.jpg" width="700" alt="Exams">
 
 ---
 
@@ -227,9 +240,7 @@ The **Library** tab collects every resource associated with a class — books, a
 
 **Resource detail:** Click any resource to see everything associated with it: the classes it belongs to, its type, and every lecture and assignment that references it — each one clickable through to the item itself.
 
-<img src="screenshots/library.jpg" width="700" alt="Library">
-
-<img src="screenshots/book-detail.jpg" width="700" alt="Book Detail">
+<img src="screenshots/Library View.jpg" width="700" alt="Library">
 
 ---
 
@@ -253,9 +264,9 @@ The **Calendar** shows all your lectures, assignments, and exams across all clas
 
 Done items appear with strikethrough and muted styling in both the calendar and the day detail popover.
 
-<img src="screenshots/calendar-week.jpg" width="700" alt="Weekly View Calendar">
+<img src="screenshots/Calendar Weekly View.jpg" width="700" alt="Weekly View Calendar">
 
-<img src="screenshots/calendar-month.jpg" width="700" alt="Monthly View Calendar">
+<img src="screenshots/Calendar View.jpg" width="700" alt="Monthly View Calendar">
 
 ---
 
