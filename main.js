@@ -3,6 +3,7 @@
 
 const {
   Plugin,
+  PluginSettingTab,
   ItemView,
   Modal,
   Setting,
@@ -632,6 +633,10 @@ function getCalItemStyle(item) {
 class HoldCoursePlugin extends Plugin {
   async onload() {
     this.data = await this.loadData() || { currentSemesterId: null, semesters: [] };
+    this.data.settings = this.data.settings || { einkMode: false };
+    this.applyEinkClass();
+
+    this.addSettingTab(new HoldCourseSettingTab(this.app, this));
 
     // Additive migrations: only ever write keys that were absent. saveData
     // directly rather than save() — no views exist yet at this point.
@@ -738,7 +743,13 @@ class HoldCoursePlugin extends Plugin {
     });
   }
 
-  onunload() {}
+  onunload() {
+    document.body.classList.remove('hc-eink');
+  }
+
+  applyEinkClass() {
+    document.body.classList.toggle('hc-eink', this.data.settings.einkMode);
+  }
 
   // #2: fires when an external process (e.g. a user's own sync script)
   // modifies data.json on disk, so changes show up without an Obsidian
@@ -1262,6 +1273,31 @@ class HoldCoursePlugin extends Plugin {
   findResource(semesterId, resourceId) {
     const sem = this.data.semesters.find(s => s.id === semesterId);
     return sem ? (sem.resources || []).find(r => r.id === resourceId) : null;
+  }
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+class HoldCourseSettingTab extends PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    new Setting(containerEl)
+      .setName('Grayscale display mode')
+      .setDesc('Increases text contrast and size for e-ink displays (e.g. Boox tablets) or a phone/tablet set to grayscale — both wash out low-contrast text the same way.')
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.data.settings.einkMode)
+        .onChange(async (value) => {
+          this.plugin.data.settings.einkMode = value;
+          this.plugin.applyEinkClass();
+          await this.plugin.save();
+        }));
   }
 }
 
