@@ -6,7 +6,7 @@ Always know where you are.
 
 Hold Course is an academic tracker for Obsidian. Add your semesters and classes, log your lectures, and track your assignments and exams — all in one place, all in your vault. No syncing, no accounts. Just your courses, clearly laid out.
 
-> **Note:** Hold Course is designed for desktop use. Mobile is not supported.
+Hold Course runs on desktop and mobile.
 
 ---
 
@@ -14,8 +14,8 @@ Hold Course is an academic tracker for Obsidian. Add your semesters and classes,
 
 - [What It Is](#what-it-is)
 - [Installation](#installation)
-- [Today Strip](#today-strip)
 - [Getting Started](#getting-started)
+- [Today Strip](#today-strip)
 - [Semesters](#semesters)
 - [Classes](#classes)
 - [Moving a Class](#moving-a-class)
@@ -26,9 +26,12 @@ Hold Course is an academic tracker for Obsidian. Add your semesters and classes,
 - [Library](#library)
 - [Calendar View](#calendar-view)
 - [Assignments View](#assignments-view)
+- [Courses](#courses)
 - [HC Today Sidebar](#hc-today-sidebar)
 - [Command Palette Shortcuts](#command-palette-shortcuts)
 - [Linked Notes](#linked-notes)
+- [Settings](#settings)
+- [Mobile](#mobile)
 - [Data Storage](#data-storage)
 
 ---
@@ -63,7 +66,7 @@ On first launch you'll see the **Overview** — an empty workspace. Here's the t
 
 From there, it's a matter of advancing item statuses as the semester moves until finally you end with this:
 
-<img src="screenshots/Main Dashboard View.jpg" width="700" alt="Main Dashboard">
+<img src="screenshots/1.9.0-dashboard.jpg" width="900" alt="Main Dashboard">
 
 ---
 
@@ -97,6 +100,8 @@ The semester dropdown at the top of the Overview lets you switch between semeste
 
 **Deleting a semester:** Open the dropdown and select **Delete Semester**. Since this removes every class, lecture, assignment, exam, and library resource under that semester, the confirmation dialog states exactly how much is about to be deleted. This cannot be undone.
 
+<img src="screenshots/1.9.0-edit-term.jpg" width="500" alt="Edit Term">
+
 ---
 
 ## Classes
@@ -118,6 +123,8 @@ Only the class name is required; fill in the rest as you have it.
 **Class schedule:** When a class has meeting days, a start and end time, and a start and end date all set, Hold Course knows exactly when that class meets. Log a lecture on a day that matches, and its meeting time is shown automatically — no need to re-enter it per lecture. Leave any one of those fields blank and nothing changes: this is entirely opt-in, and existing classes are unaffected until you fill them in. Times are entered with a custom picker — hour and minute dropdowns with an AM/PM toggle — to match the rest of the plugin.
 
 **Lecture progress:** Once you've marked at least one lecture done, the class card shows a progress fraction — lectures completed out of total logged.
+
+**Next up:** A class with no meeting days and no dates set anywhere — no lecture, assignment, or exam dates — shows a **Next up** section on its card instead of a permanently empty "No assignments due" line. It points to the next lecture you haven't finished, plus any unread reading tied to it. Classes with a real schedule or any due dates are unaffected; this only applies to fully self-paced work.
 
 **Professor email:** If an email address is saved to the class, it appears as a clickable link that opens your operating system's default mail client.
 
@@ -168,7 +175,12 @@ A live preview shows every parsed lecture and the date it will land on before an
 **Lecture detail:** Click a lecture to open its detail screen, where you can edit its fields, jot key concepts and lesson goals, link the lecture to a note in your vault, and see every assignment attached to it. Assignments can be added here one at a time or in bulk.
 
 
-<img src="screenshots/Lectures List.jpg" width="700" alt="Lectures">
+<img src="screenshots/1.9.0-lectures.jpg" width="700" alt="Lectures">
+
+---
+
+
+<img src="screenshots/1.9.0-lecture detail.jpg" width="700" alt="Lectures">
 
 ---
 
@@ -188,7 +200,11 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Status:** Each assignment has a status pill that cycles through **Not Started/In Progress/Done**. Click the pill — from any list or the detail screen — to advance it. Done assignments appear with muted styling across all views. Completed assignments can be hidden completely by using the **Show done/Hide done** toggle. 
 
+**Term-window flag:** If an assignment or exam falls outside its class's own start and end dates, a small warning icon appears next to its title. It catches a due date that's drifted outside the term without you having to cross-check dates by hand. The icon only appears once a class has both dates set on its Schedule tab, and clears on its own once the item is marked done.
+
 **Assignment detail:** Click an assignment to open its detail screen, where you can edit all fields, link the assignment to a note in your vault, or quick-add a resource to the Library.
+
+<img src="screenshots/1.9.0-assignments.jpg" width="700" alt="Lectures">
 
 ---
 
@@ -206,7 +222,47 @@ Inside a class, the **Readings** tab lists everything assigned as reading — pu
 
 Readings never show a grade field or grade chip — grading doesn't apply to them.
 
-<img src="screenshots/Readings View.jpg" width="700" alt="Readings">
+<img src="screenshots/1.9.0-readings.jpg" width="700" alt="Readings">
+
+### Reading pace
+
+Turn on **Track pace for this reading** on a reading and Hold Course will
+work out how many pages a day it takes to finish on time. It asks two
+things: how many pages in total, and by what date (defaults to the due
+date).
+
+**The page count is whatever you say it is.** Hold Course never looks at how
+long a book is or how many pages a linked note has — it only knows the
+number you typed. If a 400-page book is assigned but you only need chapters
+4–7, enter the pages for chapters 4–7. If a reading spans two books and a
+PDF, add them up and enter one number.
+
+**Logging works the same way.** Open **Log progress** and enter your running
+total in **Pages read so far**. Hold Course doesn't track which book or file
+those pages came from — 20 pages of one and 10 of another is just 30. Use
+**Edit setup** on that same dialog to change the total or the target date
+later.
+
+**The number moves in two directions.** It isn't a record of what you were
+supposed to do today; it's recalculated every time from what's left and how
+long you have — pages remaining divided by days remaining, counting today.
+So **logging pages lowers it, and a day passing raises it.** Say you have 20
+pages to read over five days:
+
+| | Shows |
+|---|---|
+| Starting out | `20 pages left, 5 days — 4/day` |
+| You log 1 page | `19 pages left, 5 days — 3.8/day` |
+| Next day, nothing logged | `19 pages left, 4 days — 4.8/day` |
+| You log 10 more | `9 pages left, 3 days — 3/day` |
+
+Reading one page on day one doesn't make the number jump — you still have
+the rest of the day. Falling behind shows up the next morning, when the
+days-remaining figure drops and the pace rises to match. Both numbers are on
+the line so you can see which one moved.
+
+The pace figure also appears as its own column in the cross-class
+[Assignments view](#assignments-view).
 
 ---
 
@@ -221,8 +277,6 @@ Inside a class, the **Exams** tab lists scheduled exams with their dates and a l
 **Status:** Exams are a simple done / not done toggle — click the status control on the exam row, or open the detail screen and use the Mark done button. A recorded grade appears as a quiet pill on done exams. Done exams can be hidden using the **Show done/Hide done** toggle on the Exams tab.
 
 Exams appear on the Calendar in their own color, distinct from lectures and assignments.
-
-<img src="screenshots/Exams View.jpg" width="700" alt="Exams">
 
 ---
 
@@ -240,7 +294,7 @@ The **Library** tab collects every resource associated with a class — books, a
 
 **Resource detail:** Click any resource to see everything associated with it: the classes it belongs to, its type, and every lecture and assignment that references it — each one clickable through to the item itself.
 
-<img src="screenshots/Library View.jpg" width="700" alt="Library">
+<img src="screenshots/1.9.0-library.jpg" width="700" alt="Library">
 
 ---
 
@@ -264,23 +318,46 @@ The **Calendar** shows all your lectures, assignments, and exams across all clas
 
 Done items appear with strikethrough and muted styling in both the calendar and the day detail popover.
 
-<img src="screenshots/Calendar Weekly View.jpg" width="700" alt="Weekly View Calendar">
 
-<img src="screenshots/Calendar View.jpg" width="700" alt="Monthly View Calendar">
+<img src="screenshots/1.9.0-calendar.jpg" width="700" alt="Monthly View Calendar">
 
 ---
 
 ## Assignments View
 
-The **Assignments** button in the toolbar opens a cross-class view of every assignment in the current semester — all classes combined in one list.
+The **Assignments** button in the toolbar opens a cross-class view of every assignment in the current semester — all classes combined in one sortable table.
 
-**Filtering:** Use the class filter to narrow to a single class, and the type filter to show only one assignment type. Both filters stack.
+The table has seven columns: class code, type, title, due date, status, grade, and reading pace. Empty cells show a dash.
 
-**Sorting:** Cycle through three sort modes — by due date, by class, or by status. Hold Course will remember your last choice. 
+**Sorting:** Click a column heading to sort by it; click again to reverse.
 
-**Show done:** Use the **Show done** toggle to include completed assignments in the list.
+**Filtering:** Use the class filter to narrow to a single class, and the type filter to show only one assignment type. Both filters stack, and the **Show done** toggle works alongside them.
 
 Click any assignment to open its detail screen.
+
+Inside a class, assignments still appear as cards — this table is only the global view, where seeing everything side by side is the point. On a narrow screen the table scrolls sideways rather than dropping columns, so nothing is hidden.
+
+<img src="screenshots/1.9.0-global-assignments.jpg" width="700" alt="Global Assignments">
+
+---
+
+## Courses
+
+The **Courses** button in the toolbar opens a cross-semester view of every class you've logged, in one table — a record of what you've taken alongside what you're taking now, rather than a working view of the current term. The header shows the totals: how many classes across how many semesters.
+
+Columns are semester, course code, course name, and status.
+
+**Filtering:** The **All years** and **All terms** dropdowns narrow the list. Both stack.
+
+**Sorting:** Click any column heading to sort by it; click again to reverse.
+
+**Status:** Each class can be marked **Ongoing**, **Completed**, or **Dropped**. Click the status cell to set it. A dash means no status is set yet — status is optional, and a class works exactly the same without one. Completed and dropped classes appear muted, so finished work steps back and current work stays prominent.
+
+Click any row to open that class's Lectures tab. Right-clicking a class here is also how you [move it to a different semester](#moving-a-class).
+
+
+<img src="screenshots/1.9.0-courses.jpg" width="700" alt="Global Assignments">
+
 
 ---
 
@@ -310,6 +387,7 @@ Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P
 - Add a library resource — opens the Add Resource dialog for the active semester
 - Add a lecture — opens the Add Lecture dialog for the current class (requires an open class screen)
 - Add an assignment — opens the Add Assignment dialog for the current class (requires an open class screen)
+- Export Hold Course data snapshot — copies `data.json` to a timestamped backup file in the plugin folder
 
 All commands are hotkey-bindable via Settings > Hotkeys.
 
@@ -321,10 +399,39 @@ Any lecture, assignment, or exam can be linked to an existing note in your vault
 
 ---
 
+## Settings
+
+Hold Course's settings are under *Settings > Community plugins > Hold Course*.
+
+**Interface scale** — a slider from 90% to 150%, in 10% steps. It scales the whole interface together — text, icons, and spacing — rather than just enlarging the type, which is what makes it useful on an e-ink tablet or in a narrow pane. Above 100% some control rows scroll sideways rather than shrink; a phone screen only fits so much, and scrolling keeps everything reachable instead of clipping it.
+
+This works on desktop and Android. It has no effect on iOS, which doesn't support the underlying CSS property — the setting is simply inert there rather than broken.
+
+**E-ink display mode** — adjusts contrast and removes transitions for slow-refresh displays. Off by default; it isn't detected automatically, since the CSS feature meant to detect e-ink displays isn't implemented in the browser engine Obsidian uses.
+
+<img src="screenshots/1.9.0-settings.jpg" width="700" alt="Settings">
+
+---
+
+## Mobile
+
+Hold Course runs on Obsidian Mobile. Every screen and form works on a phone, with layouts adjusted where the desktop arrangement didn't survive the narrower width — forms stack rather than crowd, wide tables scroll sideways rather than drop columns, and rows that can't fit on one line wrap instead of truncating.
+
+A few things work differently by necessity:
+
+- **Card menus are always visible.** On desktop, the Edit/Move/Delete menu on a class card appears on hover. A finger can't hover, so on mobile the menu is simply always shown.
+- **Modals can't be dragged on a phone.** The drag bar is hidden there, since a phone modal is effectively full-screen and has nowhere to move to. Tablets keep it.
+- **Interface scale** is worth a look on mobile — see [Settings](#settings).
+
+---
+
 ## Data Storage
 
 All plugin data is stored in `data.json` inside the Hold Course plugin folder. This file is created automatically on first use and holds all your semesters, classes, lectures, assignments, exams, and library resources. Back it up along with your vault.
 
+The **Export Hold Course data snapshot** command copies `data.json` to a timestamped file in the same folder (`hold-course-backup-2026-09-08-14-30-22.json`) — a one-click version of that backup. Every run makes a new file and nothing is ever overwritten or pruned, so clearing out old snapshots is up to you.
+
 ---
 
-*Hold Course is a community plugin for Obsidian. Feedback and bug reports are welcome via the GitHub repository. Screenshots were captured on vault using the Soft Paper theme by Nick Milo, https://linkingyourthinking.com*
+*Hold Course is a community plugin for Obsidian. Feedback and bug reports are welcome via the GitHub repository. Thanks to [@fastermadman](https://github.com/fastermadman) for testing on e-ink devices, reporting, and working on some of the issues that shaped mobile support.*
+
