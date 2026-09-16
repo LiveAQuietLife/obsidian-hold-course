@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.8.0 */ 
+/* --- Hold Course --- v1.9.1 */
 'use strict';
 
 const {
@@ -69,7 +69,6 @@ function generateId() {
 // year — and those sort last in BOTH directions, because reversing them would
 // assert they are the oldest. A semester with a year but no term does have a
 // position, just an imprecise one, so it reverses normally.
-//
 // Module-level rather than a method because both the plugin (deleteSemester)
 // and the view (Courses sorting) need it, and they have no reference to each
 // other. One definition, one rule.
@@ -83,7 +82,6 @@ function semesterRank(sem) {
 // newest-first. Undated semesters sort last in BOTH directions — the direction
 // deliberately does not apply to them, because reversing them would assert they
 // are the oldest, which is a claim the data does not support.
-//
 // Module-level for the same reason as semesterRank: this rule was written out by
 // hand in three places (Courses primary sort, Courses secondary sort, and the
 // semester switcher) and three copies is three chances to drift.
@@ -99,7 +97,6 @@ function compareSemestersByTimeline(a, b, dir = 1) {
 // Data-shape stamp. Absence of the key entirely is version 0 — the marker is the
 // absence, not a stored zero. The number counts migrations applied, so a stamped
 // file has been through both #1 (term/year parse) and #2 (semester removal).
-//
 // Migration #2 rewrites nothing. `removed` is presence-based and additive, so an
 // old file simply has no such keys and every semester is visible, which is the
 // correct answer already. The stamp ships anyway, and in the same commit, so the
@@ -111,6 +108,16 @@ const CURRENT_DATA_VERSION = 2;
 // made read-only — this governs one thing: whether the switcher draws it.
 function isSemesterRemoved(sem) {
   return !!sem && 'removed' in sem;
+}
+
+// #12: absent = graded, the default and current behavior for every existing
+// class (no migration needed). Present + true = grading hidden everywhere
+// for that class — Grade fields, grade chips, on both assignments and
+// exams. A truthiness check rather than an 'in' check deliberately, so a
+// stray `notGraded: false`/undefined left behind by a save round-trip still
+// reads as graded.
+function isClassGraded(cls) {
+  return !(cls && cls.notGraded);
 }
 
 function getColor(index) {
@@ -180,6 +187,115 @@ function getDueInfo(isoDate) {
   return { label: dateStr, color: 'var(--text-muted)', note: `${diff} days`, noteColor: 'var(--text-faint)', urgency: 'upcoming' };
 }
 
+// Whether a due date falls outside the class's own scheduled window — a
+// validity check, distinct from getDueInfo()'s time-to-due urgency. Both
+// dates must be set on the class (§1.3 fields); a class without them never
+// flags anything, same silent-when-absent pattern as classMeetsOnDate().
+function isOutsideClassWindow(dueDate, cls) {
+  if (!dueDate || !cls || !cls.startDate || !cls.endDate) return false;
+  return dueDate < cls.startDate || dueDate > cls.endDate;
+}
+
+// Small standalone flag icon, rendered next to a title — deliberately NOT
+// merged into getDueInfo()'s due-note badge. That badge answers "how soon,"
+// this answers "does it even fit the term" — two different questions, kept
+// visually separate so the due-note's red/amber never gets reinterpreted as
+// meaning this instead. Suppressed once done: a completed item outside the
+// window isn't actionable anymore.
+function renderTermWindowFlag(container, dueDate, cls, isDone) {
+  if (isDone) return;
+  if (!isOutsideClassWindow(dueDate, cls)) return;
+  const flag = container.createSpan({ cls: 'hc-term-window-flag' });
+  setIcon(flag, 'alert-triangle');
+  const label = `Due ${formatDate(dueDate)} — outside ${cls.name || cls.code || 'this class'}'s ${formatDate(cls.startDate)}–${formatDate(cls.endDate)} window`;
+  flag.setAttribute('aria-label', label);
+  // aria-label only, no title: setting both stacks the browser's native
+  // tooltip on top of Obsidian's own, showing the same text twice. Matches
+  // the convention used everywhere else in this file (status pills, etc.).
+}
+
+// #30: target date resolution for reading-pace tracking. targetDateOverride
+// wins when present; otherwise falls back to the assignment's own due date.
+// Leaving it absent (rather than always writing the due date in) is what lets
+// the pace line track a moved due date for free, with no sync logic needed.
+function getReadingPaceTargetDate(assignment) {
+  const rp = assignment.readingPace;
+  if (!rp) return null;
+  return rp.targetDateOverride || assignment.dueDate || null;
+}
+
+// #30: compact one-line reading-pace indicator. Returns null when there's
+// nothing to show — no readingPace, or hidden — so the call site can treat
+// absence as "render nothing" rather than an empty string. Days-remaining is
+// counted inclusively (+1) so a due-today target resolves to 1 day, not 0 —
+// avoids a divide-by-zero without needing a separate due-today branch.
+// Returns { text, tooltip } rather than a bare string — tooltip is only set
+// on the per-day state, since that's the one whose live-recalculating nature
+// reads as a bug on first encounter: re-averaging after logging progress
+// looks like it's contradicting itself unless it's clear the number was
+// never a fixed today-only quota.
+function getReadingPaceLine(assignment) {
+  const rp = assignment.readingPace;
+  if (!rp || rp.hidden) return null;
+
+  const remaining = (rp.totalPages || 0) - (rp.pagesRead || 0);
+  if (remaining <= 0) return { text: '0 pages remaining', tooltip: null };
+
+  const targetDate = getReadingPaceTargetDate(assignment);
+  if (!targetDate) {
+    return { text: `${remaining} page${remaining === 1 ? '' : 's'} remaining`, tooltip: null };
+  }
+
+  const daysRemaining = getDaysUntil(targetDate) + 1;
+  if (daysRemaining <= 0) {
+    return {
+      text: `${remaining} page${remaining === 1 ? '' : 's'} remaining — target date passed`,
+      tooltip: null,
+    };
+  }
+
+  // #30 follow-up: show the inputs, not just the quotient. Math.ceil alone
+  // collapsed 20/5 and 19/5 to the same "~4", so logging a page looked like
+  // it did nothing — the number only visibly moves when a day passes. One
+  // decimal makes a log register immediately, and surfacing pages-left and
+  // days-left makes it obvious which term changed.
+  const perDay = remaining / daysRemaining;
+  const perDayText = Number.isInteger(perDay) ? String(perDay) : perDay.toFixed(1);
+  return {
+    text: `${remaining} page${remaining === 1 ? '' : 's'} left, ${daysRemaining} day${daysRemaining === 1 ? '' : 's'} — ${perDayText}/day`,
+    tooltip: "Recalculated from what's left, spread evenly across the days remaining — not a fixed target for today alone. Logging pages lowers it; a day passing raises it.",
+  };
+}
+
+// #15: column-width variant of getReadingPaceLine. The inline version's copy
+// ("19 pages left, 5 days — 3.8/day") is written to be read once, in place;
+// a table column needs the same three states in a few characters. Deliberately
+// a separate function rather than a mode flag on getReadingPaceLine — the two
+// have different callers, different widths, and no shared formatting beyond
+// the underlying numbers. Returns null on the same conditions as its sibling
+// so call sites treat absence identically.
+function getReadingPaceCompact(assignment) {
+  const rp = assignment.readingPace;
+  if (!rp || rp.hidden) return null;
+
+  const remaining = (rp.totalPages || 0) - (rp.pagesRead || 0);
+  if (remaining <= 0) return { text: '0 left', state: 'done' };
+
+  const targetDate = getReadingPaceTargetDate(assignment);
+  if (!targetDate) return { text: `${remaining} left`, state: 'plain' };
+
+  const daysRemaining = getDaysUntil(targetDate) + 1;
+  if (daysRemaining <= 0) return { text: `${remaining} left`, state: 'passed' };
+
+  // One decimal here too, so the table column moves when a log lands — same
+  // reason as the inline line above. Still compact: "3.8/day".
+  const perDay = remaining / daysRemaining;
+  return {
+    text: `${Number.isInteger(perDay) ? perDay : perDay.toFixed(1)}/day`,
+    state: 'plain',
+  };
+}
+
 function getAllAssignments(semester) {
   const all = [];
   for (const cls of (semester.classes || [])) {
@@ -216,6 +332,45 @@ function getLecturesSorted(cls) {
     if (!b.date) return -1;
     return a.date.localeCompare(b.date);
   });
+}
+
+// Whether a class has zero schedule/date data anywhere — no meeting days,
+// and no lecture, assignment, or exam carries a date. Distinct from simply
+// having nothing due right now: a dated class with an empty queue still
+// isn't "self-paced," it's just caught up. Gates the "Next up" card fallback
+// so it only fires for classes with no dates at all, not partially-dated
+// ones between assignments.
+function isSelfPacedClass(cls) {
+  if (cls.meetingDays?.length) return false;
+  for (const lec of (cls.lectures || [])) {
+    if (lec.date) return false;
+    for (const a of (lec.assignments || [])) {
+      if (a.dueDate) return false;
+    }
+  }
+  for (const a of (cls.assignments || [])) {
+    if (a.dueDate) return false;
+  }
+  for (const exam of (cls.exams || [])) {
+    if (exam.dueDate) return false;
+  }
+  return true;
+}
+
+// The self-paced equivalent of getNextAssignmentDue(): no due date exists to
+// sort by, so "what's next" means the first not-done lecture in entry order
+// instead. A reading tied to that lecture (lec.assignments, type 'Reading')
+// surfaces as prep, not as a second due date — matches how the user already
+// reads: before the lecture it's nested under, on no particular date.
+function getNextUp(cls) {
+  const sorted = getLecturesSorted(cls);
+  for (let i = 0; i < sorted.length; i++) {
+    const lec = sorted[i];
+    if (lec.status === 'done') continue;
+    const reading = (lec.assignments || []).find(a => a.type === 'Reading' && a.status !== 'done') || null;
+    return { lecture: lec, lectureNumber: i + 1, reading };
+  }
+  return null;
 }
 
 // ─── Bulk lecture paste parsing ───────────────────────────────────────────────
@@ -634,7 +789,13 @@ class HoldCoursePlugin extends Plugin {
   async onload() {
     this.data = await this.loadData() || { currentSemesterId: null, semesters: [] };
     this.data.settings = this.data.settings || { einkMode: false };
+    // #13: additive — existing users' settings object already exists, so the
+    // `||` above never runs for them. uiScale needs its own explicit check,
+    // same principle as the migration functions below: only ever write keys
+    // that were absent.
+    if (this.data.settings.uiScale === undefined) this.data.settings.uiScale = 100;
     this.applyEinkClass();
+    this.applyUiScale();
 
     this.addSettingTab(new HoldCourseSettingTab(this.app, this));
 
@@ -738,6 +899,31 @@ class HoldCoursePlugin extends Plugin {
       },
     });
 
+    // #7: exports the on-disk data.json to a timestamped file in the plugin
+    // folder — a one-click version of the manual backup already recommended
+    // in the README. Reads the persisted file directly rather than
+    // re-serializing this.data, so the snapshot reflects what's actually on
+    // disk. No pruning/retention logic by design .
+    this.addCommand({
+      id: 'hc-export-data-snapshot',
+      name: 'Export Hold Course data snapshot',
+      callback: async () => {
+        const adapter = this.app.vault.adapter;
+        const dataPath = `${this.manifest.dir}/data.json`;
+        const now = new Date();
+        const stamp = now.toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        const backupPath = `${this.manifest.dir}/hold-course-backup-${stamp}.json`;
+        try {
+          const contents = await adapter.read(dataPath);
+          await adapter.write(backupPath, contents);
+          new Notice(`Snapshot saved: ${backupPath}`);
+        } catch (e) {
+          new Notice('Could not create snapshot — see console for details.');
+          console.error(e);
+        }
+      },
+    });
+
     this.app.workspace.onLayoutReady(() => {
       this.activateTodayView();
     });
@@ -745,28 +931,44 @@ class HoldCoursePlugin extends Plugin {
 
   onunload() {
     document.body.classList.remove('hc-eink');
+    document.body.classList.remove('hc-scaled');
+    document.body.style.removeProperty('--hc-ui-scale');
+    // #39: clear the measured offsets alongside the other body-level cleanup
+    document.body.style.removeProperty('--hc-root-top');
+    document.body.style.removeProperty('--hc-toolbar-h');
+    document.body.style.removeProperty('--hc-navbar-h');
   }
 
   applyEinkClass() {
     document.body.classList.toggle('hc-eink', this.data.settings.einkMode);
   }
 
-  // #2: fires when an external process (e.g. a user's own sync script)
-  // modifies data.json on disk, so changes show up without an Obsidian
-  // restart. Deliberately a plain reload, not a merge: if an in-app edit
-  // is mid-flight — mutated in memory but not yet written to disk — at
-  // the exact same instant this fires, it's silently discarded in favor
-  // of the on-disk version. A "flush before reload" approach (save
-  // current in-memory state first) was considered and rejected: it would
-  // overwrite the external change with our own stale copy before ever
-  // reading it, defeating the purpose of this hook. A real fix would mean
-  // merging field-by-field instead of replacing this.data wholesale — a
-  // genuine data-load redesign, not a small addition. Given nearly every
-  // action in this plugin already saves immediately after mutating data,
-  // the actual unsaved-edit window is already close to zero in practice.
-  // Accepting this as a known, low-probability limitation rather than
-  // building the merge path preemptively. (LiveAQuietLife/Claude,
-  // 2026-08-30 — see issue #2)
+  // #13: zoom (not font-size) so text, icons, gaps, and padding all scale
+  // together instead of just the words getting bigger and everything else
+  // staying cramped. zoom is Chromium-only — works on desktop Obsidian and
+  // Android (both Chromium/WebView), does nothing on iOS/WebKit. That's a
+  // known, accepted gap, not a bug: the setting is simply inert there.
+  // Set on <body> as a CSS variable, same shape as the eink class, but
+  // applied to .hc-root/.hc-today-root specifically in CSS rather than
+  // body itself, so it never touches the rest of Obsidian's own UI.
+  // 100 (zoom: 1) is a no-op, so this is always safe to apply unconditionally
+  // — no separate on/off gate needed the way einkMode has one.
+  applyUiScale() {
+    const scale = this.data.settings.uiScale || 100;
+    document.body.style.setProperty('--hc-ui-scale', scale / 100);
+    // Gated behind a class (see styles.css) so zoom is genuinely absent at
+    // 100%, not just present with a no-op value — zoom is non-standard
+    // and carries known compositor quirks.
+    document.body.classList.toggle('hc-scaled', scale !== 100);
+  }
+
+  // #2: fires when an external process (e.g. a sync script) modifies
+  // data.json on disk, so changes appear without an Obsidian restart.
+  // Deliberately a plain reload, not a merge — an in-app edit mutated in
+  // memory but not yet written would be discarded if it collided with
+  // this. Accepted as a known limitation: nearly every action saves
+  // immediately, so that window is close to zero. See hc-logic-notes #2
+  // for the rejected alternatives.
   async onExternalSettingsChange() {
     this.data = await this.loadData() || { currentSemesterId: null, semesters: [] };
     this.refreshTodayView();
@@ -991,6 +1193,9 @@ class HoldCoursePlugin extends Plugin {
       exams: [],
       resources: [],
     };
+    // #12: absence is graded (the default) — key only added when the class
+    // is explicitly marked ungraded, matching the removed/status idiom.
+    if (classData.trackGrades === false) cls.notGraded = true;
     sem.classes.push(cls);
     return cls;
   }
@@ -1027,7 +1232,6 @@ class HoldCoursePlugin extends Plugin {
   }
 
   // Moves a class, with everything inside it, into another semester.
-  //
   // lectures/assignments/exams live *on* the class object and travel for free.
   // Resources do not: they live at sem.resources[] and only point at classes via
   // classIds, so they have to be handled explicitly or the class arrives with an
@@ -1298,6 +1502,25 @@ class HoldCourseSettingTab extends PluginSettingTab {
           this.plugin.applyEinkClass();
           await this.plugin.save();
         }));
+
+    // #13: replaces the flat 1.1em guess from #4 with an actual adjustable
+    // range — that flat bump was hard to judge by eye, either barely
+    // noticeable or too much, with no room to tune it. Chromium-only (zoom):
+    // works on desktop and Android, no effect on iOS/WebKit — noted in the
+    // description rather than hidden, since silently doing nothing without
+    // explanation reads as broken.
+    new Setting(containerEl)
+      .setName('Interface scale')
+      .setDesc('Scales the whole interface together — text, icons, and spacing — rather than just the text. Useful on e-ink/mobile displays or a narrow desktop pane. Works on desktop and Android; has no effect on iOS, which doesn\'t support the underlying CSS property.')
+      .addSlider((slider) => slider
+        .setLimits(90, 150, 10)
+        .setValue(this.plugin.data.settings.uiScale)
+        .setDynamicTooltip()
+        .onChange(async (value) => {
+          this.plugin.data.settings.uiScale = value;
+          this.plugin.applyUiScale();
+          await this.plugin.save();
+        }));
   }
 }
 
@@ -1346,16 +1569,31 @@ class HoldCourseView extends ItemView {
   getDisplayText() { return 'Hold Course'; }
   getIcon() { return 'graduation-cap'; }
 
-  async onOpen() { this.render(); }
-  async onClose() { this._closeSemDrop(); this._closeCalPopover(); }
+  async onOpen() {
+    this.render();
+    // #39: the cap in styles.css relies on measured offsets, but render()
+    // only runs on navigation, so a rotation would leave portrait values in
+    // place while innerHeight changed. Debounced because resize also fires
+    // repeatedly during keyboard animation. Writes only the custom
+    // properties and never touches .hc-root, which #34 depends on.
+    this.registerDomEvent(window, 'resize', () => {
+      window.clearTimeout(this._capResizeTimer);
+      this._capResizeTimer = window.setTimeout(() => this._updateContentCap(), 100);
+    });
+  }
+  async onClose() {
+    window.clearTimeout(this._capResizeTimer);
+    this._closeSemDrop();
+    this._closeCalPopover();
+    if (this._filterDropdown) this._filterDropdown.close();
+  }
 
-  navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null, resourceId = null, semesterId = null) {
+  navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null, resourceId = null, semesterId = null, tab = null) {
     // Which semester the detail screens resolve against. Deliberately gated on
     // classId alone, NOT on screen === 'class': the calendar and the Today
     // sidebar navigate straight to 'lecture'/'assignment' without ever passing
     // through a class screen, so a screen-gated reset would let a stale id from
     // an earlier Courses click survive and resolve the wrong semester.
-    //
     // Same class = staying inside one class's subtree (back, prev/next, tabs),
     // where call sites pass cls.id straight back in and never carry the
     // semester — so the value must persist untouched. Different class = a real
@@ -1363,9 +1601,14 @@ class HoldCourseView extends ItemView {
     if (classId !== this.currentClassId) {
       this.viewedSemesterId = semesterId;
     }
-    // Reset tab and library filter when moving to a different class
+    // Reset tab and library filter when moving to a different class.
+    // #22: a caller can request a specific landing tab (e.g. the class
+    // card's "Next assignment due" block landing on Assignments/Readings
+    // instead of the Lectures default) via the trailing `tab` param — this
+    // only applies on the actual different-class reset branch, so callers
+    // that stay within the same class and never pass `tab` are unaffected.
     if (screen === 'class' && classId !== this.currentClassId) {
-      this.currentTab = 'Lectures';
+      this.currentTab = tab || 'Lectures';
       this.libraryFilterClassId = null;
       this.classAssignFilterType = null;
     }
@@ -1399,11 +1642,28 @@ class HoldCourseView extends ItemView {
 
   refresh() { this.render(); }
 
-  render() {
+  // #37: contentEl.empty() below rebuilds .hc-content as a new DOM node,
+  // which starts at scrollTop 0 — so any plain render() reset a long list
+  // to the top even when one row changed. preserveScroll captures the old
+  // node's position and reapplies it. Off by default: navigation is a real
+  // screen change where landing at the top is correct. In-place refreshes
+  // (status/sort/hide-done toggles) opt in. Filter changes deliberately do
+  // not — a different set of items reads correctly from the top.
+  render(preserveScroll = false) {
+    const oldContent = preserveScroll ? this.contentEl.querySelector('.hc-content') : null;
+    const savedScroll = oldContent ? oldContent.scrollTop : 0;
+
     this._closeSemDrop();
     this._closeCalPopover();
+    if (this._filterDropdown) this._filterDropdown.close();
 
     this.contentEl.empty();
+    // #40: contentEl (view-content) can carry leftover scrollTop from
+    // whatever was scrolled previously — it has no intentional scroll state
+    // of its own; only .hc-content's scroll is ever preserved (see
+    // preserveScroll above). Left uncorrected, that offset shifts
+    // .hc-root's measured top and intermittently masks #39.
+    this.contentEl.scrollTop = 0;
     const root = this.contentEl.createDiv('hc-root');
 
     this._renderToolbar(root);
@@ -1422,6 +1682,42 @@ class HoldCourseView extends ItemView {
       case 'courses':      this._renderCoursesView(content); break;
       default:             this._renderDashboard(content);
     }
+
+    if (preserveScroll) content.scrollTop = savedScroll;
+    this._updateContentCap();
+  }
+
+  // #39: .hc-root keeps height:100dvh but starts below Obsidian's view
+  // header, so its bottom lands ~101px past the fold and .hc-content
+  // inherits that. Scroll range is not the problem — the container is
+  // already at its scroll maximum with content still off-screen. The cap
+  // in styles.css fixes it; these offsets vary (the toolbar wraps to
+  // different heights), so they are measured rather than hardcoded.
+  // Applied to .hc-content ONLY. An earlier attempt put a measured calc on
+  // .hc-root's height and broke #34, which needs that rule to stay exactly
+  // height:100dvh. Do not move this onto .hc-root.
+  _updateContentCap() {
+    const root = this.contentEl.querySelector('.hc-root');
+    if (!root) return;
+    const toolbar = root.querySelector('.hc-toolbar');
+    const rootTop = Math.max(0, Math.round(root.getBoundingClientRect().top));
+    const toolbarH = toolbar ? Math.round(toolbar.getBoundingClientRect().height) : 0;
+    document.body.style.setProperty('--hc-root-top', `${rootTop}px`);
+    document.body.style.setProperty('--hc-toolbar-h', `${toolbarH}px`);
+
+    // Obsidian's mobile navbar is position: fixed, so it is outside normal
+    // flow and 100dvh counts the band it covers as usable space - content
+    // scrolled into it is drawn underneath and unreachable. Measure from
+    // the navbar's top to the bottom of the viewport rather than using its
+    // height: it floats above the device gesture area, so the dead strip is
+    // taller than the bar itself (measured 98px against a 52px bar).
+    const navbar = document.querySelector('.mobile-navbar');
+    let navH = 0;
+    if (navbar) {
+      const nr = navbar.getBoundingClientRect();
+      if (nr.height > 0) navH = Math.max(0, Math.round(window.innerHeight - nr.top));
+    }
+    document.body.style.setProperty('--hc-navbar-h', `${navH}px`);
   }
 
   // ─── Toolbar ──────────────────────────────────────────────────────────────
@@ -1511,7 +1807,7 @@ class HoldCourseView extends ItemView {
       const cls = sem.classes.find(c => c.id === this.currentClassId);
       if (cls) {
         // #9: land back on Readings, not Assignments, for a Reading item —
-        // it doesn't live in the Assignments list anymore. (LiveAQuietLife, 2026-09-01)
+        // it doesn't live in the Assignments list anymore.
         const bcResult = this.plugin.findAssignment(sem.id, cls.id, this.currentAssignmentId);
         const bcIsReading = !!(bcResult && bcResult.assignment && bcResult.assignment.type === 'Reading');
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
@@ -1779,7 +2075,9 @@ class HoldCourseView extends ItemView {
         const row = overdueCol.createDiv('hc-today-row');
         const dot = row.createDiv('hc-today-dot');
         dot.style.background = info ? info.color : '#999';
-        row.createSpan({ text: `${a.title} · ${formatDate(a.dueDate)}` });
+        row.createSpan({ cls: 'hc-today-title', text: a.title });
+        const dateEl = row.createSpan({ cls: 'hc-today-date', text: formatDate(a.dueDate) });
+        if (info) dateEl.style.color = info.color;
       }
       if (overdue.length > shown.length) {
         const moreRow = overdueCol.createDiv('hc-today-row hc-today-empty');
@@ -1796,7 +2094,7 @@ class HoldCourseView extends ItemView {
         const row = leftCol.createDiv('hc-today-row');
         const dot = row.createDiv('hc-today-dot');
         dot.style.background = info ? info.color : '#999';
-        row.createSpan({ text: a.title });
+        row.createSpan({ cls: 'hc-today-title', text: a.title });
       }
     } else {
       const emptyRow = leftCol.createDiv('hc-today-row hc-today-empty');
@@ -1812,7 +2110,9 @@ class HoldCourseView extends ItemView {
         const row = rightCol.createDiv('hc-today-row');
         const dot = row.createDiv('hc-today-dot');
         dot.style.background = info ? info.color : '#999';
-        row.createSpan({ text: `${a.title} · ${formatDate(a.dueDate)}` });
+        row.createSpan({ cls: 'hc-today-title', text: a.title });
+        const dateEl = row.createSpan({ cls: 'hc-today-date', text: formatDate(a.dueDate) });
+        if (info) dateEl.style.color = info.color;
       }
     } else {
       const emptyRow = rightCol.createDiv('hc-today-row hc-today-empty');
@@ -1925,11 +2225,44 @@ class HoldCourseView extends ItemView {
     // Next assignment
     if (next) {
       const info = getDueInfo(next.dueDate);
-      body.createDiv({ cls: 'hc-class-next-label', text: 'Next assignment due' });
-      body.createDiv({ cls: 'hc-class-next-title', text: next.title });
+      // #22: this block deep-links to the assignment's own tab (Readings vs
+      // Assignments, matching #9) instead of falling through to the card's
+      // default Lectures click — clicking "Next assignment due" should land
+      // on the assignment, not the lecture list.
+      const nextBlock = body.createDiv('hc-class-next-block');
+      nextBlock.createDiv({ cls: 'hc-class-next-label', text: 'Next assignment due' });
+      const nextTitleRow = nextBlock.createDiv('hc-title-flag-row');
+      nextTitleRow.createDiv({ cls: 'hc-class-next-title', text: next.title });
+      renderTermWindowFlag(nextTitleRow, next.dueDate, cls, next.status === 'done');
       if (info) {
-        const dueEl = body.createDiv({ cls: 'hc-class-next-due', text: info.label });
+        const dueEl = nextBlock.createDiv({ cls: 'hc-class-next-due', text: info.label });
         dueEl.style.color = info.color;
+      }
+      nextBlock.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // #22: passed through navigate()'s `tab` param, not set beforehand —
+        // navigate() unconditionally resets currentTab to 'Lectures' when
+        // classId differs from the currently-viewed class (true here, coming
+        // from the dashboard), which silently overwrote a pre-set value.
+        this.navigate('class', cls.id, null, null, null, null, null, next.type === 'Reading' ? 'Readings' : 'Assignments');
+      });
+    } else if (isSelfPacedClass(cls)) {
+      // #26: self-paced classes have no due date to report against, so this
+      // swaps to a sequential signal — the next not-done lecture, plus any
+      // unread prep tied to it — instead of a permanently-empty due-date
+      // slot.
+      const nextUp = getNextUp(cls);
+      body.createDiv({ cls: 'hc-class-next-label', text: 'Next up' });
+      if (nextUp) {
+        body.createDiv({ cls: 'hc-class-next-title', text: `Lecture ${nextUp.lectureNumber} — ${nextUp.lecture.title}` });
+        if (nextUp.reading) {
+          const readingRow = body.createDiv('hc-class-next-reading');
+          const readIcon = readingRow.createSpan({ cls: 'hc-inline-icon' });
+          setIcon(readIcon, 'book-open');
+          readingRow.createSpan({ text: `Read first: ${nextUp.reading.title}` });
+        }
+      } else {
+        body.createDiv({ cls: 'hc-class-next-title', text: 'All lectures done' });
       }
     } else {
       body.createDiv({ cls: 'hc-class-next-label', text: 'No assignments due' });
@@ -2047,7 +2380,7 @@ class HoldCourseView extends ItemView {
     const tabRow = content.createDiv('hc-tab-row');
     // #9: Readings split out of Assignments — a reading is prep tied to a
     // lecture, not graded work, and mixing the two made the Assignments tab
-    // read like a to-do list instead of "what's due and graded." (LiveAQuietLife, 2026-09-01)
+    // read like a to-do list instead of "what's due and graded."
     const tabs = ['Lectures', 'Assignments', 'Readings', 'Exams', 'Library'];
     for (const tab of tabs) {
       const btn = tabRow.createEl('button', { cls: 'hc-tab', text: tab });
@@ -2136,7 +2469,7 @@ class HoldCourseView extends ItemView {
     sortBtn.addEventListener('click', () => {
       cls.lectureSort = sortDesc ? 'asc' : 'desc';
       this.plugin.save();
-      this.render();
+      this.render(true);
     });
 
     const doneToggle = leftControls.createEl('button', { cls: 'hc-btn hc-btn--sm' });
@@ -2146,7 +2479,7 @@ class HoldCourseView extends ItemView {
     doneToggle.addEventListener('click', () => {
       cls.lectureShowDone = !cls.lectureShowDone;
       this.plugin.save();
-      this.render();
+      this.render(true);
     });
 
     const rightControls = controlRow.createDiv('hc-lecture-controls-right');
@@ -2220,7 +2553,7 @@ class HoldCourseView extends ItemView {
     // #9: broken out by Reading vs. everything else — "2 assignments" was
     // misleading when a lecture's items were actually readings; the Lectures
     // tab overview should match what the Readings/Assignments split means
-    // everywhere else now. (LiveAQuietLife, 2026-09-01)
+    // everywhere else now.
     const lecItems = lec.assignments || [];
     const lecReadingCount = lecItems.filter(a => a.type === 'Reading').length;
     const lecOtherCount = lecItems.length - lecReadingCount;
@@ -2238,7 +2571,7 @@ class HoldCourseView extends ItemView {
       e.stopPropagation();
       lec.status = cycleStatus(lec.status);
       this.plugin.save();
-      this.render();
+      this.render(true);
     });
 
     const chev = right.createDiv('hc-lecture-chevron');
@@ -2362,7 +2695,7 @@ class HoldCourseView extends ItemView {
         // edit silently overwrite the real path with a folder-less
         // fragment, breaking the link. Browse/Remove are now the only way
         // to change an existing link, matching how the Resource detail
-        // page's vault link already behaves. (LiveAQuietLife/Claude, 2026-08-30)
+        // page's vault link already behaves.
         textWrap.createDiv({ cls: 'hc-assign-link-display', text: path.split('/').pop() });
       } else {
         const linkInput = textWrap.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
@@ -2408,7 +2741,7 @@ class HoldCourseView extends ItemView {
     // (not readings). Both groups render with the same row treatment as
     // before; only the grouping and labels changed. Both show an explicit
     // empty state rather than disappearing, so the structure is visible
-    // even before anything's been added. (LiveAQuietLife, 2026-09-01)
+    // even before anything's been added.
     const lecAssignments = lec.assignments || [];
 
     content.createDiv({ cls: 'hc-lecture-section-label', text: 'Readings' });
@@ -2457,7 +2790,7 @@ class HoldCourseView extends ItemView {
 
   // Row rendering for one of the two lecture-detail groups (Readings /
   // Assignments) — pulled out of _renderLectureDetail so both groups share
-  // exactly the same row markup and empty-state handling. #9 (LiveAQuietLife, 2026-09-01)
+  // exactly the same row markup and empty-state handling. #9
   _renderLectureAssignRows(container, items, cls, lec, emptyText) {
     if (items.length === 0) {
       container.createDiv({ cls: 'hc-empty-text hc-lecture-assign-empty', text: emptyText });
@@ -2470,7 +2803,9 @@ class HoldCourseView extends ItemView {
         aRow.createSpan({ cls: 'hc-assign-type-pill', text: a.type });
       }
       const aInfo = aRow.createDiv('hc-lecture-assign-info');
-      aInfo.createDiv({ cls: 'hc-lecture-assign-title', text: a.title });
+      const aTitleRow = aInfo.createDiv('hc-title-flag-row');
+      aTitleRow.createDiv({ cls: 'hc-lecture-assign-title', text: a.title });
+      renderTermWindowFlag(aTitleRow, a.dueDate, cls, a.status === 'done');
       if (a.status) aInfo.createDiv({ cls: 'hc-lecture-assign-status', text: a.status });
       if (a.dueDate) {
         const info = getDueInfo(a.dueDate);
@@ -2495,7 +2830,7 @@ class HoldCourseView extends ItemView {
 
     // Collect all assignments with lecture context.
     // #9: Reading-type items are excluded here — they live in the Readings
-    // tab now, not mixed in with graded/deadline work. (LiveAQuietLife, 2026-09-01)
+    // tab now, not mixed in with graded/deadline work.
     const items = [];
     for (const a of (cls.assignments || [])) {
       if (a.type === 'Reading') continue;
@@ -2518,7 +2853,7 @@ class HoldCourseView extends ItemView {
     });
 
     // Fixed type list for filter dropdown (matches ASSIGNMENT_TYPES).
-    // #9: Reading dropped — nothing in this list is ever type Reading anymore. (LiveAQuietLife, 2026-09-01)
+    // #9: Reading dropped — nothing in this list is ever type Reading anymore.
     const presentTypes = ASSIGNMENT_TYPES.filter(t => t !== 'Reading');
 
     // Apply filters
@@ -2537,7 +2872,7 @@ class HoldCourseView extends ItemView {
     doneToggle.addEventListener('click', () => {
       cls.assignShowDone = !cls.assignShowDone;
       this.plugin.save();
-      this.render();
+      this.render(true);
     });
 
     // Type filter dropdown
@@ -2549,35 +2884,29 @@ class HoldCourseView extends ItemView {
     const typeChevron = typeFilterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(typeChevron, 'chevron-down');
 
-    let typeDropEl = null;
-    const closeTypeDrop = () => { if (typeDropEl) { typeDropEl.remove(); typeDropEl = null; } };
-
     typeFilterBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (typeDropEl) { closeTypeDrop(); return; }
-      typeDropEl = typeFilterWrap.createDiv('hc-sem-drop hc-cal-filter-drop');
+      const close = this._openFilterDropdown(typeFilterBtn, (dropEl) => {
+        const allItem = dropEl.createDiv('hc-sem-drop-item');
+        if (!this.classAssignFilterType) allItem.addClass('hc-sem-drop-item--active');
+        const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (!this.classAssignFilterType) setIcon(allIcon, 'check');
+        allItem.createSpan({ text: 'All types' });
+        allItem.addEventListener('click', () => { this.classAssignFilterType = null; close(); this.render(); });
 
-      const allItem = typeDropEl.createDiv('hc-sem-drop-item');
-      if (!this.classAssignFilterType) allItem.addClass('hc-sem-drop-item--active');
-      const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
-      if (!this.classAssignFilterType) setIcon(allIcon, 'check');
-      allItem.createSpan({ text: 'All types' });
-      allItem.addEventListener('click', () => { this.classAssignFilterType = null; closeTypeDrop(); this.render(); });
+        dropEl.createDiv('hc-sem-drop-divider');
 
-      typeDropEl.createDiv('hc-sem-drop-divider');
-
-      for (const type of presentTypes) {
-        const item = typeDropEl.createDiv('hc-sem-drop-item');
-        if (type === this.classAssignFilterType) item.addClass('hc-sem-drop-item--active');
-        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
-        if (type === this.classAssignFilterType) setIcon(icon, 'check');
-        const style = getTypeStyle(type);
-        const lbl = item.createSpan({ text: type });
-        lbl.style.color = typeText(style);
-        item.addEventListener('click', () => { this.classAssignFilterType = type; closeTypeDrop(); this.render(); });
-      }
-
-      setTimeout(() => document.addEventListener('click', () => closeTypeDrop(), { once: true }), 0);
+        for (const type of presentTypes) {
+          const item = dropEl.createDiv('hc-sem-drop-item');
+          if (type === this.classAssignFilterType) item.addClass('hc-sem-drop-item--active');
+          const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+          if (type === this.classAssignFilterType) setIcon(icon, 'check');
+          const style = getTypeStyle(type);
+          const lbl = item.createSpan({ text: type });
+          lbl.style.color = typeText(style);
+          item.addEventListener('click', () => { this.classAssignFilterType = type; close(); this.render(); });
+        }
+      });
     });
 
     // Add assignment button
@@ -2588,7 +2917,7 @@ class HoldCourseView extends ItemView {
     addBtn.addEventListener('click', () => {
       // #9: Reading dropped from the Type choices here — this button is
       // scoped to the Assignments tab, and Reading has its own tab and its
-      // own button now. (LiveAQuietLife, 2026-09-01)
+      // own button now.
       new AddAssignmentModal(this.app, this.plugin, sem.id, cls, () => {
         this.plugin.save();
         this.render();
@@ -2625,12 +2954,14 @@ class HoldCourseView extends ItemView {
 
     // Middle: title, lecture, grade (once done)
     const mid = row.createDiv('hc-assign-mid');
-    mid.createDiv({ cls: 'hc-assign-title', text: assignment.title });
+    const titleRow = mid.createDiv('hc-title-flag-row');
+    titleRow.createDiv({ cls: 'hc-assign-title', text: assignment.title });
+    renderTermWindowFlag(titleRow, assignment.dueDate, cls, assignment.status === 'done');
     mid.createDiv({
       cls: 'hc-assign-lecture',
       text: lectureLabel ? lectureLabel : 'Class-level',
     });
-    if (assignment.status === 'done' && (assignment.grade || '').trim()) {
+    if (assignment.status === 'done' && (assignment.grade || '').trim() && isClassGraded(cls)) {
       mid.createSpan({ cls: 'hc-grade-chip', text: assignment.grade.trim() });
     }
 
@@ -2645,7 +2976,7 @@ class HoldCourseView extends ItemView {
       e.stopPropagation();
       assignment.status = cycleStatus(assignment.status);
       this.plugin.save();
-      this.render();
+      this.render(true);
     });
 
     if (info) {
@@ -2671,7 +3002,7 @@ class HoldCourseView extends ItemView {
   // ("have it done before Thursday"), not graded/deadline work, and the two
   // don't read as the same kind of item in one list. Same underlying
   // assignment records (type: 'Reading'), just a dedicated view. Grade never
-  // applied here, so no field for it to begin with. (LiveAQuietLife, 2026-09-01)
+  // applied here, so no field for it to begin with.
 
   _renderReadingsList(content, sem, cls, color) {
     if (cls.readingsShowDone === undefined) cls.readingsShowDone = true;
@@ -2710,7 +3041,7 @@ class HoldCourseView extends ItemView {
     doneToggle.addEventListener('click', () => {
       cls.readingsShowDone = !cls.readingsShowDone;
       this.plugin.save();
-      this.render();
+      this.render(true);
     });
 
     const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
@@ -2719,7 +3050,7 @@ class HoldCourseView extends ItemView {
     addBtn.createSpan({ text: 'Add reading' });
     addBtn.addEventListener('click', () => {
       // #9: locked to Reading — this button is scoped to the Readings tab,
-      // so there's no Type choice to offer. (LiveAQuietLife, 2026-09-01)
+      // so there's no Type choice to offer.
       new AddAssignmentModal(this.app, this.plugin, sem.id, cls, () => {
         this.plugin.save();
         this.render();
@@ -2754,22 +3085,81 @@ class HoldCourseView extends ItemView {
     setIcon(iconWrap, 'book-open');
 
     const mid = row.createDiv('hc-reading-mid');
-    mid.createDiv({ cls: 'hc-reading-title', text: assignment.title });
+    const titleRow = mid.createDiv('hc-title-flag-row');
+    titleRow.createDiv({ cls: 'hc-reading-title', text: assignment.title });
+    renderTermWindowFlag(titleRow, assignment.dueDate, cls, assignment.status === 'done');
     mid.createDiv({ cls: 'hc-reading-context', text: lectureLabel || 'Class-level' });
 
-    const bookLine = mid.createDiv('hc-reading-book');
+    // #19: both lines are "what this reading points to", so both get a label
+    // and read as one category. Absent-book renders nothing at all rather than
+    // "No linked book" — silence matches the note line's own silent-when-absent
+    // behaviour, so the two mean the same thing by being missing. A book that
+    // was linked and has since vanished is a broken reference, not an absence,
+    // so it stays visible and unlabelled.
     if (linkedResource) {
-      bookLine.setText(linkedResource.author ? `${linkedResource.title} — ${linkedResource.author}` : linkedResource.title);
-    } else {
+      const bookLine = mid.createDiv('hc-reading-book');
+      bookLine.createSpan({ cls: 'hc-reading-ref-label', text: 'Book:' });
+      bookLine.createSpan({
+        cls: 'hc-reading-ref-value',
+        text: linkedResource.author ? `${linkedResource.title} — ${linkedResource.author}` : linkedResource.title,
+      });
+    } else if (assignment.linkedBook) {
+      const bookLine = mid.createDiv('hc-reading-book');
       bookLine.addClass('hc-reading-book--orphan');
-      bookLine.setText(assignment.linkedBook ? 'Book not found in Library' : 'No linked book');
+      bookLine.setText('Book missing from Library');
     }
 
-    // Linked-note flag — same silent-when-absent treatment as the Lectures
-    // tab's own vaultLink flag: nothing rendered when there's no linked
-    // note, a quiet label when there is. #9 (LiveAQuietLife, 2026-09-01)
-    if ((assignment.linkedNote || '').trim()) {
-      mid.createDiv({ cls: 'hc-lecture-note-flag', text: 'Linked note' });
+    // Note line. Was a bare "Linked note" flag reusing .hc-lecture-note-flag;
+    // now carries the filename and matches the book line above it. Own class
+    // rather than the shared flag one, so the Lectures tab's flag is untouched.
+    const notePath = (assignment.linkedNote || '').trim();
+    if (notePath) {
+      const noteLine = mid.createDiv('hc-reading-note');
+      noteLine.createSpan({ cls: 'hc-reading-ref-label', text: 'Note:' });
+      noteLine.createSpan({ cls: 'hc-reading-ref-value', text: notePath.split('/').pop() });
+    }
+
+    // #30: compact reading-pace line — same silent-when-absent treatment as
+    // the linked-note flag above it. Click opens the log-progress modal
+    // directly; stopPropagation keeps the row's own click (navigate to
+    // detail) from also firing. The info icon exists alongside the hover
+    // tooltip, not instead of it — Hold Course is isDesktopOnly: false, and
+    // a hover-only explanation is simply unreachable on mobile, not just
+    // less discoverable. Tapping the icon shows the same text via Notice,
+    // which works identically on both platforms.
+    const paceLine = getReadingPaceLine(assignment);
+    if (paceLine) {
+      const paceRow = mid.createDiv('hc-reading-pace-row');
+      // #19: labelled to match the Book:/Note: lines above it. Without a label
+      // it reads as belonging to whichever reference line sits nearest, when
+      // it's actually about the assignment itself — totalPages is user-entered
+      // and independent of both the linked book and the linked note. "Pace"
+      // rather than "Book pace" or similar deliberately: the number covers
+      // however much reading this assignment involves, from whatever sources,
+      // which is the one thing true under every workflow.
+      paceRow.createSpan({ cls: 'hc-reading-ref-label', text: 'Pace:' });
+      const paceEl = paceRow.createSpan({ cls: 'hc-reading-pace-line', text: paceLine.text });
+      paceEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        new ReadingPaceLogModal(this.app, assignment, () => {
+          this.plugin.save();
+          this.render();
+        }).open();
+      });
+      if (paceLine.tooltip) {
+        // #30 follow-up: the tooltip lives on the icon only, not also on the
+        // line. Both carried it originally, which fired the same text twice —
+        // once hovering the text, again hovering the icon inside it. The
+        // icon's job is to advertise that an explanation exists; it doesn't
+        // need to be a second copy of it.
+        const infoIcon = paceRow.createSpan({ cls: 'hc-reading-pace-info' });
+        setIcon(infoIcon, 'info');
+        infoIcon.setAttribute('aria-label', paceLine.tooltip);
+        infoIcon.addEventListener('click', (e) => {
+          e.stopPropagation();
+          new Notice(paceLine.tooltip, 6000);
+        });
+      }
     }
 
     // Right: status + due date — identical pattern to the Assignments row,
@@ -2784,7 +3174,7 @@ class HoldCourseView extends ItemView {
       e.stopPropagation();
       assignment.status = cycleStatus(assignment.status);
       this.plugin.save();
-      this.render();
+      this.render(true);
     });
 
     if (info) {
@@ -2844,7 +3234,7 @@ class HoldCourseView extends ItemView {
       } else if (fromLecture) {
         this.navigate('lecture', cls.id, this.currentLectureId);
       } else {
-        // #9: back to Readings for a Reading item, Assignments otherwise. (LiveAQuietLife, 2026-09-01)
+        // #9: back to Readings for a Reading item, Assignments otherwise.
         this.currentTab = assignment.type === 'Reading' ? 'Readings' : 'Assignments';
         this.navigate('class', cls.id);
       }
@@ -2871,7 +3261,9 @@ class HoldCourseView extends ItemView {
     pill.style.color = typeStyle.color;
     pill.style.background = typeStyle.bg;
 
-    content.createDiv({ cls: 'hc-lecture-detail-title', text: assignment.title });
+    const assignTitleFlagRow = content.createDiv('hc-title-flag-row');
+    assignTitleFlagRow.createDiv({ cls: 'hc-lecture-detail-title', text: assignment.title });
+    renderTermWindowFlag(assignTitleFlagRow, assignment.dueDate, cls, assignment.status === 'done');
 
     // Lecture context
     let lecTitle = 'Class-level';
@@ -2925,7 +3317,7 @@ class HoldCourseView extends ItemView {
     moveBtn.addEventListener('click', () => {
       new MoveAssignmentModal(this.app, this.plugin, sem.id, cls, assignment, lectureId, () => {
         this.plugin.save();
-        // #9: land on Readings after moving a Reading item. (LiveAQuietLife, 2026-09-01)
+        // #9: land on Readings after moving a Reading item.
         this.currentTab = assignment.type === 'Reading' ? 'Readings' : 'Assignments';
         this.navigate('class', cls.id);
       }).open();
@@ -2938,7 +3330,7 @@ class HoldCourseView extends ItemView {
     deleteBtn.addEventListener('click', () => {
       new DeleteAssignmentModal(this.app, this.plugin, sem.id, cls.id, assignment, () => {
         this.plugin.save();
-        // #9: land on Readings after deleting a Reading item. (LiveAQuietLife, 2026-09-01)
+        // #9: land on Readings after deleting a Reading item.
         this.currentTab = assignment.type === 'Reading' ? 'Readings' : 'Assignments';
         this.navigate('class', cls.id);
       }).open();
@@ -2954,11 +3346,13 @@ class HoldCourseView extends ItemView {
       this.plugin.save();
     });
 
-    // Grade (not Reading — mirrors the Linked Book gate just below, opposite
-    // condition, same mechanism. A reading is never graded, so the field
-    // never renders for one; existing data in assignment.grade, if any, is
-    // left untouched, just not shown. #9 (LiveAQuietLife, 2026-09-01)
-    if (assignment.type !== 'Reading') {
+    // Grade (not Reading, and only if the class tracks grades — #9 gate
+    // mirrors the Linked Book gate just below, opposite condition, same
+    // mechanism; #12 gate hides Grade entirely for a self-study/audited
+    // class. A reading is never graded, so the field never renders for
+    // one; existing data in assignment.grade, if any, is left untouched,
+    // just not shown.
+    if (assignment.type !== 'Reading' && isClassGraded(cls)) {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Grade' });
       const gradeInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
       gradeInput.placeholder = 'e.g. A, 92%, Pass';
@@ -3049,7 +3443,7 @@ class HoldCourseView extends ItemView {
           // linked, show the friendly filename as read-only text instead
           // of an editable input, so an unrelated edit can't silently save
           // a folder-less path over the real one. Browse/Remove are the
-          // only way to change an existing link. (LiveAQuietLife/Claude, 2026-08-30)
+          // only way to change an existing link.
           textWrap.createDiv({ cls: 'hc-assign-link-display', text: path.split('/').pop() });
         } else {
           const noteInput = textWrap.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
@@ -3088,6 +3482,64 @@ class HoldCourseView extends ItemView {
         }
       };
       renderNoteSection();
+    }
+
+    // #30: reading pace, Reading only. Presence-based: assignment.readingPace
+    // absent means never tracked. The toggle purely controls readingPace.hidden
+    // once the object exists — it never re-opens the setup modal on its own.
+    // Editing setup (total pages / target date) lives inside the log-progress
+    // modal instead of here, so it's reachable without a toggle-off/on cycle.
+    if (assignment.type === 'Reading') {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Reading Pace' });
+      const paceSection = content.createDiv('hc-reading-pace-section');
+
+      const renderPaceSection = () => {
+        paceSection.empty();
+
+        new Setting(paceSection).setName('Track pace for this reading').addToggle(toggle => {
+          toggle.setValue(!!(assignment.readingPace && !assignment.readingPace.hidden));
+          toggle.onChange(value => {
+            if (value) {
+              if (!assignment.readingPace) {
+                new ReadingPaceSetupModal(this.app, assignment, () => {
+                  this.plugin.save();
+                  renderPaceSection();
+                }).open();
+                return;
+              }
+              assignment.readingPace.hidden = false;
+            } else if (assignment.readingPace) {
+              assignment.readingPace.hidden = true;
+            }
+            this.plugin.save();
+            renderPaceSection();
+          });
+        });
+
+        const paceLine = getReadingPaceLine(assignment);
+        if (paceLine) {
+          const paceRow = paceSection.createDiv('hc-reading-pace-row');
+          const lineEl = paceRow.createSpan({ cls: 'hc-reading-pace-line', text: paceLine.text });
+          lineEl.addEventListener('click', () => {
+            new ReadingPaceLogModal(this.app, assignment, () => {
+              this.plugin.save();
+              renderPaceSection();
+            }).open();
+          });
+          if (paceLine.tooltip) {
+            // #30 follow-up: icon-only tooltip, same as the Readings row —
+            // see that call site for the full reasoning.
+            const infoIcon = paceRow.createSpan({ cls: 'hc-reading-pace-info' });
+            setIcon(infoIcon, 'info');
+            infoIcon.setAttribute('aria-label', paceLine.tooltip);
+            infoIcon.addEventListener('click', (e) => {
+              e.stopPropagation();
+              new Notice(paceLine.tooltip, 6000);
+            });
+          }
+        }
+      };
+      renderPaceSection();
     }
   }
 
@@ -3161,10 +3613,12 @@ class HoldCourseView extends ItemView {
 
     // Name + countdown
     const info = row.createDiv('hc-exam-info');
-    info.createDiv({ cls: 'hc-exam-name', text: exam.title });
+    const titleRow = info.createDiv('hc-title-flag-row');
+    titleRow.createDiv({ cls: 'hc-exam-name', text: exam.title });
+    renderTermWindowFlag(titleRow, exam.dueDate, cls, exam.status === 'done');
 
     if (exam.status === 'done') {
-      if ((exam.grade || '').trim()) {
+      if ((exam.grade || '').trim() && isClassGraded(cls)) {
         info.createSpan({ cls: 'hc-grade-chip hc-grade-chip--exam', text: exam.grade.trim() });
       }
     } else if (exam.dueDate) {
@@ -3241,7 +3695,9 @@ class HoldCourseView extends ItemView {
     });
 
     // Title
-    content.createDiv({ cls: 'hc-lecture-detail-title', text: exam.title });
+    const titleRow = content.createDiv('hc-title-flag-row');
+    titleRow.createDiv({ cls: 'hc-lecture-detail-title', text: exam.title });
+    renderTermWindowFlag(titleRow, exam.dueDate, cls, exam.status === 'done');
 
     // Due date
     if (exam.dueDate) {
@@ -3294,15 +3750,17 @@ class HoldCourseView extends ItemView {
       this.plugin.save();
     });
 
-    // Grade
-    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Grade' });
-    const gradeInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
-    gradeInput.placeholder = 'e.g. A, 92%, Pass';
-    gradeInput.value = exam.grade || '';
-    gradeInput.addEventListener('blur', () => {
-      exam.grade = gradeInput.value;
-      this.plugin.save();
-    });
+    // Grade — #12: hidden entirely for a self-study/audited class.
+    if (isClassGraded(cls)) {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Grade' });
+      const gradeInput = content.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+      gradeInput.placeholder = 'e.g. A, 92%, Pass';
+      gradeInput.value = exam.grade || '';
+      gradeInput.addEventListener('blur', () => {
+        exam.grade = gradeInput.value;
+        this.plugin.save();
+      });
+    }
   }
 
   // ─── Library list ─────────────────────────────────────────────────────────
@@ -3350,33 +3808,28 @@ class HoldCourseView extends ItemView {
     const libFilterChev = libFilterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(libFilterChev, 'chevron-down');
 
-    let libDropEl = null;
-    const closeLibDrop = () => { if (libDropEl) { libDropEl.remove(); libDropEl = null; } };
     libFilterBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (libDropEl) { closeLibDrop(); return; }
-      libDropEl = libFilterWrap.createDiv('hc-sem-drop');
+      const close = this._openFilterDropdown(libFilterBtn, (dropEl) => {
+        const allItem = dropEl.createDiv('hc-sem-drop-item');
+        if (!this.libraryFilterClassId) allItem.addClass('hc-sem-drop-item--active');
+        const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (!this.libraryFilterClassId) setIcon(allIcon, 'check');
+        allItem.createSpan({ text: 'All classes' });
+        allItem.addEventListener('click', () => { this.libraryFilterClassId = null; close(); this.render(); });
 
-      const allItem = libDropEl.createDiv('hc-sem-drop-item');
-      if (!this.libraryFilterClassId) allItem.addClass('hc-sem-drop-item--active');
-      const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
-      if (!this.libraryFilterClassId) setIcon(allIcon, 'check');
-      allItem.createSpan({ text: 'All classes' });
-      allItem.addEventListener('click', () => { this.libraryFilterClassId = null; closeLibDrop(); this.render(); });
+        dropEl.createDiv('hc-sem-drop-divider');
 
-      libDropEl.createDiv('hc-sem-drop-divider');
-
-      for (const c of (sem.classes || [])) {
-        const item = libDropEl.createDiv('hc-sem-drop-item');
-        if (c.id === this.libraryFilterClassId) item.addClass('hc-sem-drop-item--active');
-        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
-        if (c.id === this.libraryFilterClassId) setIcon(icon, 'check');
-        const lbl = item.createSpan({ text: c.code });
-        lbl.style.color = accentText(getColor(c.colorIndex));
-        item.addEventListener('click', () => { this.libraryFilterClassId = c.id; closeLibDrop(); this.render(); });
-      }
-
-      setTimeout(() => document.addEventListener('click', () => closeLibDrop(), { once: true }), 0);
+        for (const c of (sem.classes || [])) {
+          const item = dropEl.createDiv('hc-sem-drop-item');
+          if (c.id === this.libraryFilterClassId) item.addClass('hc-sem-drop-item--active');
+          const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+          if (c.id === this.libraryFilterClassId) setIcon(icon, 'check');
+          const lbl = item.createSpan({ text: c.code });
+          lbl.style.color = accentText(getColor(c.colorIndex));
+          item.addEventListener('click', () => { this.libraryFilterClassId = c.id; close(); this.render(); });
+        }
+      });
     });
 
     // Right: sort + add
@@ -3438,8 +3891,22 @@ class HoldCourseView extends ItemView {
       }
     }
 
-    const statusEl = right.createDiv({ cls: `hc-resource-status hc-resource-status--${resource.status || 'unread'}` });
+    // #46: toggle in place instead of only on the detail screen. Library was
+    // the one list whose status pill had no handler, so the click fell
+    // through to the row's navigate below and you had to open the book,
+    // toggle there, and come back. Same shape as Lectures/Assignments/
+    // Readings/Exams: stopPropagation keeps the row's own click from firing,
+    // and render(true) preserves scroll so a long Library doesn't jump to the
+    // top on every toggle. 
+    const statusEl = right.createDiv({ cls: `hc-resource-status hc-resource-status--${resource.status || 'unread'} hc-status-clickable` });
     statusEl.setText(resourceStatusLabel(resource.status || 'unread'));
+    statusEl.setAttribute('aria-label', 'Click to change status');
+    statusEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      resource.status = cycleResourceStatus(resource.status || 'unread');
+      this.plugin.save();
+      this.render(true);
+    });
 
     row.addEventListener('click', () => this.navigate('resource', cls.id, null, null, null, resource.id));
   }
@@ -3548,7 +4015,13 @@ class HoldCourseView extends ItemView {
         const openIcon = vaultRow.createSpan({ cls: 'hc-resource-source-open' });
         setIcon(openIcon, 'external-link');
         vaultRow.addEventListener('click', () => {
-          this.app.workspace.openLinkText(resource.vaultLink, '', false);
+          // #14: guard before opening — openLinkText silently creates a new
+          // empty file at the path when nothing is there. The other two
+          // vault-link call sites (Lecture Notes, Assignment Linked Note)
+          // carry the same check inline.
+          const file = this.app.vault.getAbstractFileByPath(resource.vaultLink);
+          if (file) this.app.workspace.openLinkText(resource.vaultLink, '', false);
+          else new Notice('Note not found in vault.');
         });
       }
 
@@ -3633,17 +4106,21 @@ class HoldCourseView extends ItemView {
       return;
     }
 
-    const SORT_OPTIONS = [
-      { key: 'due',    label: 'By due date' },
-      { key: 'class',  label: 'By class'    },
-      { key: 'status', label: 'By status'   },
-    ];
-    if (!sem.assignSort || sem.assignSort === 'type') sem.assignSort = 'due';
+    // #15: the view is a sortable table now, so the old three-way cycle button
+    // is gone — column headers do that job. assignSort (the cycle key) is
+    // migrated once into the new key/dir pair rather than read at render time,
+    // so the old value doesn't linger as a second source of truth.
+    if (!sem.assignSortKey) {
+      const carried = { due: 'due', class: 'code', status: 'status' }[sem.assignSort];
+      sem.assignSortKey = carried || 'due';
+      sem.assignSortDir = 'asc';
+      delete sem.assignSort;
+      this.plugin.save();
+    }
     if (sem.assignShowDone === undefined) sem.assignShowDone = false;
 
-    const currentSort = SORT_OPTIONS.find(o => o.key === sem.assignSort) || SORT_OPTIONS[0];
-    const showDone    = sem.assignShowDone;
-    const classes     = sem.classes || [];
+    const showDone = sem.assignShowDone;
+    const classes  = sem.classes || [];
 
     // ── Controls row ──────────────────────────────────────────────────────────
     const controlRow = content.createDiv('hc-assign-controls hc-global-controls');
@@ -3663,41 +4140,36 @@ class HoldCourseView extends ItemView {
     const filterChev = filterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(filterChev, 'chevron-down');
 
-    let filterDropEl = null;
-    const closeFilterDrop = () => { if (filterDropEl) { filterDropEl.remove(); filterDropEl = null; } };
     filterBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (filterDropEl) { closeFilterDrop(); return; }
-      filterDropEl = filterWrap.createDiv('hc-sem-drop');
-
-      const allItem = filterDropEl.createDiv('hc-sem-drop-item');
-      if (!this.globalAssignFilterClassId) allItem.addClass('hc-sem-drop-item--active');
-      const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
-      if (!this.globalAssignFilterClassId) setIcon(allIcon, 'check');
-      allItem.createSpan({ text: 'All classes' });
-      allItem.addEventListener('click', () => {
-        this.globalAssignFilterClassId = null;
-        closeFilterDrop();
-        this.render();
-      });
-
-      filterDropEl.createDiv('hc-sem-drop-divider');
-
-      for (const cls of classes) {
-        const item = filterDropEl.createDiv('hc-sem-drop-item');
-        if (cls.id === this.globalAssignFilterClassId) item.addClass('hc-sem-drop-item--active');
-        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
-        if (cls.id === this.globalAssignFilterClassId) setIcon(icon, 'check');
-        const label = item.createSpan({ text: cls.code });
-        label.style.color = accentText(getColor(cls.colorIndex));
-        item.addEventListener('click', () => {
-          this.globalAssignFilterClassId = cls.id;
-          closeFilterDrop();
+      const close = this._openFilterDropdown(filterBtn, (dropEl) => {
+        const allItem = dropEl.createDiv('hc-sem-drop-item');
+        if (!this.globalAssignFilterClassId) allItem.addClass('hc-sem-drop-item--active');
+        const allIcon = allItem.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (!this.globalAssignFilterClassId) setIcon(allIcon, 'check');
+        allItem.createSpan({ text: 'All classes' });
+        allItem.addEventListener('click', () => {
+          this.globalAssignFilterClassId = null;
+          close();
           this.render();
         });
-      }
 
-      setTimeout(() => document.addEventListener('click', () => closeFilterDrop(), { once: true }), 0);
+        dropEl.createDiv('hc-sem-drop-divider');
+
+        for (const cls of classes) {
+          const item = dropEl.createDiv('hc-sem-drop-item');
+          if (cls.id === this.globalAssignFilterClassId) item.addClass('hc-sem-drop-item--active');
+          const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+          if (cls.id === this.globalAssignFilterClassId) setIcon(icon, 'check');
+          const label = item.createSpan({ text: cls.code });
+          label.style.color = accentText(getColor(cls.colorIndex));
+          item.addEventListener('click', () => {
+            this.globalAssignFilterClassId = cls.id;
+            close();
+            this.render();
+          });
+        }
+      });
     });
 
     // Type filter dropdown
@@ -3709,42 +4181,37 @@ class HoldCourseView extends ItemView {
     const typeFilterChev = typeFilterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(typeFilterChev, 'chevron-down');
 
-    let typeDropEl = null;
-    const closeTypeDrop = () => { if (typeDropEl) { typeDropEl.remove(); typeDropEl = null; } };
     typeFilterBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (typeDropEl) { closeTypeDrop(); return; }
-      typeDropEl = typeFilterWrap.createDiv('hc-sem-drop');
-
-      const allTypeItem = typeDropEl.createDiv('hc-sem-drop-item');
-      if (!this.globalAssignFilterType) allTypeItem.addClass('hc-sem-drop-item--active');
-      const allTypeIcon = allTypeItem.createSpan({ cls: 'hc-sem-drop-icon' });
-      if (!this.globalAssignFilterType) setIcon(allTypeIcon, 'check');
-      allTypeItem.createSpan({ text: 'All types' });
-      allTypeItem.addEventListener('click', () => {
-        this.globalAssignFilterType = null;
-        closeTypeDrop();
-        this.render();
-      });
-
-      typeDropEl.createDiv('hc-sem-drop-divider');
-
-      for (const type of ASSIGNMENT_TYPES) {
-        const typeStyle = getTypeStyle(type);
-        const item = typeDropEl.createDiv('hc-sem-drop-item');
-        if (type === this.globalAssignFilterType) item.addClass('hc-sem-drop-item--active');
-        const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
-        if (type === this.globalAssignFilterType) setIcon(icon, 'check');
-        const lbl = item.createSpan({ text: type });
-        lbl.style.color = typeText(typeStyle);
-        item.addEventListener('click', () => {
-          this.globalAssignFilterType = type;
-          closeTypeDrop();
+      const close = this._openFilterDropdown(typeFilterBtn, (dropEl) => {
+        const allTypeItem = dropEl.createDiv('hc-sem-drop-item');
+        if (!this.globalAssignFilterType) allTypeItem.addClass('hc-sem-drop-item--active');
+        const allTypeIcon = allTypeItem.createSpan({ cls: 'hc-sem-drop-icon' });
+        if (!this.globalAssignFilterType) setIcon(allTypeIcon, 'check');
+        allTypeItem.createSpan({ text: 'All types' });
+        allTypeItem.addEventListener('click', () => {
+          this.globalAssignFilterType = null;
+          close();
           this.render();
         });
-      }
 
-      setTimeout(() => document.addEventListener('click', () => closeTypeDrop(), { once: true }), 0);
+        dropEl.createDiv('hc-sem-drop-divider');
+
+        for (const type of ASSIGNMENT_TYPES) {
+          const typeStyle = getTypeStyle(type);
+          const item = dropEl.createDiv('hc-sem-drop-item');
+          if (type === this.globalAssignFilterType) item.addClass('hc-sem-drop-item--active');
+          const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
+          if (type === this.globalAssignFilterType) setIcon(icon, 'check');
+          const lbl = item.createSpan({ text: type });
+          lbl.style.color = typeText(typeStyle);
+          item.addEventListener('click', () => {
+            this.globalAssignFilterType = type;
+            close();
+            this.render();
+          });
+        }
+      });
     });
 
     // Right side controls
@@ -3757,18 +4224,6 @@ class HoldCourseView extends ItemView {
     doneToggle.createSpan({ text: showDone ? 'Hide done' : 'Show done' });
     doneToggle.addEventListener('click', () => {
       sem.assignShowDone = !sem.assignShowDone;
-      this.plugin.save();
-      this.render();
-    });
-
-    // Sort cycle button (3 options: due / class / status)
-    const sortBtn = rightControls.createEl('button', { cls: 'hc-btn hc-btn--sm' });
-    const sortIcon = sortBtn.createSpan({ cls: 'hc-btn-icon' });
-    setIcon(sortIcon, 'arrow-up-narrow-wide');
-    sortBtn.createSpan({ text: currentSort.label });
-    sortBtn.addEventListener('click', () => {
-      const idx = SORT_OPTIONS.findIndex(o => o.key === sem.assignSort);
-      sem.assignSort = SORT_OPTIONS[(idx + 1) % SORT_OPTIONS.length].key;
       this.plugin.save();
       this.render();
     });
@@ -3789,45 +4244,110 @@ class HoldCourseView extends ItemView {
     const STATUS_ORDER = { 'overdue': 0, 'today': 1, 'soon': 2, 'upcoming': 3, 'done': 4, 'none': 5 };
     const getUrgency = (a) => a.dueDate ? (getDueInfo(a.dueDate)?.urgency || 'upcoming') : 'none';
 
-    if (sem.assignSort === 'due') {
-      allAssigns.sort((a, b) => {
-        if (!a.dueDate && !b.dueDate) return 0;
-        if (!a.dueDate) return 1;
-        if (!b.dueDate) return -1;
-        return a.dueDate.localeCompare(b.dueDate);
-      });
-    } else if (sem.assignSort === 'class') {
-      allAssigns.sort((a, b) => {
-        const ca = a.classCode || '', cb = b.classCode || '';
-        if (ca !== cb) return ca.localeCompare(cb);
-        if (!a.dueDate && !b.dueDate) return 0;
-        if (!a.dueDate) return 1;
-        if (!b.dueDate) return -1;
-        return a.dueDate.localeCompare(b.dueDate);
-      });
-    } else if (sem.assignSort === 'status') {
-      allAssigns.sort((a, b) => {
-        const ua = STATUS_ORDER[getUrgency(a)] ?? 5;
-        const ub = STATUS_ORDER[getUrgency(b)] ?? 5;
-        if (ua !== ub) return ua - ub;
-        if (!a.dueDate && !b.dueDate) return 0;
-        if (!a.dueDate) return 1;
-        if (!b.dueDate) return -1;
-        return a.dueDate.localeCompare(b.dueDate);
-      });
-    }
+    // ── Sort ──────────────────────────────────────────────────────────────────
+    const dir = sem.assignSortDir === 'desc' ? -1 : 1;
+    const txt = (v) => (v || '');
 
-    // ── List ──────────────────────────────────────────────────────────────────
-    const list = content.createDiv('hc-assign-list');
+    // Undated rows always sink, in both directions. Reversing the sort should
+    // reverse the dated rows, not promote a pile of blanks to the top.
+    const byDue = (a, b) => {
+      if (!a.dueDate && !b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return dir * a.dueDate.localeCompare(b.dueDate);
+    };
 
+    // Secondary sort is always due date then title, so two rows with equal
+    // primary keys never depend on array order (same principle as Courses).
+    const tiebreak = (a, b) => {
+      if (a.dueDate && b.dueDate && a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+      if (!a.dueDate && b.dueDate) return 1;
+      if (a.dueDate && !b.dueDate) return -1;
+      return txt(a.title).localeCompare(txt(b.title));
+    };
+
+    // Reading estimate sorts by pages-per-day, not by the string shown —
+    // "9/day" must not sort above "14/day". Untracked rows sink like undated.
+    const paceRank = (a) => {
+      const rp = a.readingPace;
+      if (!rp || rp.hidden) return null;
+      const remaining = (rp.totalPages || 0) - (rp.pagesRead || 0);
+      if (remaining <= 0) return 0;
+      const target = getReadingPaceTargetDate(a);
+      if (!target) return remaining;
+      const days = getDaysUntil(target) + 1;
+      return days <= 0 ? remaining : Math.ceil(remaining / days);
+    };
+
+    allAssigns.sort((a, b) => {
+      let primary = 0;
+      const key = sem.assignSortKey;
+
+      if (key === 'due') {
+        primary = byDue(a, b);
+      } else if (key === 'code') {
+        primary = dir * txt(a.classCode).localeCompare(txt(b.classCode));
+      } else if (key === 'type') {
+        primary = dir * txt(a.type).localeCompare(txt(b.type));
+      } else if (key === 'title') {
+        primary = dir * txt(a.title).localeCompare(txt(b.title));
+      } else if (key === 'status') {
+        primary = dir * ((STATUS_ORDER[getUrgency(a)] ?? 5) - (STATUS_ORDER[getUrgency(b)] ?? 5));
+      } else if (key === 'grade') {
+        // Ungraded sinks in both directions, same reasoning as undated.
+        const ga = (a.grade || '').trim(), gb = (b.grade || '').trim();
+        if (!ga && !gb) primary = 0;
+        else if (!ga) return 1;
+        else if (!gb) return -1;
+        else primary = dir * ga.localeCompare(gb);
+      } else if (key === 'pace') {
+        const pa = paceRank(a), pb = paceRank(b);
+        if (pa === null && pb === null) primary = 0;
+        else if (pa === null) return 1;
+        else if (pb === null) return -1;
+        else primary = dir * (pa - pb);
+      }
+
+      return primary || tiebreak(a, b);
+    });
+
+    // ── Table ─────────────────────────────────────────────────────────────────
     if (allAssigns.length === 0) {
-      const empty = list.createDiv('hc-empty');
+      const empty = content.createDiv('hc-empty');
       empty.createDiv({
         cls: 'hc-empty-text',
         text: showDone ? 'No assignments found.' : 'No pending assignments.',
       });
       return;
     }
+
+    const table = content.createDiv('hc-atable');
+
+    const headRow = table.createDiv('hc-atable-head');
+    const cols = [
+      { key: 'code',   label: 'Code'   },
+      { key: 'type',   label: 'Type'   },
+      { key: 'title',  label: 'Title'  },
+      { key: 'due',    label: 'Due'    },
+      { key: 'status', label: 'Status' },
+      { key: 'grade',  label: 'Grade'  },
+      { key: 'pace',   label: 'Reading est.' },
+    ];
+    for (const col of cols) {
+      const th = headRow.createDiv('hc-atable-th');
+      th.createSpan({ text: col.label });
+      if (sem.assignSortKey === col.key) {
+        th.addClass('hc-atable-th--active');
+        const arrow = th.createSpan({ cls: 'hc-atable-sort-icon' });
+        setIcon(arrow, sem.assignSortDir === 'asc' ? 'chevron-up' : 'chevron-down');
+      }
+      th.addEventListener('click', () => this._assignSortBy(sem, col.key));
+    }
+
+    // Seams mark where the class changes, but only while actually sorted by
+    // code — otherwise they would divide nothing. Same rule as Courses.
+    const seams = sem.assignSortKey === 'code';
+    let prevClassId = null;
 
     for (const a of allAssigns) {
       const cls = classes.find(c => c.id === a.classId);
@@ -3837,41 +4357,61 @@ class HoldCourseView extends ItemView {
       const info      = a.dueDate ? getDueInfo(a.dueDate) : null;
       const color     = getColor(cls.colorIndex);
 
-      const row = list.createDiv('hc-assign-row');
-      if (a.status === 'done') row.addClass('hc-assign-row--done');
+      const row = table.createDiv('hc-atable-row');
+      if (seams && prevClassId !== null && a.classId !== prevClassId) {
+        row.addClass('hc-atable-row--seam');
+      }
+      prevClassId = a.classId;
+      if (a.status === 'done') row.addClass('hc-atable-row--done');
 
-      // Type pill
-      const pill = row.createSpan({ cls: 'hc-assign-pill', text: a.type || 'Other' });
+      // Code
+      const codeEl = row.createDiv({ cls: 'hc-atable-code', text: cls.code });
+      codeEl.style.color = accentText(color);
+
+      // Type pill — same treatment as the card list it replaces.
+      const pillCell = row.createDiv('hc-atable-typecell');
+      const pill = pillCell.createSpan({ cls: 'hc-assign-pill', text: a.type || 'Other' });
       pill.style.color = typeStyle.color;
       pill.style.background = typeStyle.bg;
 
-      // Middle: title, class chip + lecture context, grade (once done)
-      const mid = row.createDiv('hc-assign-mid');
-      mid.createDiv({ cls: 'hc-assign-title', text: a.title });
-
-      const contextRow = mid.createDiv('hc-assign-context-row');
-      const classChip  = contextRow.createSpan({ cls: 'hc-assign-class-chip', text: cls.code });
-      classChip.style.color = accentText(color);
+      // Title + lecture context. Context moves under the title rather than
+      // taking its own column: it's the widest field with the least sorting
+      // value, and losing it entirely would drop information the card list
+      // showed.
+      const titleCell = row.createDiv('hc-atable-titlecell');
+      const titleRow = titleCell.createDiv('hc-title-flag-row');
+      titleRow.createDiv({ cls: 'hc-atable-title', text: a.title });
+      renderTermWindowFlag(titleRow, a.dueDate, cls, a.status === 'done');
 
       let lecLabel = 'Class-level';
       if (a.lectureId) {
         const lec = (cls.lectures || []).find(l => l.id === a.lectureId);
         if (lec) {
           const sorted = getLecturesSorted(cls);
-          const num    = sorted.indexOf(lec) + 1;
-          lecLabel     = `L${num} — ${lec.title}`;
+          lecLabel = `L${sorted.indexOf(lec) + 1} — ${lec.title}`;
         }
       }
-      contextRow.createSpan({ cls: 'hc-assign-lecture', text: ` · ${lecLabel}` });
+      titleCell.createDiv({ cls: 'hc-atable-context', text: lecLabel });
 
-      if (a.status === 'done' && (a.grade || '').trim()) {
-        mid.createSpan({ cls: 'hc-grade-chip', text: a.grade.trim() });
+      // Due date. Urgency colour carries the same meaning it does elsewhere;
+      // the note ("Overdue", "Tomorrow") rides underneath rather than beside,
+      // so the column stays narrow.
+      const dueCell = row.createDiv('hc-atable-duecell');
+      if (info) {
+        const dateEl = dueCell.createDiv({ cls: 'hc-atable-due', text: formatDate(a.dueDate) });
+        if (a.status !== 'done') {
+          dateEl.style.color = info.color;
+          if (info.urgency !== 'upcoming') {
+            dueCell.createDiv({ cls: 'hc-atable-due-note', text: info.urgency === 'overdue' ? 'Overdue' : info.note })
+              .style.color = info.color;
+          }
+        }
+      } else {
+        dueCell.createDiv({ cls: 'hc-atable-empty', text: '—' });
       }
 
-      // Right: status (matches the lecture/exam position), then due date
-      const right = row.createDiv('hc-assign-due');
-
-      const statusEl = right.createDiv({ cls: `hc-assign-status hc-assign-status--${a.status} hc-status-clickable` });
+      // Status — click to cycle, same as the list this replaces.
+      const statusEl = row.createDiv({ cls: `hc-atable-status hc-assign-status--${a.status} hc-status-clickable` });
       statusEl.setText(statusLabel(a.status));
       statusEl.setAttribute('aria-label', 'Click to change status');
       statusEl.addEventListener('click', (e) => {
@@ -3881,23 +4421,28 @@ class HoldCourseView extends ItemView {
         if (found) {
           found.assignment.status = cycleStatus(found.assignment.status);
           this.plugin.save();
-          this.render();
+          this.render(true);
         }
       });
 
-      if (info) {
-        right.createDiv({ cls: 'hc-assign-due-label', text: 'Due' });
-        const dateEl = right.createDiv({ cls: 'hc-assign-due-date', text: formatDate(a.dueDate) });
-        if (a.status !== 'done') {
-          dateEl.style.color = info.color;
-          if (info.urgency === 'overdue') {
-            right.createDiv({ cls: 'hc-assign-due-note', text: 'Overdue' }).style.color = info.color;
-          } else if (info.urgency !== 'upcoming') {
-            right.createDiv({ cls: 'hc-assign-due-note', text: info.note }).style.color = info.color;
-          } else {
-            right.createDiv({ cls: 'hc-assign-due-note', text: info.note });
-          }
-        }
+      // Grade — sparse by nature; a dash reads as "nothing yet" rather than
+      // as a broken cell, matching Courses' unset-status treatment. #12:
+      // an ungraded class's rows show a dash too, same as never-graded.
+      const gradeText = isClassGraded(cls) ? (a.grade || '').trim() : '';
+      row.createDiv({
+        cls: gradeText ? 'hc-atable-grade' : 'hc-atable-empty',
+        text: gradeText || '—',
+      });
+
+      // Reading estimate — only readings carry one, so most rows show a dash.
+      const pace = getReadingPaceCompact(a);
+      if (pace) {
+        row.createDiv({
+          cls: `hc-atable-pace hc-atable-pace--${pace.state}`,
+          text: pace.text,
+        });
+      } else {
+        row.createDiv({ cls: 'hc-atable-empty', text: '—' });
       }
 
       row.addEventListener('click', () => this.navigate('assignment', cls.id, null, a.id));
@@ -3915,6 +4460,23 @@ class HoldCourseView extends ItemView {
     if (s === 'completed') return 2;
     if (s === 'dropped') return 3;
     return 0; // unset
+  }
+
+  // #15: same click-semantics as _coursesSortBy — new column applies its
+  // natural direction, active column toggles. Unlike Courses, the choice
+  // persists on the semester: the old cycle-button sort already did, and
+  // silently losing that on the redesign would be a downgrade.
+  _assignSortBy(sem, key) {
+    if (sem.assignSortKey === key) {
+      sem.assignSortDir = sem.assignSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sem.assignSortKey = key;
+      // Due date ascending puts the soonest first; everything else reads
+      // naturally A-Z or lowest-rank-first.
+      sem.assignSortDir = 'asc';
+    }
+    this.plugin.save();
+    this.render();
   }
 
   // Clicking a new column applies that column's natural direction; clicking the
@@ -3941,26 +4503,20 @@ class HoldCourseView extends ItemView {
     const chev = btn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(chev, 'chevron-down');
 
-    let dropEl = null;
-    const close = () => { if (dropEl) { dropEl.remove(); dropEl = null; } };
-
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (dropEl) { close(); return; }
-      dropEl = wrap.createDiv('hc-sem-drop');
-
-      opts.options.forEach((opt, i) => {
-        const item = dropEl.createDiv('hc-sem-drop-item');
-        const active = opt.value === opts.current;
-        if (active) item.addClass('hc-sem-drop-item--active');
-        const tick = item.createSpan({ cls: 'hc-sem-drop-icon' });
-        if (active) setIcon(tick, 'check');
-        item.createSpan({ text: opt.label });
-        item.addEventListener('click', () => { close(); opts.onPick(opt.value); });
-        if (i === 0 && opts.options.length > 1) dropEl.createDiv('hc-sem-drop-divider');
+      const close = this._openFilterDropdown(btn, (dropEl) => {
+        opts.options.forEach((opt, i) => {
+          const item = dropEl.createDiv('hc-sem-drop-item');
+          const active = opt.value === opts.current;
+          if (active) item.addClass('hc-sem-drop-item--active');
+          const tick = item.createSpan({ cls: 'hc-sem-drop-icon' });
+          if (active) setIcon(tick, 'check');
+          item.createSpan({ text: opt.label });
+          item.addEventListener('click', () => { close(); opts.onPick(opt.value); });
+          if (i === 0 && opts.options.length > 1) dropEl.createDiv('hc-sem-drop-divider');
+        });
       });
-
-      setTimeout(() => document.addEventListener('click', () => close(), { once: true }), 0);
     });
   }
 
@@ -4113,7 +4669,7 @@ class HoldCourseView extends ItemView {
       }
 
       const semCell = row.createDiv('hc-courses-sem');
-      semCell.createSpan({ text: sem.name });
+      semCell.createSpan({ cls: 'hc-courses-sem-name', text: sem.name });
       if (typeof sem.year !== 'number') {
         semCell.createSpan({ cls: 'hc-courses-sem-tag', text: 'Undated' });
       }
@@ -4570,9 +5126,17 @@ class HoldCourseView extends ItemView {
 
     const rect = cellEl.getBoundingClientRect();
     const popW = 240;
-    const left = (rect.right + popW + 8 < window.innerWidth)
+    // #35: this picks a side (right of the cell, else left of it) but never
+    // checked whether the fallback side actually fits — only `top` below
+    // had a clamp. On a narrow phone week-row, rect.left often isn't big
+    // enough to subtract a full 240px from and stay on screen, so the
+    // popover rendered mostly off the left edge. Desktop almost always has
+    // room on one side or the other, which is why this never surfaced
+    // before.
+    const rawLeft = (rect.right + popW + 8 < window.innerWidth)
       ? rect.right + 4
       : rect.left - popW - 4;
+    const left = Math.max(8, Math.min(rawLeft, window.innerWidth - popW - 8));
     const top = Math.max(8, Math.min(rect.top, window.innerHeight - 320));
     pop.style.left = `${left}px`;
     pop.style.top  = `${top}px`;
@@ -4632,6 +5196,42 @@ class HoldCourseView extends ItemView {
       document.removeEventListener('click', this._semCloseHandler, true);
       this._semCloseHandler = null;
     }
+  }
+
+  // ─── Shared filter dropdown (class/type/year/term pickers) ────────────────
+  // Appended to <body> and positioned fixed via getBoundingClientRect,
+  // clamped to the viewport — NOT absolute inside the trigger's wrap. The
+  // control rows carry overflow-x: auto, and CSS won't let overflow-x and
+  // overflow-y differ: setting one to scroll forces the other away from
+  // visible, which clipped any dropdown opening from inside those rows.
+  // Same pattern as the #35 calendar popover. Consolidated here because
+  // five call sites each had their own copy of this logic, which is how
+  // one bug landed in all five at once.
+  _openFilterDropdown(triggerBtn, populate) {
+    if (this._filterDropdown) {
+      const wasSameTrigger = this._filterDropdown.trigger === triggerBtn;
+      this._filterDropdown.close();
+      if (wasSameTrigger) return null;
+    }
+
+    const dropEl = document.body.createDiv('hc-sem-drop hc-sem-drop--floating');
+    populate(dropEl);
+
+    const rect = triggerBtn.getBoundingClientRect();
+    const dropW = Math.max(dropEl.offsetWidth, 190);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - dropW - 8));
+    const top = Math.min(rect.bottom + 6, window.innerHeight - 8);
+    dropEl.style.left = `${left}px`;
+    dropEl.style.top = `${top}px`;
+
+    const close = () => {
+      dropEl.remove();
+      if (this._filterDropdown && this._filterDropdown.dropEl === dropEl) this._filterDropdown = null;
+    };
+    this._filterDropdown = { trigger: triggerBtn, dropEl, close };
+
+    setTimeout(() => document.addEventListener('click', close, { once: true }), 0);
+    return close;
   }
 }
 
@@ -4959,6 +5559,7 @@ class AddClassModal extends Modal {
       taName: '', taEmail: '', taOfficeHours: '',
       meetingDays: [],
       location: '', startDate: '', endDate: '', meetingStartTime: '', meetingEndTime: '',
+      trackGrades: true,
     };
   }
 
@@ -5017,6 +5618,13 @@ class AddClassModal extends Modal {
     new Setting(contentEl).setName('Course page URL').addText(text => {
       text.setPlaceholder('https://www.coursera.org/learn/...').setValue(this.formData.courseUrl).onChange(v => this.formData.courseUrl = v);
       text.inputEl.type = 'url';
+    });
+
+    // #12: on by default — matches current behavior for every class no one
+    // touches this for. Off hides Grade everywhere for this class (Grade
+    // fields, grade chips, assignments and exams alike).
+    new Setting(contentEl).setName('Track grades').addToggle(toggle => {
+      toggle.setValue(this.formData.trackGrades).onChange(v => this.formData.trackGrades = v);
     });
   }
 
@@ -5125,6 +5733,7 @@ class EditClassModal extends Modal {
       endDate: cls.endDate || '',
       meetingStartTime: cls.meetingStartTime || '',
       meetingEndTime: cls.meetingEndTime || '',
+      trackGrades: isClassGraded(cls),
     };
   }
 
@@ -5179,6 +5788,11 @@ class EditClassModal extends Modal {
     new Setting(contentEl).setName('Course page URL').addText(text => {
       text.setValue(this.formData.courseUrl).onChange(v => this.formData.courseUrl = v);
       text.inputEl.type = 'url';
+    });
+
+    // #12
+    new Setting(contentEl).setName('Track grades').addToggle(toggle => {
+      toggle.setValue(this.formData.trackGrades).onChange(v => this.formData.trackGrades = v);
     });
   }
 
@@ -5272,6 +5886,10 @@ class EditClassModal extends Modal {
       meetingStartTime: this.formData.meetingStartTime,
       meetingEndTime: this.formData.meetingEndTime,
     });
+    // #12: presence-based, same as removed — updateClass's Object.assign
+    // can't delete a key, so handled directly on the live class object.
+    if (this.formData.trackGrades) delete this.cls.notGraded;
+    else this.cls.notGraded = true;
     this.onSave();
     this.close();
   }
@@ -5386,7 +6004,21 @@ class DeleteClassModal extends Modal {
 
 function _makeDraggable(modal) {
   const el = modal.modalEl;
-  el.style.position = 'fixed';
+  // #34: position: fixed pins the modal to the viewport, which takes it out
+  // of .modal-container — the element the keyboard fix shrinks. On a phone
+  // that meant the container shrank correctly but the modal never moved,
+  // so a tall one (Edit reading, which renders the Linked book block on top
+  // of the shared fields) got squeezed by .modal's max-height while staying
+  // pinned, and ended up drawn below the keyboard line: header still
+  // visible, blank space where the modal should be.
+  // Scoped to is-phone to match .hc-drag-bar's own boundary below. The drag
+  // handler binds mouse events only, so it can never fire on a phone anyway
+  // and the bar is already hidden there — pinning bought nothing. Tablets
+  // and desktop keep it, where the drag genuinely works (a stylus fires
+  // mouse-compatible events; the Boox case).
+  if (!document.body.classList.contains('is-phone')) {
+    el.style.position = 'fixed';
+  }
   let isDragging = false, dragOffX = 0, dragOffY = 0;
 
   const onMouseMove = e => {
@@ -5868,7 +6500,6 @@ class AddAssignmentModal extends Modal {
   // tab now passes 'Writing', since Reading no longer shows up in that list
   // once saved and would otherwise seem to vanish. Readings tab, lecture-detail
   // and the command palette are left on the original 'Reading' default.
-  //
   // lockedType and excludeTypes fix the follow-on bug: a call site tied to one
   // specific tab shouldn't offer a Type choice that doesn't belong there. The
   // Readings tab passes lockedType 'Reading' — no dropdown at all, title reads
@@ -5876,7 +6507,6 @@ class AddAssignmentModal extends Modal {
   // dropdown stays, just without the option that would misfile the item.
   // Lecture-detail and the command palette pass neither, so they keep the
   // original full-choice picker (they aren't tied to a single tab).
-  // (LiveAQuietLife, 2026-09-01)
   constructor(app, plugin, semesterId, cls, onSave, defaultLectureId = null, defaultType = 'Reading', lockedType = null, excludeTypes = []) {
     super(app);
     this.plugin = plugin;
@@ -5889,7 +6519,7 @@ class AddAssignmentModal extends Modal {
     if (!lockedType && excludeTypes.includes(initialType)) {
       initialType = ASSIGNMENT_TYPES.find(t => !excludeTypes.includes(t)) || initialType;
     }
-    this.formData = { title: '', type: initialType, dueDate: '', lectureId: defaultLectureId || null };
+    this.formData = { title: '', type: initialType, dueDate: '', lectureId: defaultLectureId || null, linkedNote: '' };
     // Pre-fill due date if opening from a lecture context
     if (defaultLectureId) {
       const lec = (cls.lectures || []).find(l => l.id === defaultLectureId);
@@ -5903,7 +6533,7 @@ class AddAssignmentModal extends Modal {
     this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     // #9: title tracks lockedType so a Readings-tab add doesn't say
-    // "Add assignment". (LiveAQuietLife, 2026-09-01)
+    // "Add assignment".
     const modalLabel = this.lockedType ? `Add ${this.lockedType.toLowerCase()}` : 'Add assignment';
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: modalLabel });
 
@@ -5914,7 +6544,7 @@ class AddAssignmentModal extends Modal {
 
     if (this.lockedType) {
       // #9: this entry point only ever creates one type — no choice to make,
-      // so no dropdown to make it with. (LiveAQuietLife, 2026-09-01)
+      // so no dropdown to make it with.
       this.formData.type = this.lockedType;
     } else {
       new Setting(contentEl).setName('Type').addDropdown(drop => {
@@ -5952,6 +6582,13 @@ class AddAssignmentModal extends Modal {
       dueDateInputEl = text.inputEl;
       text.onChange(v => this.formData.dueDate = v);
     });
+
+    // Raised during #4 vault testing: setting up a reading required a trip
+    // out to the detail screen just to attach the note that #4's estimate
+    // depends on. Same read-only-once-linked field as the detail screen
+    // (#8), just available at creation time too. Not gated to any one
+    // type — the detail screen's version isn't either.
+    this._renderLinkedNoteField(contentEl);
 
     // Conditional fields container
     contentEl.createDiv('hc-assign-conditional');
@@ -6010,6 +6647,7 @@ class AddAssignmentModal extends Modal {
     if (!this.formData.title.trim()) { new Notice('Assignment title is required.'); return; }
     const assign = this.plugin.addAssignment(this.semesterId, this.cls.id, this.formData.lectureId, this.formData);
     if (assign && this.formData.linkedBook) assign.linkedBook = this.formData.linkedBook;
+    if (assign && this.formData.linkedNote) assign.linkedNote = this.formData.linkedNote;
     this.onSave();
     this.close();
   }
@@ -6036,7 +6674,7 @@ class EditAssignmentModal extends Modal {
 
   // #9: title tracks the item's Type — a Reading opens as "Edit reading",
   // not "Edit assignment" — and updates live if the Type dropdown changes,
-  // same split as everywhere else since #9. (LiveAQuietLife, 2026-09-01)
+  // same split as everywhere else since #9.
   _modalLabel() {
     return this.formData.type === 'Reading' ? 'Edit reading' : 'Edit assignment';
   }
@@ -6068,6 +6706,12 @@ class EditAssignmentModal extends Modal {
       text.inputEl.value = this.formData.dueDate;
       text.onChange(v => this.formData.dueDate = v);
     });
+
+    // #4 follow-up: formData.linkedNote was already carried through _save()
+    // below, but never had a field rendering it — editing a note link was
+    // only reachable via the detail screen's Browse/Remove row. Same
+    // read-only-once-linked field as Add reading now uses.
+    this._renderLinkedNoteField(contentEl);
 
     contentEl.createDiv('hc-assign-conditional');
     this._updateConditional(contentEl);
@@ -6135,6 +6779,150 @@ class EditAssignmentModal extends Modal {
   }
 
   onClose() { this.contentEl.empty(); }
+}
+
+// #30: first-ever setup for reading-pace tracking. Only opens when
+// assignment.readingPace doesn't exist yet — re-enabling after hide skips
+// this entirely (see _renderAssignmentDetail's toggle handler). onDone fires
+// on any close (Save, Cancel, or the X) so the caller's toggle re-render
+// always reflects what actually happened, not just the Save path.
+class ReadingPaceSetupModal extends Modal {
+  constructor(app, assignment, onDone) {
+    super(app);
+    this.assignment = assignment;
+    this.onDone = onDone;
+    this.formData = { totalPages: '', targetDate: assignment.dueDate || '' };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this._makeDraggable(this);
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Track this reading' });
+
+    new Setting(contentEl).setName('Total pages').addText(text => {
+      text.inputEl.type = 'number';
+      text.inputEl.min = '1';
+      text.inputEl.focus();
+      text.onChange(v => this.formData.totalPages = v);
+    });
+
+    new Setting(contentEl).setName('By when').addText(text => {
+      text.inputEl.type = 'date';
+      text.inputEl.value = this.formData.targetDate;
+      text.onChange(v => this.formData.targetDate = v);
+    });
+
+    this._renderFooter(contentEl, 'Start tracking', () => this._save());
+  }
+
+  _save() {
+    const pages = parseInt(this.formData.totalPages, 10);
+    if (!pages || pages < 1) { new Notice('Enter a page count of at least 1.'); return; }
+    if (!this.formData.targetDate) { new Notice('Pick a target date.'); return; }
+
+    this.assignment.readingPace = { totalPages: pages, pagesRead: 0 };
+    if (this.formData.targetDate !== this.assignment.dueDate) {
+      this.assignment.readingPace.targetDateOverride = this.formData.targetDate;
+    }
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); this.onDone(); }
+}
+
+// #30: logs progress against an existing readingPace, and doubles as the
+// only edit surface for its setup (total pages / target date) — reachable
+// any time, not gated behind a toggle-off/on cycle. "Edit setup" writes
+// immediately on its own Save and returns to the progress screen; it doesn't
+// share an undo scope with the outer Cancel. Accepted simplification — two
+// nested undo scopes would cost more than the edge case is worth.
+class ReadingPaceLogModal extends Modal {
+  constructor(app, assignment, onDone) {
+    super(app);
+    this.assignment = assignment;
+    this.onDone = onDone;
+    this.pagesReadInput = String(assignment.readingPace.pagesRead || 0);
+    this.editingSetup = false;
+  }
+
+  onOpen() { this._render(); }
+
+  _render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this._makeDraggable(this);
+    contentEl.addClass('hc-modal');
+    const rp = this.assignment.readingPace;
+
+    if (!this.editingSetup) {
+      contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Log progress' });
+      contentEl.createDiv({ cls: 'hc-reading-pace-modal-status', text: getReadingPaceLine(this.assignment).text });
+
+      new Setting(contentEl).setName('Pages read so far').addText(text => {
+        text.inputEl.type = 'number';
+        text.inputEl.min = '0';
+        text.inputEl.value = this.pagesReadInput;
+        text.inputEl.focus();
+        text.onChange(v => this.pagesReadInput = v);
+      });
+
+      const editLink = contentEl.createEl('a', { cls: 'hc-reading-pace-edit-link', text: 'Edit setup' });
+      editLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.editingSetup = true;
+        this.editTotalPages = String(rp.totalPages || '');
+        this.editTargetDate = rp.targetDateOverride || this.assignment.dueDate || '';
+        this._render();
+      });
+
+      this._renderFooter(contentEl, 'Save', () => this._saveProgress());
+    } else {
+      contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit setup' });
+
+      new Setting(contentEl).setName('Total pages').addText(text => {
+        text.inputEl.type = 'number';
+        text.inputEl.min = '1';
+        text.inputEl.value = this.editTotalPages;
+        text.inputEl.focus();
+        text.onChange(v => this.editTotalPages = v);
+      });
+
+      new Setting(contentEl).setName('By when').addText(text => {
+        text.inputEl.type = 'date';
+        text.inputEl.value = this.editTargetDate;
+        text.onChange(v => this.editTargetDate = v);
+      });
+
+      this._renderFooter(contentEl, 'Save', () => this._saveSetup());
+    }
+  }
+
+  _saveProgress() {
+    const pages = parseInt(this.pagesReadInput, 10);
+    if (isNaN(pages) || pages < 0) { new Notice('Enter a valid number of pages.'); return; }
+    this.assignment.readingPace.pagesRead = pages;
+    this.close();
+  }
+
+  _saveSetup() {
+    const pages = parseInt(this.editTotalPages, 10);
+    if (!pages || pages < 1) { new Notice('Enter a page count of at least 1.'); return; }
+    if (!this.editTargetDate) { new Notice('Pick a target date.'); return; }
+
+    const rp = this.assignment.readingPace;
+    rp.totalPages = pages;
+    if (this.editTargetDate !== this.assignment.dueDate) {
+      rp.targetDateOverride = this.editTargetDate;
+    } else {
+      delete rp.targetDateOverride;
+    }
+    this.editingSetup = false;
+    this._render();
+  }
+
+  onClose() { this.contentEl.empty(); this.onDone(); }
 }
 
 class DeleteAssignmentModal extends Modal {
@@ -6535,7 +7323,6 @@ class AddResourceModal extends Modal {
         // (Resource detail, Lecture Notes, Assignment Linked Note) —
         // typing over a filename-only display would silently save a
         // folder-less path. Browse/Remove are the only way to change it.
-        // (LiveAQuietLife/Claude, 2026-08-30)
         addVaultLinkSetting.controlEl.createDiv({ cls: 'hc-assign-link-display', text: path.split('/').pop() });
       } else {
         const input = addVaultLinkSetting.controlEl.createEl('input', { type: 'text' });
@@ -6661,7 +7448,6 @@ class EditResourceModal extends Modal {
         // (Resource detail, Lecture Notes, Assignment Linked Note) —
         // typing over a filename-only display would silently save a
         // folder-less path. Browse/Remove are the only way to change it.
-        // (LiveAQuietLife/Claude, 2026-08-30)
         editVaultLinkSetting.controlEl.createDiv({ cls: 'hc-assign-link-display', text: path.split('/').pop() });
       } else {
         const input = editVaultLinkSetting.controlEl.createEl('input', { type: 'text' });
@@ -6857,6 +7643,18 @@ class HoldCourseTodayView extends ItemView {
     }
     meta.setText(metaText);
 
+    // #24: term-window flag, missing from this view in the original sweep —
+    // the pill layout doesn't use the hc-title-flag-row wrapper the other
+    // eight sites share, so it was skipped. Rendered onto the meta line
+    // rather than the title so a long title still ellipsizes against the
+    // full pill width. Lectures are deliberately excluded: they have no due
+    // date, so there is nothing to check them against.
+    if (item.kind === 'assignment') {
+      renderTermWindowFlag(meta, item.assignment.dueDate, item.cls, isDone);
+    } else if (item.kind === 'exam') {
+      renderTermWindowFlag(meta, item.exam.dueDate, item.cls, isDone);
+    }
+
     row.addEventListener('click', () => this._navigateToItem(item));
   }
 
@@ -6888,12 +7686,64 @@ class HoldCourseTodayView extends ItemView {
   }
 }
 
+// Shared Linked Note field for the assignment Add/Edit modals — same
+// read-only-once-linked shape as the detail screen's version (#8), reused
+// rather than re-implemented so both places can only ever drift out of
+// sync in one spot, not two. Attached to AddAssignmentModal and
+// EditAssignmentModal below. Reads/writes this.formData.linkedNote; the
+// caller's _save() is responsible for actually persisting it.
+// First version wrapped this in three nested divs (mirroring the detail
+// screen's markup), which broke inside a modal's Setting row — those
+// wrapper divs don't get the flex-grow/shrink treatment their un-wrapped
+// children need, so a long filename overflowed the modal and a short one
+// stayed collapsed instead of matching the row's width. Rebuilt to match
+// AddResourceModal's already-working Vault Link field instead: elements
+// live directly under setting.controlEl, no wrappers, same as that field.
+function _renderLinkedNoteField(container) {
+  const setting = new Setting(container).setName('Linked note');
+  setting.settingEl.addClass('hc-linked-note-setting');
+
+  const renderNoteField = () => {
+    setting.controlEl.empty();
+    const path = this.formData.linkedNote || '';
+
+    if (path) {
+      setting.controlEl.createDiv({ cls: 'hc-assign-link-display', text: path.split('/').pop() });
+    } else {
+      const noteInput = setting.controlEl.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+      noteInput.placeholder = 'path/to/note.md';
+      noteInput.value = path;
+      noteInput.addEventListener('blur', () => {
+        this.formData.linkedNote = noteInput.value.trim();
+      });
+    }
+
+    const browseBtn = setting.controlEl.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Browse', type: 'button' });
+    browseBtn.addEventListener('click', () => {
+      new VaultLinkSuggestModal(this.app, (selectedPath) => {
+        this.formData.linkedNote = selectedPath;
+        renderNoteField();
+      }).open();
+    });
+
+    if (path) {
+      const removeBtn = setting.controlEl.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Remove', type: 'button' });
+      removeBtn.addEventListener('click', () => {
+        this.formData.linkedNote = '';
+        renderNoteField();
+      });
+    }
+  };
+  renderNoteField();
+}
+
 // ─── Shared modal behaviours — attach after all class definitions ─────────────
 
 const DRAGGABLE_MODALS = [
   AddSemesterModal, EditSemesterModal, AddClassModal, EditClassModal,
   AddLectureModal, EditLectureModal, BulkAddLecturesModal,
   AddAssignmentModal, BulkAddAssignmentsModal, EditAssignmentModal, MoveAssignmentModal,
+  ReadingPaceSetupModal, ReadingPaceLogModal,
   AddExamModal, EditExamModal,
   QuickAddResourceModal, AddResourceModal, EditResourceModal,
 ];
@@ -6909,6 +7759,10 @@ AddLectureModal.prototype._renderFooter     = _renderFooter;
 EditLectureModal.prototype._renderFooter    = _renderFooter;
 AddAssignmentModal.prototype._renderFooter  = _renderFooter;
 EditAssignmentModal.prototype._renderFooter = _renderFooter;
+AddAssignmentModal.prototype._renderLinkedNoteField  = _renderLinkedNoteField;
+EditAssignmentModal.prototype._renderLinkedNoteField = _renderLinkedNoteField;
+ReadingPaceSetupModal.prototype._renderFooter = _renderFooter;
+ReadingPaceLogModal.prototype._renderFooter   = _renderFooter;
 MoveAssignmentModal.prototype._renderFooter = _renderFooter;
 AddExamModal.prototype._renderFooter        = _renderFooter;
 EditExamModal.prototype._renderFooter       = _renderFooter;
