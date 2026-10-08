@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.9.1 */
+/* --- Hold Course --- v1.9.3 */
 'use strict';
 
 const {
@@ -18,13 +18,20 @@ const {
 const VIEW_TYPE = 'hold-course-view';
 const TODAY_VIEW_TYPE = 'hold-course-today';
 
+// Discussion #18 (1.9.3): retuned so the six hues sit apart on the color
+// wheel. The old set paired teal with green and coral with pink, which read as
+// near-duplicates once users could pick colors side by side. Slot order is
+// unchanged, so existing classes keep their index: teal→blue, coral→red,
+// pink→magenta; amber is kept as-is. Every accent/accentDark clears 4.5:1 on
+// white / #1e1e1e and on its own bg, except amber (3.7:1 on white), which is
+// unchanged from earlier versions.
 const COLOR_PALETTE = [
-  { name: 'amber',  accent: '#BA7517', accentDark: '#E5A34F', light: '#FAC775', bg: '#FAEEDA', text: '#633806' },
-  { name: 'teal',   accent: '#0F6E56', accentDark: '#45C4A0', light: '#9FE1CB', bg: '#E1F5EE', text: '#04342C' },
-  { name: 'coral',  accent: '#993C1D', accentDark: '#E8845C', light: '#F5C4B3', bg: '#FAECE7', text: '#4A1B0C' },
-  { name: 'purple', accent: '#534AB7', accentDark: '#A29AF2', light: '#CECBF6', bg: '#EEEDFE', text: '#26215C' },
-  { name: 'pink',   accent: '#993556', accentDark: '#E886A8', light: '#F4C0D1', bg: '#FBEAF0', text: '#4B1528' },
-  { name: 'green',  accent: '#3B6D11', accentDark: '#97C95E', light: '#C0DD97', bg: '#EAF3DE', text: '#173404' },
+  { name: 'amber',   accent: '#BA7517', accentDark: '#E5A34F', light: '#FAC775', bg: '#FAEEDA', text: '#633806' },
+  { name: 'blue',    accent: '#1D4ED8', accentDark: '#60A5FA', light: '#93C5FD', bg: '#EFF6FF', text: '#172554' },
+  { name: 'red',     accent: '#B91C1C', accentDark: '#F87171', light: '#FCA5A5', bg: '#FEF2F2', text: '#450A0A' },
+  { name: 'purple',  accent: '#6D28D9', accentDark: '#A78BFA', light: '#C4B5FD', bg: '#F5F3FF', text: '#2E1065' },
+  { name: 'magenta', accent: '#A21CAF', accentDark: '#E879F9', light: '#F0ABFC', bg: '#FDF4FF', text: '#4A044E' },
+  { name: 'green',   accent: '#15803D', accentDark: '#4ADE80', light: '#86EFAC', bg: '#F0FDF4', text: '#052E16' },
 ];
 
 const ASSIGNMENT_TYPE_STYLE = {
@@ -131,6 +138,22 @@ function getTypeStyle(type) {
 // Dark-theme awareness: pastel pills (light bg + dark text) are self-contained
 // and safe on any theme, but accent colors used as text directly on the theme
 // background need a brighter variant on dark themes.
+// #53: the automatic color for a class arriving in `classes` — the lowest
+// palette index no other class there uses. Count-based assignment
+// (classes.length % N) repeated a color as soon as a class was deleted or
+// moved out. Falls back to the count only when all six are taken, where a
+// repeat is unavoidable. `skip` excludes a class already in the list.
+function firstFreeColorIndex(classes, skip) {
+  const used = new Set();
+  for (const c of classes || []) {
+    if (c !== skip && typeof c.colorIndex === 'number') used.add(c.colorIndex % COLOR_PALETTE.length);
+  }
+  for (let i = 0; i < COLOR_PALETTE.length; i++) {
+    if (!used.has(i)) return i;
+  }
+  return (classes || []).length % COLOR_PALETTE.length;
+}
+
 function isDarkTheme() {
   return document.body.classList.contains('theme-dark');
 }
@@ -296,15 +319,26 @@ function getReadingPaceCompact(assignment) {
   };
 }
 
-function getAllAssignments(semester) {
+// #55: one definition of "this class has stopped surfacing" — completed or
+// dropped. Calendar/Today (getItemsForDate), the dashboard strip, and global
+// Assignments all read it, so the three can't disagree again.
+function isClassInactive(cls) {
+  return !!cls && (cls.status === 'completed' || cls.status === 'dropped');
+}
+
+// `activeOnly` skips completed/dropped classes (#55). Each row also carries
+// `classInactive`, so a caller that keeps them can still tell them apart.
+function getAllAssignments(semester, activeOnly = false) {
   const all = [];
   for (const cls of (semester.classes || [])) {
+    if (activeOnly && isClassInactive(cls)) continue;
+    const classInactive = isClassInactive(cls);
     for (const a of (cls.assignments || [])) {
-      all.push({ ...a, classId: cls.id, classCode: cls.code, colorIndex: cls.colorIndex });
+      all.push({ ...a, classId: cls.id, classCode: cls.code, colorIndex: cls.colorIndex, classInactive });
     }
     for (const lec of (cls.lectures || [])) {
       for (const a of (lec.assignments || [])) {
-        all.push({ ...a, classId: cls.id, classCode: cls.code, colorIndex: cls.colorIndex, lectureId: lec.id });
+        all.push({ ...a, classId: cls.id, classCode: cls.code, colorIndex: cls.colorIndex, classInactive, lectureId: lec.id });
       }
     }
   }
@@ -438,15 +472,28 @@ function parseBulkDateToken(token, defaultYear) {
 // Splits a pasted line into { title, date }. Only a trailing tab- or
 // comma-separated token that parses as a date is claimed; commas inside
 // titles are safe. Lines that are nothing but a date stay titles.
+// #52: tries the last separator, then the one before it. A date written
+// with a year ("August 24, 2026") has its own comma, so the last separator
+// alone handed the parser just " 2026" and the date was lost into the title.
+// Stops at two: one comma inside the date is the only case that needs it,
+// and going further back would start swallowing commas from titles.
+// (2026-10-06)
 function splitBulkLine(line, defaultYear) {
-  const sepIdx = Math.max(line.lastIndexOf('\t'), line.lastIndexOf(','));
-  if (sepIdx > 0) {
+  const isSep = (ch) => ch === '\t' || ch === ',';
+  let end = line.length;
+  for (let tries = 0; tries < 2; tries++) {
+    let sepIdx = -1;
+    for (let i = end - 1; i > 0; i--) {
+      if (isSep(line[i])) { sepIdx = i; break; }
+    }
+    if (sepIdx <= 0) break;
     const candidate = line.slice(sepIdx + 1);
     const title = line.slice(0, sepIdx).trim();
     if (title) {
       const iso = parseBulkDateToken(candidate, defaultYear);
       if (iso) return { title, date: iso };
     }
+    end = sepIdx;
   }
   return { title: line.trim(), date: '' };
 }
@@ -625,20 +672,61 @@ function to24h(hour12, minute, period) {
   return `${String(h).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
+// Discussion #18 / #53: class color swatches for Add and Edit class. Palette
+// only, by design — each entry is five tuned shades (accent, dark accent,
+// light, bg, text), and a free hex would have to derive all five and could
+// fail contrast in dark mode. Sharing a color is allowed on purpose (one color
+// per department/level); the tooltip names who else uses it so a duplicate is
+// never a surprise. `classes` is the semester's list, `self` the class being
+// edited (null when adding), so it doesn't report itself as "also used by".
+function renderColorPicker(contentEl, classes, self, initialIndex, onPick) {
+  const setting = new Setting(contentEl).setName('Color');
+  const picker = setting.controlEl.createDiv('hc-color-picker');
+  const swatches = [];
+  const select = (i) => {
+    swatches.forEach((s, j) => {
+      s.toggleClass('hc-color-swatch--active', j === i);
+      s.setAttr('aria-pressed', j === i ? 'true' : 'false');
+    });
+  };
+  COLOR_PALETTE.forEach((color, i) => {
+    const name = color.name.charAt(0).toUpperCase() + color.name.slice(1);
+    const users = (classes || [])
+      .filter(c => c !== self && typeof c.colorIndex === 'number' && c.colorIndex % COLOR_PALETTE.length === i)
+      .map(c => c.code || c.name || 'Untitled');
+    const sw = picker.createEl('button', { cls: 'hc-color-swatch', type: 'button' });
+    sw.style.background = accentText(color);
+    sw.setAttr('aria-label', name);
+    sw.setAttr('title', users.length ? `${name} — also used by ${users.join(', ')}` : name);
+    sw.addEventListener('click', () => { select(i); onPick(i); });
+    swatches.push(sw);
+  });
+  select(initialIndex % COLOR_PALETTE.length);
+}
+
 // Custom time picker — hour/minute dropdowns plus an AM/PM toggle styled
 // like the day-toggle chips, replacing the native OS time control. 5-minute
-// increments (typical class start times don't need finer). Renders a
-// starting display (defaults to 9:00 AM when nothing is set yet) but only
-// calls onChange on genuine user interaction — an untouched field leaves
-// the underlying value empty, same as the native input did.
+// increments (typical class start times don't need finer).
+// #54: what's shown is what's saved. An empty value used to display 9:00 AM
+// while storing '', so an untouched "9:00 AM" failed validation, and with no
+// empty option a set time could never be cleared. Now the hour list starts
+// with "—": empty shows "—" with minute and AM/PM disabled; picking an hour
+// emits a time at once (minute 00 / AM unless already chosen); picking "—"
+// emits '' and disables the rest again.
 function renderTimePicker(contentEl, labelText, initialValue, onChange) {
   const setting = new Setting(contentEl).setName(labelText);
   const wrap = setting.controlEl.createDiv('hc-time-picker');
 
-  const parsed = parse24hTo12h(initialValue) || { hour12: 9, minute: 0, period: 'AM' };
-  let hour12 = parsed.hour12, minute = parsed.minute, period = parsed.period;
+  const parsed = parse24hTo12h(initialValue);
+  let isSet = !!parsed;
+  let hour12 = parsed ? parsed.hour12 : null;
+  let minute = parsed ? parsed.minute : 0;
+  let period = parsed ? parsed.period : 'AM';
 
   const hourSel = wrap.createEl('select', { cls: 'hc-time-select' });
+  hourSel.setAttr('aria-label', `${labelText} hour`);
+  const blank = hourSel.createEl('option', { text: '—', value: '' });
+  if (!isSet) blank.selected = true;
   for (let h = 1; h <= 12; h++) {
     const opt = hourSel.createEl('option', { text: String(h), value: String(h) });
     if (h === hour12) opt.selected = true;
@@ -657,17 +745,33 @@ function renderTimePicker(contentEl, labelText, initialValue, onChange) {
   const pmBtn = toggle.createEl('button', { cls: 'hc-time-period-btn', text: 'PM', type: 'button' });
 
   const applyPeriodStyle = () => {
-    if (period === 'AM') { amBtn.addClass('hc-time-period-btn--active'); pmBtn.removeClass('hc-time-period-btn--active'); }
-    else { pmBtn.addClass('hc-time-period-btn--active'); amBtn.removeClass('hc-time-period-btn--active'); }
+    amBtn.toggleClass('hc-time-period-btn--active', isSet && period === 'AM');
+    pmBtn.toggleClass('hc-time-period-btn--active', isSet && period === 'PM');
   };
-  applyPeriodStyle();
+  const applyEnabled = () => {
+    minSel.disabled = !isSet;
+    amBtn.disabled = !isSet;
+    pmBtn.disabled = !isSet;
+    wrap.toggleClass('hc-time-picker--empty', !isSet);
+    applyPeriodStyle();
+  };
+  applyEnabled();
 
-  const emit = () => onChange(to24h(hour12, minute, period));
+  const emit = () => onChange(isSet ? to24h(hour12, minute, period) : '');
 
-  hourSel.addEventListener('change', () => { hour12 = Number(hourSel.value); emit(); });
+  hourSel.addEventListener('change', () => {
+    if (hourSel.value === '') {
+      isSet = false;
+    } else {
+      isSet = true;
+      hour12 = Number(hourSel.value);
+    }
+    applyEnabled();
+    emit();
+  });
   minSel.addEventListener('change', () => { minute = Number(minSel.value); emit(); });
-  amBtn.addEventListener('click', () => { period = 'AM'; applyPeriodStyle(); emit(); });
-  pmBtn.addEventListener('click', () => { period = 'PM'; applyPeriodStyle(); emit(); });
+  amBtn.addEventListener('click', () => { if (!isSet) return; period = 'AM'; applyPeriodStyle(); emit(); });
+  pmBtn.addEventListener('click', () => { if (!isSet) return; period = 'PM'; applyPeriodStyle(); emit(); });
 }
 
 // Month/week grid pills are narrow, so a lecture that picked up a merged
@@ -732,7 +836,7 @@ function getItemsForDate(sem, dateISO, filterClassId) {
     if (filterClassId && cls.id !== filterClassId) continue;
     // Completed/dropped classes stop surfacing on every date-driven surface —
     // Today, Tomorrow, month, and week all read this same list.
-    if (cls.status === 'completed' || cls.status === 'dropped') continue;
+    if (isClassInactive(cls)) continue;
 
     let firstLectureItemToday = null;
     for (const lec of (cls.lectures || [])) {
@@ -787,23 +891,42 @@ function getCalItemStyle(item) {
 
 class HoldCoursePlugin extends Plugin {
   async onload() {
-    this.data = await this.loadData() || { currentSemesterId: null, semesters: [] };
-    this.data.settings = this.data.settings || { einkMode: false };
-    // #13: additive — existing users' settings object already exists, so the
-    // `||` above never runs for them. uiScale needs its own explicit check,
-    // same principle as the migration functions below: only ever write keys
-    // that were absent.
-    if (this.data.settings.uiScale === undefined) this.data.settings.uiScale = 100;
+    // #46: disk-change tracking state. _diskStamp is the {mtime, size} of
+    // data.json as of our last own read or write; anything else on disk
+    // means someone outside this app wrote it. (LiveAQuietLife, 2026-10-03)
+    this._diskStamp = null;
+    this._saving = 0;
+    this._reloading = false;
+    this._recheckTimer = null;
+    this._pendingForce = false;
+
+    const changed = await this._loadAndNormalize();
     this.applyEinkClass();
     this.applyUiScale();
 
     this.addSettingTab(new HoldCourseSettingTab(this.app, this));
 
-    // Additive migrations: only ever write keys that were absent. saveData
-    // directly rather than save() — no views exist yet at this point.
-    let changed = this._migrateSemesters();
-    if (this._migrateDataVersion()) changed = true;
+    // saveData directly rather than save() — no views exist yet at this point.
     if (changed) await this.saveData(this.data);
+    await this._recordDiskStamp();
+
+    // #46: Obsidian's onExternalSettingsChange doesn't fire on the receiving
+    // device when a sync tool writes data.json (reproduced desktop → Android,
+    // 2026-09-17). These three triggers cover that gap. visibilitychange is
+    // the one that matters on Android — window focus isn't reliable on app
+    // resume there. The interval is only a backstop; one stat() call is
+    // cheap, and timers pause while the app is backgrounded anyway.
+    // All three route through _reloadIfChanged, so overlapping fires are
+    // harmless: the second finds nothing changed. (LiveAQuietLife, 2026-10-03)
+    this.registerDomEvent(window, 'focus', () => this._reloadIfChanged());
+    this.registerDomEvent(document, 'visibilitychange', () => {
+      if (document.visibilityState === 'visible') this._reloadIfChanged();
+    });
+    this.registerInterval(window.setInterval(() => this._reloadIfChanged(), 60 * 1000));
+
+    // #49: keep stored note paths pointing at their notes when a note or
+    // folder is moved or renamed. (LiveAQuietLife, 2026-10-03)
+    this.registerEvent(this.app.vault.on('rename', (file, oldPath) => this._onVaultRename(file, oldPath)));
 
     this.registerView(VIEW_TYPE, (leaf) => new HoldCourseView(leaf, this));
     this.registerView(TODAY_VIEW_TYPE, (leaf) => new HoldCourseTodayView(leaf, this));
@@ -930,6 +1053,7 @@ class HoldCoursePlugin extends Plugin {
   }
 
   onunload() {
+    window.clearTimeout(this._recheckTimer);
     document.body.classList.remove('hc-eink');
     document.body.classList.remove('hc-scaled');
     document.body.style.removeProperty('--hc-ui-scale');
@@ -964,15 +1088,118 @@ class HoldCoursePlugin extends Plugin {
 
   // #2: fires when an external process (e.g. a sync script) modifies
   // data.json on disk, so changes appear without an Obsidian restart.
-  // Deliberately a plain reload, not a merge — an in-app edit mutated in
-  // memory but not yet written would be discarded if it collided with
-  // this. Accepted as a known limitation: nearly every action saves
-  // immediately, so that window is close to zero. See hc-logic-notes #2
-  // for the rejected alternatives.
+  // Deliberately a plain reload, not a merge — see hc-logic-notes #2 for
+  // the rejected alternatives.
+  // #46: now routes through _reloadIfChanged like the other triggers, with
+  // force set because Obsidian has already told us the file changed.
+  // (LiveAQuietLife, 2026-10-03)
   async onExternalSettingsChange() {
+    await this._reloadIfChanged(true);
+  }
+
+  // #46: everything onload() did to turn raw data.json into a usable
+  // this.data, pulled out so a reload gets the identical treatment. Before
+  // this, a reload skipped the settings defaults and migrations, so a file
+  // with no settings block would have broken the settings tab.
+  // Returns true if normalizing changed anything that needs writing back.
+  // (LiveAQuietLife, 2026-10-03)
+  async _loadAndNormalize() {
     this.data = await this.loadData() || { currentSemesterId: null, semesters: [] };
-    this.refreshTodayView();
-    this.refreshMainView();
+    this.data.settings = this.data.settings || { einkMode: false };
+    // #13: additive — existing users' settings object already exists, so the
+    // `||` above never runs for them. uiScale needs its own explicit check,
+    // same principle as the migration functions below: only ever write keys
+    // that were absent.
+    if (this.data.settings.uiScale === undefined) this.data.settings.uiScale = 100;
+    // Additive migrations: only ever write keys that were absent.
+    let changed = this._migrateSemesters();
+    if (this._migrateDataVersion()) changed = true;
+    return changed;
+  }
+
+  _dataPath() {
+    return `${this.manifest.dir}/data.json`;
+  }
+
+  async _readDiskStamp() {
+    try {
+      const st = await this.app.vault.adapter.stat(this._dataPath());
+      return st ? { mtime: st.mtime, size: st.size } : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async _recordDiskStamp() {
+    this._diskStamp = await this._readDiskStamp();
+  }
+
+  // #46: a reload swaps this.data for fresh objects. Anything still holding
+  // the old ones would write into a detached copy and lose the edit silently:
+  // every modal (including Obsidian's settings window) captures objects at
+  // open, and a focused field on a detail screen saves into its closure on
+  // blur. So: while either is true, wait. Any open modal counts, not just
+  // ours — checking all of them is cheaper than being wrong about one.
+  // (LiveAQuietLife, 2026-10-03)
+  _reloadBlocked() {
+    if (document.querySelector('.modal-container')) return true;
+    const a = document.activeElement;
+    if (a && a.matches && a.matches('input, textarea, select')
+        && a.closest('.hc-root, .hc-today-root')) return true;
+    return false;
+  }
+
+  // Retry shortly instead of waiting a full interval — a modal closing is
+  // the moment the user is looking at the screen again.
+  _scheduleRecheck(force) {
+    if (force) this._pendingForce = true;
+    window.clearTimeout(this._recheckTimer);
+    this._recheckTimer = window.setTimeout(() => {
+      const f = this._pendingForce;
+      this._pendingForce = false;
+      this._reloadIfChanged(f);
+    }, 2000);
+  }
+
+  // #46: the single path for every reload trigger. Compares for "different",
+  // never "newer": Syncthing preserves the source file's mtime, so an
+  // incoming file can be older than our own last save on this device.
+  // Known limit: an edit made here before this check runs is still saved
+  // over the synced file. This narrows that window; it doesn't close it.
+  // (LiveAQuietLife, 2026-10-03)
+  // The guard is claimed before the first await, not after the stat check:
+  // on Android, focus and visibilitychange fire in the same instant on
+  // resume (confirmed in vault, 2026-10-03), and a guard set later let both
+  // calls through to reload twice. A forced call that arrives mid-check is
+  // queued rather than dropped, since Obsidian has already said the file
+  // changed.
+  async _reloadIfChanged(force = false) {
+    if (this._reloading) { if (force) this._scheduleRecheck(true); return; }
+    if (this._saving > 0) { if (force) this._scheduleRecheck(true); return; }
+
+    this._reloading = true;
+    try {
+      const stamp = await this._readDiskStamp();
+      if (!stamp) return;
+      const same = this._diskStamp
+        && stamp.mtime === this._diskStamp.mtime
+        && stamp.size === this._diskStamp.size;
+      if (same && !force) return;
+
+      if (this._reloadBlocked()) { this._scheduleRecheck(force); return; }
+
+      const changed = await this._loadAndNormalize();
+      this.applyEinkClass();
+      this.applyUiScale();
+      if (changed) {
+        await this.saveData(this.data);
+      }
+      await this._recordDiskStamp();
+      this.refreshTodayView();
+      this.refreshMainView();
+    } finally {
+      this._reloading = false;
+    }
   }
 
   async activateView() {
@@ -1018,12 +1245,63 @@ class HoldCoursePlugin extends Plugin {
   refreshMainView() {
     const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE);
     for (const leaf of leaves) {
-      if (leaf.view instanceof HoldCourseView) leaf.view.refresh();
+      // #46: render(true) keeps the scroll position — a background sync
+      // landing shouldn't throw a long list back to the top.
+      if (leaf.view instanceof HoldCourseView) leaf.view.render(true);
+    }
+  }
+
+  // #49: note links are stored as plain path text — lec.vaultLink,
+  // assignment.linkedNote (class-level and lecture-nested), resource.vaultLink
+  // — so nothing followed a note when it moved, and the link died with
+  // "Note not found in vault". This rewrites every stored path that matched
+  // the old one, across all semesters, then saves once.
+  // The prefix branch covers a renamed or moved folder: every stored path
+  // inside it moves too. It's safe whether Obsidian sends one event for the
+  // folder or one per file — a path already rewritten can't match again.
+  // On a synced second device the move arrives as delete + create, so no
+  // rename fires there; it gets the corrected paths through data.json (#46)
+  // instead. Doesn't repair links that were already broken before this.
+  // (LiveAQuietLife, 2026-10-03)
+  async _onVaultRename(file, oldPath) {
+    const newPath = file && file.path;
+    if (!newPath || !oldPath || newPath === oldPath) return;
+    const prefix = oldPath + '/';
+    const remap = (p) => {
+      if (!p) return null;
+      if (p === oldPath) return newPath;
+      if (p.startsWith(prefix)) return newPath + p.slice(oldPath.length);
+      return null;
+    };
+    let count = 0;
+    const fix = (obj, key) => {
+      const next = remap(obj[key]);
+      if (next) { obj[key] = next; count++; }
+    };
+    for (const sem of (this.data.semesters || [])) {
+      for (const cls of (sem.classes || [])) {
+        for (const lec of (cls.lectures || [])) fix(lec, 'vaultLink');
+        for (const a of this._allClassAssignments(cls)) fix(a, 'linkedNote');
+      }
+      for (const r of (sem.resources || [])) fix(r, 'vaultLink');
+    }
+    if (count) {
+      await this.save();
+      this.refreshMainView();
     }
   }
 
   async save() {
-    await this.saveData(this.data);
+    // #46: _saving keeps a reload check from mistaking our own in-flight
+    // write for an external one; the stamp afterwards marks this write as
+    // ours so the next check doesn't reload it. (LiveAQuietLife, 2026-10-03)
+    this._saving++;
+    try {
+      await this.saveData(this.data);
+      await this._recordDiskStamp();
+    } finally {
+      this._saving--;
+    }
     this.refreshTodayView();
   }
 
@@ -1168,7 +1446,10 @@ class HoldCoursePlugin extends Plugin {
   addClass(semesterId, classData) {
     const sem = this.data.semesters.find(s => s.id === semesterId);
     if (!sem) return null;
-    const colorIndex = sem.classes.length % COLOR_PALETTE.length;
+    // #53 / Discussion #18: a color picked in Add class wins; otherwise the
+    // lowest unused one.
+    const picked = classData.colorPicked && typeof classData.colorIndex === 'number';
+    const colorIndex = picked ? classData.colorIndex : firstFreeColorIndex(sem.classes);
     const cls = {
       id: generateId(),
       colorIndex,
@@ -1196,6 +1477,8 @@ class HoldCoursePlugin extends Plugin {
     // #12: absence is graded (the default) — key only added when the class
     // is explicitly marked ungraded, matching the removed/status idiom.
     if (classData.trackGrades === false) cls.notGraded = true;
+    // Presence-based like notGraded: absent = automatic color.
+    if (picked) cls.colorPicked = true;
     sem.classes.push(cls);
     return cls;
   }
@@ -1205,9 +1488,51 @@ class HoldCoursePlugin extends Plugin {
     if (cls) Object.assign(cls, updates);
   }
 
+  // #48: deleting a class used to leave its Library resources behind, still
+  // tagged to a class that no longer existed, while the confirmation said
+  // they'd be removed. The dialog and the delete both read this one plan, so
+  // what the dialog promises is exactly what happens.
+  //   - tagged only to this class → deleted
+  //   - also tagged to another class → kept, this class's tag removed
+  //   - linked as a book by another class's assignment → kept and untagged,
+  //     even if tagged only here; deleting it would turn that assignment's
+  //     book into "Book missing from Library"
+  // Tags pointing at classes that no longer exist don't count as "another
+  // class" — they're leftovers from deletes made before this fix.
+  // Resources not tagged to this class are never touched.
+  // (LiveAQuietLife, 2026-10-03)
+  _classResourcePlan(semesterId, classId) {
+    const sem = (this.data.semesters || []).find(s => s.id === semesterId);
+    if (!sem) return { toDelete: [], toUntag: [] };
+    const liveIds = new Set((sem.classes || []).map(c => c.id));
+    const linkedElsewhere = new Set();
+    for (const c of (sem.classes || [])) {
+      if (c.id === classId) continue;
+      for (const a of this._allClassAssignments(c)) {
+        if (a.linkedBook) linkedElsewhere.add(a.linkedBook);
+      }
+    }
+    const toDelete = [], toUntag = [];
+    for (const r of (sem.resources || [])) {
+      const ids = r.classIds || [];
+      if (!ids.includes(classId)) continue;
+      const others = ids.filter(id => id !== classId && liveIds.has(id));
+      if (others.length === 0 && !linkedElsewhere.has(r.id)) toDelete.push(r);
+      else toUntag.push(r);
+    }
+    return { toDelete, toUntag };
+  }
+
   deleteClass(semesterId, classId) {
     const sem = this.data.semesters.find(s => s.id === semesterId);
-    if (sem) sem.classes = sem.classes.filter(c => c.id !== classId);
+    if (!sem) return;
+    const { toDelete, toUntag } = this._classResourcePlan(semesterId, classId);
+    for (const r of toUntag) r.classIds = (r.classIds || []).filter(id => id !== classId);
+    if (toDelete.length) {
+      const gone = new Set(toDelete.map(r => r.id));
+      sem.resources = (sem.resources || []).filter(r => !gone.has(r.id));
+    }
+    sem.classes = sem.classes.filter(c => c.id !== classId);
   }
 
   findClass(semesterId, classId) {
@@ -1259,17 +1584,36 @@ class HoldCoursePlugin extends Plugin {
     if (!target.resources) target.resources = [];
     const idMap = new Map();
 
+    // #50: "nothing left behind needs it" used to mean only "no other class
+    // tags it". A book can also be needed by a staying class's reading that
+    // links it as linkedBook without tagging it — moving that record broke
+    // the reading's link ("Book missing from Library"). Same two checks
+    // _classResourcePlan() (#48) uses for delete: other live tags, or a link
+    // from another class's assignment. Tags pointing at classes that no
+    // longer exist don't count as staying behind. (2026-10-06)
+    const liveIds = new Set((source.classes || []).map(c => c.id));
+    const linkedElsewhere = new Set();
+    for (const c of (source.classes || [])) {
+      if (c.id === classId) continue;
+      for (const a of this._allClassAssignments(c)) {
+        if (a.linkedBook) linkedElsewhere.add(a.linkedBook);
+      }
+    }
+
     for (const res of relevant) {
       const remaining = (res.classIds || []).filter(id => id !== classId);
-      if (remaining.length === 0) {
+      const neededBehind = remaining.some(id => liveIds.has(id)) || linkedElsewhere.has(res.id);
+      if (!neededBehind) {
         // Nothing left behind needs it — move the record itself. Same id, so
         // linkedBook keeps resolving with no remap.
         source.resources = source.resources.filter(r => r.id !== res.id);
         res.classIds = [classId];
         target.resources.push(res);
       } else {
-        // Classes staying behind still reference it. Copy so neither side loses
-        // anything. A NEW id, deliberately: reusing it would work today only
+        // Classes staying behind still reference it (by tag or by link). Copy
+        // so neither side loses anything. The original keeps its other tags
+        // as they were; if it was only linked, it stays untagged, same
+        // outcome #48 gives a linked-elsewhere resource on delete. A NEW id, deliberately: reusing it would work today only
         // because every lookup is semester-scoped, and would be a landmine for a
         // future cross-semester Library.
         const copy = { ...res, id: generateId(), classIds: [classId] };
@@ -1286,12 +1630,12 @@ class HoldCoursePlugin extends Plugin {
       }
     }
 
-    // colorIndex is positional by design, so it is reassigned on arrival —
-    // carrying the old one over risks two classes rendering identically in the
-    // target semester's dashboard grid.
+    // An automatic color is reassigned on arrival (#53: lowest unused in the
+    // target), so the move doesn't create a duplicate. A color the user picked
+    // (Discussion #18) travels with the class — a shared color is intentional.
     source.classes.splice(idx, 1);
     if (!target.classes) target.classes = [];
-    cls.colorIndex = target.classes.length % COLOR_PALETTE.length;
+    if (!cls.colorPicked) cls.colorIndex = firstFreeColorIndex(target.classes);
     target.classes.push(cls);
     return true;
   }
@@ -1469,9 +1813,31 @@ class HoldCoursePlugin extends Plugin {
     if (resource) Object.assign(resource, updates);
   }
 
+  // #51: every assignment in the semester that links this resource as its
+  // book — class-level and lecture-nested, across all classes. One source
+  // for both the delete dialog's count and deleteResource()'s cleanup, same
+  // principle as _classResourcePlan() (#48): what the dialog says is what
+  // happens. (2026-10-06)
+  _resourceBookRefs(semesterId, resourceId) {
+    const sem = (this.data.semesters || []).find(s => s.id === semesterId);
+    if (!sem || !resourceId) return [];
+    const refs = [];
+    for (const c of (sem.classes || [])) {
+      for (const a of this._allClassAssignments(c)) {
+        if (a.linkedBook === resourceId) refs.push(a);
+      }
+    }
+    return refs;
+  }
+
+  // #51: deleting a resource used to leave every reading that linked it
+  // pointing at a missing id ("Book missing from Library"). Now clears those
+  // links; the readings themselves are untouched.
   deleteResource(semesterId, resourceId) {
     const sem = this.data.semesters.find(s => s.id === semesterId);
-    if (sem) sem.resources = (sem.resources || []).filter(r => r.id !== resourceId);
+    if (!sem) return;
+    for (const a of this._resourceBookRefs(semesterId, resourceId)) a.linkedBook = '';
+    sem.resources = (sem.resources || []).filter(r => r.id !== resourceId);
   }
 
   findResource(semesterId, resourceId) {
@@ -1542,6 +1908,7 @@ class HoldCourseView extends ItemView {
     this.viewedSemesterId = null;
     this.currentTab = 'Lectures';
     this.previousScreen = null;
+    this.assignmentOrigin = null; // #56
     this.globalAssignFilterClassId = null;
     this.globalAssignFilterType = null;
     this.classAssignFilterType = null;
@@ -1612,6 +1979,21 @@ class HoldCourseView extends ItemView {
       this.libraryFilterClassId = null;
       this.classAssignFilterType = null;
     }
+    // #56: where the assignment detail screen was opened from, captured on
+    // entry and kept through prev/next. previousScreen alone can't do this:
+    // stepping assignment → assignment overwrote it with 'assignment', and
+    // currentLectureId changed to the new item's lecture, so Back fell
+    // through to the class. A jump to another class's assignment (Today
+    // sidebar) starts fresh, since the old origin belongs to the other class.
+    if (screen === 'assignment') {
+      const stepping = this.screen === 'assignment' && classId === this.currentClassId;
+      if (!stepping) {
+        this.assignmentOrigin = {
+          screen: this.screen === 'assignment' ? null : this.screen,
+          lectureId: this.screen === 'lecture' ? this.currentLectureId : null,
+        };
+      }
+    }
     this.previousScreen = this.screen;
     this.screen = screen;
     this.currentClassId = classId;
@@ -1639,8 +2021,6 @@ class HoldCourseView extends ItemView {
     this.currentTab = tab;
     this.render();
   }
-
-  refresh() { this.render(); }
 
   // #37: contentEl.empty() below rebuilds .hc-content as a new DOM node,
   // which starts at scrollTop 0 — so any plain render() reset a long list
@@ -2050,16 +2430,21 @@ class HoldCourseView extends ItemView {
   _renderTodayStrip(content, sem) {
     const today = getTodayISO();
 
-    const dueToday = getAllAssignments(sem)
+    // #55: completed/dropped classes stay out of the strip, as they already
+    // do on Calendar and Today. A dropped class's unfinished work otherwise
+    // sat in Overdue indefinitely.
+    const active = getAllAssignments(sem, true);
+
+    const dueToday = active
       .filter(a => a.status !== 'done' && a.dueDate === today)
       .sort((a, b) => a.title.localeCompare(b.title));
 
-    const comingUp = getAllAssignments(sem)
+    const comingUp = active
       .filter(a => a.status !== 'done' && a.dueDate && a.dueDate > today)
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
       .slice(0, 5);
 
-    const overdue = getAllAssignments(sem)
+    const overdue = active
       .filter(a => a.status !== 'done' && a.dueDate && a.dueDate < today)
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
@@ -2172,6 +2557,12 @@ class HoldCourseView extends ItemView {
     // Class name
     const nameRow = body.createDiv('hc-class-name-row');
     nameRow.createSpan({ cls: 'hc-class-name', text: cls.name });
+    // #55: same tag the class page shows, so a dropped/completed class is
+    // recognizable from the dashboard.
+    const inactive = isClassInactive(cls);
+    if (inactive) {
+      nameRow.createSpan({ cls: 'hc-class-status-tag', text: classStatusLabel(cls.status).toUpperCase() });
+    }
     if (cls.courseUrl) {
       const urlBtn = nameRow.createEl('a', { cls: 'hc-class-url-btn', href: cls.courseUrl });
       urlBtn.setAttribute('target', '_blank');
@@ -2223,7 +2614,12 @@ class HoldCourseView extends ItemView {
     body.createDiv('hc-class-divider');
 
     // Next assignment
-    if (next) {
+    // #55: nothing to chase in a completed/dropped class — no red due date,
+    // no "next up". The lecture count below stays as the record.
+    if (inactive) {
+      body.createDiv({ cls: 'hc-class-next-label', text: `Class ${classStatusLabel(cls.status).toLowerCase()}` });
+      body.createDiv({ cls: 'hc-class-next-title', text: '—' });
+    } else if (next) {
       const info = getDueInfo(next.dueDate);
       // #22: this block deep-links to the assignment's own tab (Readings vs
       // Assignments, matching #9) instead of falling through to the card's
@@ -3210,7 +3606,11 @@ class HoldCourseView extends ItemView {
     const typeStyle = getTypeStyle(assignment.type);
 
     // Top bar: back button + prev/next nav
-    const assignSorted = getAssignmentsSorted(cls);
+    // #57: step within the item's own tab — Readings among Readings, the rest
+    // among the rest — since #9 split them. The counter follows suit.
+    const isReading = assignment.type === 'Reading';
+    const assignSorted = getAssignmentsSorted(cls)
+      .filter(item => (item.assignment.type === 'Reading') === isReading);
     const assignIdx = assignSorted.findIndex(item => item.assignment.id === assignment.id);
     const prevAssign = assignIdx > 0 ? assignSorted[assignIdx - 1] : null;
     const nextAssign = assignIdx < assignSorted.length - 1 ? assignSorted[assignIdx + 1] : null;
@@ -3219,11 +3619,14 @@ class HoldCourseView extends ItemView {
     const backBtn = topbar.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
-    const fromGlobal = this.previousScreen === 'assignments';
-    const fromLecture = this.previousScreen === 'lecture';
+    // #56: read the origin captured on entry, not previousScreen.
+    const origin = this.assignmentOrigin || {};
+    const srcLecId = origin.lectureId;
+    const fromGlobal = origin.screen === 'assignments';
+    const fromLecture = origin.screen === 'lecture' && !!srcLecId && cls.lectures.some(l => l.id === srcLecId);
     if (fromGlobal) backBtn.createSpan({ text: 'All Assignments' });
     else if (fromLecture) {
-      const srcLec = cls.lectures.find(l => l.id === this.currentLectureId);
+      const srcLec = cls.lectures.find(l => l.id === srcLecId);
       const srcSorted = getLecturesSorted(cls);
       const srcNum = srcLec ? srcSorted.indexOf(srcLec) + 1 : '?';
       backBtn.createSpan({ text: `Lecture ${srcNum}` });
@@ -3232,7 +3635,7 @@ class HoldCourseView extends ItemView {
       if (fromGlobal) {
         this.navigate('assignments');
       } else if (fromLecture) {
-        this.navigate('lecture', cls.id, this.currentLectureId);
+        this.navigate('lecture', cls.id, srcLecId);
       } else {
         // #9: back to Readings for a Reading item, Assignments otherwise.
         this.currentTab = assignment.type === 'Reading' ? 'Readings' : 'Assignments';
@@ -3368,13 +3771,17 @@ class HoldCourseView extends ItemView {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Linked Book' });
       const bookSection = content.createDiv('hc-assign-book-section');
 
-      const classResources = (sem.resources || []).filter(r => (r.classIds || []).includes(cls.id));
-      const linkedResource = assignment.linkedBook ? (sem.resources || []).find(r => r.id === assignment.linkedBook) : null;
-      const isOrphaned = assignment.linkedBook && !linkedResource;
+      // #59: both read fresh on every redraw. Computed once per render, the
+      // class list missed a book quick-added from this section, so a later
+      // "Change" opened a picker without it; and the orphan note came back
+      // after Remove on a reading that had opened with a missing book.
+      let classResources = [];
 
       const renderBookSection = () => {
         bookSection.empty();
+        classResources = (sem.resources || []).filter(r => (r.classIds || []).includes(cls.id));
         const res = assignment.linkedBook ? (sem.resources || []).find(r => r.id === assignment.linkedBook) : null;
+        const isOrphaned = !!assignment.linkedBook && !res;
 
         if (res) {
           const bookRow = bookSection.createDiv('hc-assign-book-row');
@@ -3566,7 +3973,7 @@ class HoldCourseView extends ItemView {
     doneToggle.addEventListener('click', () => {
       cls.examShowDone = !cls.examShowDone;
       this.plugin.save();
-      this.render();
+      this.render(true); // #60: keep scroll, as #37 did for the other lists
     });
 
     const addBtn = controlRow.createEl('button', { cls: 'hc-btn' });
@@ -3645,7 +4052,7 @@ class HoldCourseView extends ItemView {
       e.stopPropagation();
       exam.status = exam.status === 'done' ? 'not-started' : 'done';
       this.plugin.save();
-      this.render();
+      this.render(true); // #60
     });
 
     row.addEventListener('click', () => this.navigate('exam', cls.id, null, null, exam.id));
@@ -3842,7 +4249,7 @@ class HoldCourseView extends ItemView {
     sortBtn.addEventListener('click', () => {
       sem.librarySort = sortCycle[sortKey];
       this.plugin.save();
-      this.render();
+      this.render(true); // #60
     });
 
     const addBtn = libRightControls.createEl('button', { cls: 'hc-btn' });
@@ -3891,7 +4298,7 @@ class HoldCourseView extends ItemView {
       }
     }
 
-    // #46: toggle in place instead of only on the detail screen. Library was
+    // #43: toggle in place instead of only on the detail screen. Library was
     // the one list whose status pill had no handler, so the click fell
     // through to the row's navigate below and you had to open the book,
     // toggle there, and come back. Same shape as Lectures/Assignments/
@@ -4239,10 +4646,21 @@ class HoldCourseView extends ItemView {
     }
     if (!showDone) {
       allAssigns = allAssigns.filter(a => a.status !== 'done');
+      // #55: completed/dropped classes sit behind "Show done" too, matching
+      // Calendar and Today — unless that class is picked in the filter, which
+      // is an explicit request to see it.
+      if (!this.globalAssignFilterClassId) {
+        allAssigns = allAssigns.filter(a => !a.classInactive);
+      }
     }
 
-    const STATUS_ORDER = { 'overdue': 0, 'today': 1, 'soon': 2, 'upcoming': 3, 'done': 4, 'none': 5 };
-    const getUrgency = (a) => a.dueDate ? (getDueInfo(a.dueDate)?.urgency || 'upcoming') : 'none';
+    // #58: the Status column sorts by the status it shows. It used to rank
+    // by due urgency (overdue/today/soon), so two "Not started" rows sorted
+    // apart and Done rows mixed in. Anything else reads as Not started, same
+    // as statusLabel(). Due date stays the tiebreaker, so urgency still
+    // orders rows within one status.
+    const STATUS_RANK = { 'not-started': 0, 'in-progress': 1, 'done': 2 };
+    const statusRank = (a) => STATUS_RANK[a.status] ?? 0;
 
     // ── Sort ──────────────────────────────────────────────────────────────────
     const dir = sem.assignSortDir === 'desc' ? -1 : 1;
@@ -4276,7 +4694,10 @@ class HoldCourseView extends ItemView {
       const target = getReadingPaceTargetDate(a);
       if (!target) return remaining;
       const days = getDaysUntil(target) + 1;
-      return days <= 0 ? remaining : Math.ceil(remaining / days);
+      // Unrounded, to match the one-decimal display (#30 follow-up) — a
+      // rounded rank sorted 3.2/day and 3.8/day as equals.
+      // (LiveAQuietLife, 2026-10-03)
+      return days <= 0 ? remaining : remaining / days;
     };
 
     allAssigns.sort((a, b) => {
@@ -4292,7 +4713,7 @@ class HoldCourseView extends ItemView {
       } else if (key === 'title') {
         primary = dir * txt(a.title).localeCompare(txt(b.title));
       } else if (key === 'status') {
-        primary = dir * ((STATUS_ORDER[getUrgency(a)] ?? 5) - (STATUS_ORDER[getUrgency(b)] ?? 5));
+        primary = dir * (statusRank(a) - statusRank(b));
       } else if (key === 'grade') {
         // Ungraded sinks in both directions, same reasoning as undated.
         const ga = (a.grade || '').trim(), gb = (b.grade || '').trim();
@@ -4363,6 +4784,10 @@ class HoldCourseView extends ItemView {
       }
       prevClassId = a.classId;
       if (a.status === 'done') row.addClass('hc-atable-row--done');
+      // #55: a completed/dropped class's row only appears with Show done or a
+      // class filter, and is greyed like done rows with no urgency color, so
+      // it reads as history rather than live work.
+      if (a.classInactive) row.addClass('hc-atable-row--done');
 
       // Code
       const codeEl = row.createDiv({ cls: 'hc-atable-code', text: cls.code });
@@ -4381,7 +4806,7 @@ class HoldCourseView extends ItemView {
       const titleCell = row.createDiv('hc-atable-titlecell');
       const titleRow = titleCell.createDiv('hc-title-flag-row');
       titleRow.createDiv({ cls: 'hc-atable-title', text: a.title });
-      renderTermWindowFlag(titleRow, a.dueDate, cls, a.status === 'done');
+      renderTermWindowFlag(titleRow, a.dueDate, cls, a.status === 'done' || a.classInactive);
 
       let lecLabel = 'Class-level';
       if (a.lectureId) {
@@ -4391,6 +4816,7 @@ class HoldCourseView extends ItemView {
           lecLabel = `L${sorted.indexOf(lec) + 1} — ${lec.title}`;
         }
       }
+      if (a.classInactive) lecLabel += ` · Class ${classStatusLabel(cls.status).toLowerCase()}`;
       titleCell.createDiv({ cls: 'hc-atable-context', text: lecLabel });
 
       // Due date. Urgency colour carries the same meaning it does elsewhere;
@@ -4399,7 +4825,7 @@ class HoldCourseView extends ItemView {
       const dueCell = row.createDiv('hc-atable-duecell');
       if (info) {
         const dateEl = dueCell.createDiv({ cls: 'hc-atable-due', text: formatDate(a.dueDate) });
-        if (a.status !== 'done') {
+        if (a.status !== 'done' && !a.classInactive) {
           dateEl.style.color = info.color;
           if (info.urgency !== 'upcoming') {
             dueCell.createDiv({ cls: 'hc-atable-due-note', text: info.urgency === 'overdue' ? 'Overdue' : info.note })
@@ -4947,9 +5373,13 @@ class HoldCourseView extends ItemView {
     const classes = sem.classes || [];
 
     const bar = content.createDiv('hc-cal-filter-bar');
-    bar.createDiv({ cls: 'hc-cal-filter-label', text: 'Class' });
+    // #47: each label + button pair lives in its own group so the bar can
+    // wrap on a phone without stranding a label at the end of one line and
+    // its button on the next. (LiveAQuietLife, 2026-10-03)
+    const classGroup = bar.createDiv('hc-cal-filter-group');
+    classGroup.createDiv({ cls: 'hc-cal-filter-label', text: 'Class' });
 
-    const filterWrap = bar.createDiv('hc-cal-filter-wrap');
+    const filterWrap = classGroup.createDiv('hc-cal-filter-wrap');
     const filterBtn  = filterWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
     const filterIcon = filterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(filterIcon, 'filter');
@@ -4991,9 +5421,10 @@ class HoldCourseView extends ItemView {
     });
 
     // Show (kind) dropdown — mirrors the Class dropdown's shape.
-    bar.createDiv({ cls: 'hc-cal-filter-label', text: 'Show' });
+    const kindGroup = bar.createDiv('hc-cal-filter-group');
+    kindGroup.createDiv({ cls: 'hc-cal-filter-label', text: 'Show' });
 
-    const kindWrap = bar.createDiv('hc-cal-filter-wrap');
+    const kindWrap = kindGroup.createDiv('hc-cal-filter-wrap');
     const kindBtn  = kindWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
     const kindIcon = kindBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(kindIcon, 'eye');
@@ -5033,9 +5464,10 @@ class HoldCourseView extends ItemView {
     // to Assignments, since it can do nothing otherwise. Same rule the
     // plugin already applies to "Show removed semesters."
     if (this.calFilterKind === 'assignment') {
-      bar.createDiv({ cls: 'hc-cal-filter-label', text: 'Type' });
+      const typeGroup = bar.createDiv('hc-cal-filter-group');
+      typeGroup.createDiv({ cls: 'hc-cal-filter-label', text: 'Type' });
 
-      const typeWrap = bar.createDiv('hc-cal-filter-wrap');
+      const typeWrap = typeGroup.createDiv('hc-cal-filter-wrap');
       const typeBtn  = typeWrap.createEl('button', { cls: 'hc-btn hc-btn--sm' });
       const typeIcon = typeBtn.createSpan({ cls: 'hc-btn-icon' });
       setIcon(typeIcon, 'tag');
@@ -5561,6 +5993,12 @@ class AddClassModal extends Modal {
       location: '', startDate: '', endDate: '', meetingStartTime: '', meetingEndTime: '',
       trackGrades: true,
     };
+    // #53 / Discussion #18: preselect the color addClass() would choose, so
+    // the swatch shown is the one you get. Only a tap marks it picked.
+    const sem = plugin.data.semesters.find(s => s.id === semesterId);
+    this.semClasses = sem ? sem.classes : [];
+    this.formData.colorIndex = firstFreeColorIndex(this.semClasses);
+    this.formData.colorPicked = false;
   }
 
   onOpen() {
@@ -5625,6 +6063,11 @@ class AddClassModal extends Modal {
     // fields, grade chips, assignments and exams alike).
     new Setting(contentEl).setName('Track grades').addToggle(toggle => {
       toggle.setValue(this.formData.trackGrades).onChange(v => this.formData.trackGrades = v);
+    });
+
+    renderColorPicker(contentEl, this.semClasses, null, this.formData.colorIndex, i => {
+      this.formData.colorIndex = i;
+      this.formData.colorPicked = true;
     });
   }
 
@@ -5734,7 +6177,11 @@ class EditClassModal extends Modal {
       meetingStartTime: cls.meetingStartTime || '',
       meetingEndTime: cls.meetingEndTime || '',
       trackGrades: isClassGraded(cls),
+      colorIndex: typeof cls.colorIndex === 'number' ? cls.colorIndex % COLOR_PALETTE.length : 0,
     };
+    this.origColorIndex = this.formData.colorIndex;
+    const sem = plugin.data.semesters.find(s => s.id === semesterId);
+    this.semClasses = sem ? sem.classes : [];
   }
 
   onOpen() {
@@ -5793,6 +6240,10 @@ class EditClassModal extends Modal {
     // #12
     new Setting(contentEl).setName('Track grades').addToggle(toggle => {
       toggle.setValue(this.formData.trackGrades).onChange(v => this.formData.trackGrades = v);
+    });
+
+    renderColorPicker(contentEl, this.semClasses, this.cls, this.formData.colorIndex, i => {
+      this.formData.colorIndex = i;
     });
   }
 
@@ -5890,6 +6341,12 @@ class EditClassModal extends Modal {
     // can't delete a key, so handled directly on the live class object.
     if (this.formData.trackGrades) delete this.cls.notGraded;
     else this.cls.notGraded = true;
+    // #53 / Discussion #18: only an actual change marks the color as picked,
+    // so opening and saving Edit class never pins an automatic color.
+    if (this.formData.colorIndex !== this.origColorIndex) {
+      this.cls.colorIndex = this.formData.colorIndex;
+      this.cls.colorPicked = true;
+    }
     this.onSave();
     this.close();
   }
@@ -5980,10 +6437,18 @@ class DeleteClassModal extends Modal {
     contentEl.empty();
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Delete class' });
-    contentEl.createEl('p', {
-      cls: 'hc-modal-body',
-      text: `Delete "${this.cls.code} — ${this.cls.name}"? All lectures, assignments, exams, and resources for this class will be removed. This cannot be undone.`,
-    });
+
+    // #48: name the Library outcome exactly, from the same plan deleteClass
+    // runs. Each sentence appears only when its count is above zero.
+    const { toDelete, toUntag } = this.plugin._classResourcePlan(this.semesterId, this.cls.id);
+    const res = (n) => `${n} library ${n === 1 ? 'resource' : 'resources'}`;
+    const parts = [
+      `Delete "${this.cls.code} — ${this.cls.name}"? All its lectures, assignments, and exams will be removed.`,
+    ];
+    if (toDelete.length) parts.push(`${res(toDelete.length)} used only by this class will be deleted.`);
+    if (toUntag.length) parts.push(`${res(toUntag.length)} used by other classes will stay.`);
+    parts.push('This cannot be undone.');
+    contentEl.createEl('p', { cls: 'hc-modal-body', text: parts.join(' ') });
 
     const footer = contentEl.createDiv('hc-modal-footer');
     const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
@@ -6263,7 +6728,7 @@ class BulkAddLecturesModal extends Modal {
 
     contentEl.createDiv({
       cls: 'hc-bulk-hint',
-      text: 'One lecture per line. A date at the end of a line (2026-08-24, Aug 24, or 8/24) is optional.',
+      text: 'One lecture per line. A date at the end of a line (2026-08-24, Aug 24, Aug 24, 2026, or 8/24) is optional.',
     });
 
     this.textarea = contentEl.createEl('textarea', { cls: 'hc-bulk-textarea' });
@@ -7514,10 +7979,16 @@ class DeleteResourceModal extends Modal {
     contentEl.empty();
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Delete resource' });
-    contentEl.createEl('p', {
-      cls: 'hc-modal-body',
-      text: `Delete "${this.resource.title}"? This cannot be undone.`,
-    });
+    // #51: name the readings that lose their book, from the same list
+    // deleteResource() clears. Sentence appears only when the count is above
+    // zero, same as the Delete class dialog (#48).
+    const refCount = this.plugin._resourceBookRefs(this.semesterId, this.resource.id).length;
+    const parts = [`Delete "${this.resource.title}"?`];
+    if (refCount) {
+      parts.push(`It's the linked book for ${refCount} ${refCount === 1 ? 'reading' : 'readings'}. ${refCount === 1 ? 'That reading stays' : 'Those readings stay'}, without a linked book.`);
+    }
+    parts.push('This cannot be undone.');
+    contentEl.createEl('p', { cls: 'hc-modal-body', text: parts.join(' ') });
 
     const footer = contentEl.createDiv('hc-modal-footer');
     const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });

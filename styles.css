@@ -1,4 +1,4 @@
-/* --- Hold Course - v1.8.0 -------------------------------------------------- */
+/* --- Hold Course - v1.9.2 -------------------------------------------------- */
 
 /* Root layout */
 .hc-root {
@@ -111,12 +111,42 @@
 
 .hc-nav-icon svg { width: 13px; height: 13px; }
 
+/* #32: on phone the breadcrumb shrinks to 0 but the nav buttons still don't
+   fit beside the logo, so they overflowed off the right edge and got clipped
+   by .hc-root's overflow:hidden. Force nav onto its own full-width row
+   instead of squeezing it — nothing hidden, no new scroll affordance to
+   discover. Scoped to is-phone, matching the drag-bar precedent, not is-mobile. */
+body.is-phone .hc-toolbar {
+  flex-wrap: wrap;
+}
+
+body.is-phone .hc-nav {
+  flex: 1 1 100%;
+}
+
+body.is-phone .hc-nav-btn {
+  /* Buttons had no min-width:0, so icon+label refused to shrink and pushed
+     .hc-nav past the toolbar's clipped edge. Trimmed padding rather than
+     letting labels wrap unpredictably. */
+  flex: 1;
+  justify-content: center;
+  padding: 5px 8px;
+}
+
 /* --- Content area ---------------------------------------------------------- */
 
+/* #31: overflow-y:auto with no overflow-x set makes overflow-x compute to
+   auto too, so a wide table scrolled the whole content area sideways —
+   headings and filters included. Locked to hidden; tables scroll
+   themselves. */
 .hc-content {
   padding: 20px 20px 48px;
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
+  /* #40: stops scroll chaining into view-content, which dragged
+     .hc-root out of position.  */
+  overscroll-behavior-y: contain;
 }
 
 /* --- Dashboard header ------------------------------------------------------ */
@@ -148,7 +178,7 @@
   background: none;
   border: none;
   cursor: pointer;
-  padding: 0 0 0 4px; /* was originally 0 */ 
+  padding: 0 0 0 4px; /* was originally 0 */
   font-family: inherit;
 }
 
@@ -179,6 +209,16 @@
   border-radius: 8px;
   padding: 4px 0;
   min-width: 190px;
+}
+
+/* Appended to <body> by _openFilterDropdown (main.js) instead of a trigger's
+   own wrap, so absolute/top/left above don't apply — position is set to
+   fixed and placed via inline left/top from getBoundingClientRect() at
+   open time. */
+.hc-sem-drop.hc-sem-drop--floating {
+  position: fixed;
+  top: auto;
+  left: auto;
 }
 
 .hc-sem-drop-item {
@@ -254,6 +294,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.hc-today-title {
+  flex: 1;
+}
+
+.hc-today-date {
+  flex-shrink: 0;
 }
 
 .hc-today-dot {
@@ -341,6 +390,10 @@
 }
 
 .hc-class-card:hover .hc-card-more-btn { opacity: 1; }
+/* Hover cannot happen on touch, so the menu is invisible on mobile unless
+   shown persistently. Audited: this is the only control in the stylesheet
+   that starts at opacity 0 and relies on hover to appear. */
+body.is-mobile .hc-card-more-btn { opacity: 1; }
 .hc-card-more-btn:hover { background: var(--background-secondary); color: var(--text-normal); }
 .hc-card-more-btn svg { width: 14px; height: 14px; }
 
@@ -427,6 +480,21 @@
   margin-bottom: 8px;
 }
 
+/* #22: separate click target from the rest of the card (deep-links to the
+   assignment's tab instead of falling through to the card's default
+   Lectures click) — the hover state is the only signal that this region
+   behaves differently, so it needs to be visible but not loud.
+ */
+.hc-class-next-block {
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.hc-class-next-block:hover {
+  background: var(--background-secondary);
+}
+
 .hc-class-next-label {
   font-size: 11px;
   color: var(--text-faint);
@@ -439,11 +507,35 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .hc-class-next-due {
   font-size: 11px;
   margin-top: 2px;
+}
+
+/* The lecture title directly above this ellipsizes to one line; this row
+   carries the same kind of content (an arbitrary assignment title) and needs
+   to match, or one card grows taller than its neighbour on a long title.
+   min-width: 0 on the row is what lets it shrink inside the card at all; the
+   icon holds its size via .hc-inline-icon's own flex-shrink: 0.
+ */
+.hc-class-next-reading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  min-width: 0;
+}
+
+.hc-class-next-reading > span:not(.hc-inline-icon) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hc-class-lec-progress {
@@ -552,6 +644,16 @@
   padding-left: 32px;
 }
 
+/* #33: on phone, .hc-class-people-row's flex-wrap correctly drops TA to its
+   own row below Professor — but nothing removed the divider meant for
+   side-by-side columns, so TA kept a 32px left indent and a vertical rule
+   with no neighbor left to divide from. That's the "off center" look:
+   not wrong spacing, a divider with nothing to divide. */
+body.is-phone .hc-class-person + .hc-class-person {
+  border-left: none;
+  padding-left: 0;
+}
+
 .hc-class-person-label {
   font-size: 10px;
   font-weight: 600;
@@ -568,10 +670,32 @@
 
 /* --- Tabs ------------------------------------------------------------------ */
 
+/* #13: with no wrap and no scroll, Exams/Library ran off-screen past 100%
+   zoom with no way to reach them. overflow-x:auto is invisible at 100%
+   and only engages when content needs it. Keep unconditional — gating it
+   behind hc-scaled broke button visibility above 100%. */
+/* #45: second-order effect of the overflow-x above, mobile only in practice.
+   Non-visible overflow-x forces overflow-y to compute to auto as well, and
+   that drops this row's automatic min-height to zero. Obsidian's mobile
+   build lays .modal-content out as a column flex container, so the row is a
+   flex item; with its min-height floor gone, flex-shrink crushed it to 0 and
+   the now-active overflow-y clipped the 44px tab buttons out of sight. Only
+   the border-bottom rendered — a bare line under the modal title, with the
+   tabs still tappable but invisible. Confirmed in vault 2026-09-16: computed
+   height was 0.761905px, exactly border-bottom-width.
+
+   Unconditional deliberately. flex-shrink is inert unless the element is a
+   flex item, and the main view's tab row sits in .hc-content (block, not
+   flex), so this is a no-op everywhere except modals. Covers Add class and
+   Edit class together rather than duplicating per modal. Do not remove the
+   overflow-x above to "fix" this — it is load-bearing for #13.
+    */
 .hc-tab-row {
   display: flex;
   border-bottom: 1px solid var(--background-modifier-border);
   margin-bottom: 24px;
+  overflow-x: auto;
+  flex-shrink: 0;
 }
 
 .hc-tab {
@@ -636,6 +760,28 @@
 
 .hc-btn-icon svg { width: 13px; height: 13px; }
 
+/* --- Term-window flag -------------------------------------------------------
+   Shared by the Assignments, Readings, and Exams rows. Renders only when the
+   item's due date falls outside its class's own startDate/endDate — silent
+   otherwise, same pattern as .hc-lecture-note-flag. Deliberately muted, not
+   danger-red: this is a validity signal, not an urgency signal, and must not
+   be mistaken for the due-date badge's own color language. */
+.hc-title-flag-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hc-term-window-flag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-warning);
+}
+
+.hc-term-window-flag svg { width: 13px; height: 13px; }
+
 /* --- Inline icon ----------------------------------------------------------- */
 
 .hc-inline-icon {
@@ -681,6 +827,15 @@
 }
 
 .hc-drag-bar:active { cursor: grabbing; }
+
+/* The drag handler binds mouse events only, so a finger can't move the
+   modal — and a phone modal is full-screen anyway, so dragging gains
+   nothing. Scoped to is-phone, NOT is-mobile: a stylus fires
+   mouse-compatible events, and on an e-ink tablet the pen is the primary
+   input, so tablets keep a bar that works for them. Handler untouched. */
+body.is-phone .hc-drag-bar {
+  display: none;
+}
 
 .hc-drag-bar-dots {
   font-size: 14px;
@@ -739,6 +894,17 @@
   width: 320px;
 }
 
+/* Course page URL / Meeting link placeholders were inheriting Obsidian's
+   own type="url" styling, which colors text like an active link even in
+   the empty placeholder state — indistinguishable from a real value at a
+   glance. Only the placeholder (empty) state is touched here, so a real
+   typed URL still gets Obsidian's normal link treatment once entered.
+   Scoped to .hc-modal (present on every HC modal), so this also covers
+   the Resource modal's URL field for free. */
+.hc-modal .setting-item-control input[type="url"]::placeholder {
+  color: var(--text-faint);
+}
+
 /* Add/Edit Resource modals — Title and URL routinely overflow the shared
    320px width (long book titles with subtitles, full archive.org links),
    so the frame widens and every text input stretches to fill its row.
@@ -757,15 +923,16 @@
   flex: 0 0 95px;
 }
 
-/* #11: First attempt floored the input (min-width: 90px) and locked the
-   button (flex-shrink: 0) so neither could shrink. On the real device that
-   backfired — with no "give" left in either element, the row overflowed
-   instead of squeezing: the input got pushed out of view entirely and
-   Browse stretched to fill the line on its own. Switched approach —
-   instead of fighting over who shrinks, let the row wrap: if input+button
-   don't both fit, the input drops to its own full-width line above the
-   button instead of overflowing or disappearing. (LiveAQuietLife/Claude,
-   2026-08-30 — confirm on device before closing) */
+/* #18: Obsidian's mobile build turns this row into a column, so a fixed
+   flex-basis sizes height instead of width and leaves a gap above every
+   input. Un-applied on mobile to fall back to Obsidian's stacking. */
+body.is-mobile .hc-resource-modal .setting-item-info {
+  flex: 0 0 auto;
+}
+
+/* #11: flooring the input and locking the button left no give, so the row
+   overflowed instead of squeezing — the input vanished entirely. Let the
+   row wrap instead: the input drops to its own line above the button. */
 .hc-resource-modal .setting-item-control {
   flex: 1;
   min-width: 0;
@@ -785,30 +952,21 @@
   width: auto;
 }
 
-/* #11: Browse doesn't need flex-shrink: 0 anymore — wrapping means it never
-   has to compete with the input for space on the same line. It does need
-   an explicit width, though: once it wraps onto its own line, Obsidian's
-   own mobile styling stretches a lone button to fill the full row (same
-   as the Unread dropdown above it) — but Cancel/Add resource at the
-   footer stay compact, so a full-width Browse reads as inconsistent
-   inside the same modal. Locked to its natural content size instead.
-   (LiveAQuietLife/Claude, 2026-08-30 — confirm on device) */
+/* #11: Browse no longer needs flex-shrink:0 — wrapping means it never
+   competes with the input. It does need an explicit width: Obsidian
+   stretches a lone button to fill its row, which reads inconsistent next
+   to the compact footer buttons. Locked to natural content size. */
 .hc-resource-modal .setting-item-control button {
   width: auto;
   flex: 0 0 auto;
   align-self: flex-start;
 }
 
-/* Add/Edit Class modals — same treatment as Resource, with a wider label
-   column. Class's longest labels ("Course page URL", "Professor email",
-   "TA office hours") are wider than Resource's "Vault link", so 95px wraps
-   here; 115px is the floor before that starts.
-
-   This replaces four inline `text.inputEl.style.width = '100%'` calls on the
-   URL fields. Those forced the URL input to fill its control column while
-   every sibling sat at a right-aligned fixed 320px, producing the ragged
-   left edge. Inline style also beat the global width rule, so the URL fields
-   were never picking it up. Width belongs here, not at the call sites. */
+/* Same treatment as Resource, with a wider label column: Class's longest
+   labels ("Course page URL") wrap at 95px, so 115px is the floor.
+   Replaces four inline width='100%' calls on the URL fields, which beat
+   the global width rule and left a ragged left edge. Width belongs here,
+   not at the call sites. */
 .hc-class-modal-frame {
   width: 620px;
   max-width: 90vw;
@@ -816,6 +974,14 @@
 
 .hc-class-modal .setting-item-info {
   flex: 0 0 115px;
+}
+
+/* #18: the 115px flex-basis above sizes width on desktop, but Obsidian's
+   mobile build lays .setting-item out as a column, where flex-basis sizes
+   height — a fixed empty box above every input. Un-applied so mobile
+   falls back to Obsidian's own default, which already renders correctly. */
+body.is-mobile .hc-class-modal .setting-item-info {
+  flex: 0 0 auto;
 }
 
 .hc-class-modal .setting-item-control {
@@ -833,6 +999,37 @@
   flex: 1;
   min-width: 0;
   width: auto;
+}
+
+/* Scoped to this Setting row, not the whole modal, so Title/Due date keep
+   their fixed-320px look. Display div and text input are selected
+   together: the field swaps between them, and both need identical sizing
+   or the row changes width when you pick a file. The label column must be
+   pinned too — Obsidian's .setting-item-info is flex:1, so "Linked note"
+   claims the row's slack and no flex-basis on the control's children can
+   help when the control column has no width to hand out. */
+.hc-linked-note-setting .setting-item-info {
+  flex: 0 0 auto;
+}
+
+.hc-linked-note-setting .setting-item-control {
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hc-linked-note-setting .setting-item-control input[type="text"],
+.hc-linked-note-setting .setting-item-control .hc-assign-link-display {
+  flex: 1 1 160px;
+  min-width: 0;
+  width: auto;
+}
+
+.hc-linked-note-setting .setting-item-control button {
+  width: auto;
+  flex: 0 0 auto;
+  align-self: flex-start;
 }
 
 /* Custom time picker — hour/minute dropdowns + AM/PM toggle, styled like
@@ -880,6 +1077,14 @@
   transition: all 0.1s;
 }
 
+/* #54: no time set — minute and AM/PM are disabled until an hour is picked. */
+.hc-time-picker--empty .hc-time-select:disabled,
+.hc-time-picker--empty .hc-time-period-btn:disabled,
+.hc-time-picker--empty .hc-time-colon {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .hc-time-period-btn--active {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
@@ -900,6 +1105,46 @@
 
 .hc-day-toggle:hover { background: var(--background-secondary); }
 
+/* #11: on a phone all seven day chips stretched full-width into seven
+   rows. Obsidian's own rule wins on specificity —
+   .is-phone .modal .setting-item-control button:not(.clickable-icon)
+   { width: 100% } — which struck through an earlier two-class override.
+   Flex was never the lever: an explicit width makes flex sizing
+   irrelevant. Matched their specificity rather than using !important,
+   which can break themes. is-phone because that's what their rule
+   targets; tablets never had this. */
+body.is-phone .modal .setting-item-control .hc-day-toggle:not(.clickable-icon) {
+  width: auto;
+}
+
+/* #53 / Discussion #18: class color swatches in Add/Edit class.
+   Selectors are deliberately as specific as Obsidian's own modal button rules
+   (border-radius, padding, box-shadow, and on phones width: 100% — see #11
+   above). At plain class specificity those won and the swatches rendered as
+   rounded squares with no visible selection ring. */
+.hc-color-picker {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 3px;
+}
+
+body .modal .setting-item-control .hc-color-swatch:not(.clickable-icon) {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  margin: 0;
+  border-radius: 50%;
+  border: none;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+body .modal .setting-item-control .hc-color-swatch.hc-color-swatch--active:not(.clickable-icon) {
+  box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--text-normal);
+}
+
 .hc-day-toggle--active {
   background: var(--interactive-accent);
   color: var(--text-on-accent);
@@ -908,11 +1153,16 @@
 
 /* --- Lecture list ---------------------------------------------------------- */
 
+/* #13: same gap as .hc-tab-row — no overflow handling, so Add lecture ran
+   off-screen at higher zoom. justify-content:space-between is a no-op
+   once this needs to scroll. Keep unconditional; gating it behind
+   hc-scaled broke button visibility above 100%. */
 .hc-lecture-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  overflow-x: auto;
 }
 
 .hc-lecture-left-controls {
@@ -978,6 +1228,20 @@
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+}
+
+/* #11: the right cluster's width varies (linked note present or not,
+   variable counts, differing status labels) and being flex-shrink:0 it
+   takes its natural width first, so the title truncates at a different
+   point on every row. 100% basis forces it to its own line — every mobile
+   lecture row is two lines, but nothing is hidden or truncated. */
+body.is-mobile .hc-lecture-row {
+  flex-wrap: wrap;
+}
+
+body.is-mobile .hc-lecture-right {
+  flex: 1 1 100%;
+  justify-content: flex-end;
 }
 
 .hc-lecture-status {
@@ -1253,10 +1517,16 @@
 
 /* --- Assignment list ------------------------------------------------------- */
 
+/* #13 follow-up: same gap as .hc-tab-row/.hc-lecture-controls — no overflow
+   handling at all. Shared by five screens (Assignments/Readings/Exams
+   within a class, the main Assignments dashboard, and Courses' year/term
+   filters), so this one rule covers all of them. Keep this unconditional — 
+   gating it behind hc-scaled broke button visibility above 100%. */
 .hc-assign-controls {
   display: flex;
   align-items: center;
   margin-bottom: 12px;
+  overflow-x: auto;
 }
 
 .hc-global-controls {
@@ -1284,20 +1554,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.hc-assign-context-row {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-top: 2px;
-}
-
-.hc-assign-class-chip {
-  font-weight: 600;
-  font-size: 12px;
 }
 
 .hc-assign-list {
@@ -1411,10 +1667,6 @@
   color: var(--text-muted);
 }
 
-.hc-assign-add-btn {
-  margin-top: 4px;
-}
-
 /* --- Assignment detail ----------------------------------------------------- */
 
 .hc-assign-detail-title-row {
@@ -1466,18 +1718,11 @@
   color: var(--text-faint);
 }
 
-/* #8: read-only companion to .hc-assign-link-input, shown once a vault
-   link path is set. Used in two different flex-row contexts — the
-   detail-view rows (.hc-assign-note-row) and the Add/Edit Resource form's
-   Obsidian Setting rows (.setting-item-control) — so it needs its own
-   flex sizing rather than relying on a wrapper that's only present in one
-   of those two contexts. width: 100% alone did nothing here: as a plain
-   flex item with no flex-basis, it just shrank to its text content and
-   got shoved to the row's right edge by Obsidian's default
-   justify-content: flex-end, which is what actually happened when this
-   first shipped. flex: 1 1 160px matches the sizing already used for the
-   input this replaces, so both states occupy the same space in the row.
-   (LiveAQuietLife/Claude, 2026-08-30) */
+/* #8: read-only companion to .hc-assign-link-input, used in two different
+   flex-row contexts, so it needs its own flex sizing rather than relying
+   on a wrapper present in only one. width:100% alone did nothing — as a
+   plain flex item with no basis it shrank to its text and got shoved
+   right. 1 1 160px matches the input it replaces. */
 .hc-assign-link-display {
   flex: 1 1 160px;
   min-width: 0;
@@ -1501,26 +1746,41 @@
   margin-bottom: 16px;
 }
 
+/* #11: a flexible field with min-width:0 sharing a nowrap row with
+   buttons that can't shrink — the buttons take their width first and the
+   path absorbs the shortfall. flex-wrap is a no-op where there's room, so
+   desktop is unaffected. */
 .hc-assign-note-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
+/* #11: flex-basis, not flex:1. `flex: 1` expands to flex-basis:0%, and
+   wrapping is decided on basis rather than content — so the item always
+   claimed to need zero pixels, the line never broke, and the flex-wrap
+   above could never fire. 160px matches .hc-assign-link-display's basis
+   so both states of the field ask for the same space. */
 .hc-assign-note-input-wrap {
-  flex: 1;
+  flex: 1 1 160px;
   min-width: 0;
 }
 
-/* --- Readings list -----------------------------------------------------------
-   #9: split out of the Assignments tab — a reading is prep tied to a
-   lecture, not graded/deadline work. Same underlying assignment records
-   (type: 'Reading'); this is a new list, not a new data shape. Row layout
-   mirrors .hc-assign-row (padding, border, radius, due/status column) so it
-   still reads as the same app; the middle column trades the type pill and
-   grade chip for a lecture-prep context line and a linked-book line — a
-   reading never carries a grade, so there's no field to gate off here.
-   (Veronica, 2026-09-01) --------------------------------------------------- */
+/* #11: 160px made the row wrap in the wrong place — the field asked for
+   only 160px, so two buttons still fit beside it and just Remove was
+   orphaned on a second line. 100% basis makes the field claim the line so
+   all three buttons wrap together beneath it. Mobile-scoped: a real
+   layout change, and the desktop row fits on one line. */
+body.is-mobile .hc-assign-note-input-wrap {
+  flex: 1 1 100%;
+}
+
+/* --- Readings list ---------------------------------------------------------
+   #9: split out of Assignments — a reading is lecture prep, not graded
+   work. Same underlying records (type: 'Reading'), new list not new data
+   shape. Row layout mirrors .hc-assign-row; the middle column trades the
+   type pill and grade chip for lecture-prep and linked-book lines. */
 
 .hc-reading-list {
   display: flex;
@@ -1579,26 +1839,132 @@
   margin-bottom: 6px;
 }
 
-.hc-reading-book {
+/* #19: book and note lines are the same kind of thing — "what this reading
+   points to" — so they share a shape: a fixed label, then a value that
+   ellipsizes. The ellipsis moves off the container onto the value span,
+   because a flex container can't ellipsize a child; only the shrinking child
+   can. */
+.hc-reading-book,
+.hc-reading-note {
   display: flex;
   align-items: center;
   gap: 5px;
   font-size: 12px;
   color: var(--text-faint);
+  min-width: 0;
+}
+
+.hc-reading-note {
+  margin-top: 4px;
+}
+
+.hc-reading-ref-label {
+  flex-shrink: 0;
+}
+
+.hc-reading-ref-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A book that was linked and has since gone missing. Unlabelled — it's a
+   broken reference, not a reference to something. */
+.hc-reading-book--orphan {
+  font-style: italic;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.hc-reading-book--orphan {
-  font-style: italic;
+/* #30: reading-pace compact line. Same quiet metadata treatment as
+   .hc-lecture-note-flag, but clickable (opens the log-progress modal), so it
+   needs a pointer cursor and a hover cue to read as interactive rather than
+   purely informational like the flags around it. */
+.hc-reading-pace-line {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+  cursor: pointer;
 }
 
-/* Reuses .hc-lecture-note-flag (defined under the Lectures list) — same
-   quiet metadata treatment, just a bit of breathing room above it here
-   since it follows the book line rather than a title. */
-.hc-reading-mid .hc-lecture-note-flag {
+.hc-reading-pace-line:hover {
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+/* #30: row wrapping the pace line + info icon. flex so the icon sits inline
+   right after the text rather than wrapping to its own line — needs to stay
+   compact since it lives in an already-crowded list row on desktop, and
+   proportionally more so on narrow mobile widths. */
+.hc-reading-pace-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin-top: 4px;
+}
+
+.hc-reading-pace-row .hc-reading-pace-line {
+  margin-top: 0;
+}
+
+/* #19: the label matches the pace line's own size and colour rather than the
+   Book:/Note: labels' 12px — the pace line is 11px, and a label larger than
+   the value it introduces reads as a heading. Scoped to the row so the line
+   keeps its pointer/hover treatment and the label doesn't inherit it: the
+   label isn't clickable. */
+.hc-reading-pace-row .hc-reading-ref-label {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* Tap/click target for the explanation, alongside the hover tooltip rather
+   than replacing it — hover is unreachable on mobile (isDesktopOnly: false),
+   so this is the only way those users ever see the explanation at all.
+ */
+.hc-reading-pace-info {
+  display: flex;
+  align-items: center;
+  color: var(--text-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.hc-reading-pace-info:hover {
+  color: var(--text-muted);
+}
+
+.hc-reading-pace-info svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Reused inside the assignment detail view's Reading Pace section — larger
+   text and more breathing room since it isn't competing with a crowded list
+   row there. Margin lives on the row (not the line) so this override doesn't
+   lose a source-order tie against the base .hc-reading-pace-row rule.
+ */
+.hc-reading-pace-section .hc-reading-pace-row {
+  margin-top: 8px;
+}
+
+.hc-reading-pace-section .hc-reading-pace-line {
+  font-size: 13px;
+}
+
+.hc-reading-pace-modal-status {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.hc-reading-pace-edit-link {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin: 4px 0 12px;
 }
 
 /* --- Exam list -------------------------------------------------------------- */
@@ -1665,6 +2031,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .hc-exam-countdown {
@@ -1686,24 +2053,17 @@
   color: var(--text-faint);
 }
 
-.hc-exam-done-badge {
-  font-size: 12px;
-  font-weight: 500;
-  color: #3B6D11;
-  background: #EAF3DE;
-  padding: 1px 8px;
-  border-radius: 100px;
-  display: inline-block;
-  width: fit-content;
-}
-
 /* ─── Library ─────────────────────────────────────────────────────────────── */
 
+/* #13 follow-up: same gap as the other control rows on this page — no
+   overflow handling. Keep this unconditional — gating it behind hc-scaled broke button visibility above 100%.
+ */
 .hc-resource-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  overflow-x: auto;
 }
 .hc-resource-list {
   display: flex;
@@ -1982,22 +2342,30 @@
   min-width: 0;
 }
 
+/* #36: same shape as #11's vault-link row — a flexible field sharing a
+   nowrap row with buttons that can't shrink below their own text, so the
+   field absorbed the whole shortfall and got crushed to a couple of
+   characters on phone. flex-wrap here is the same no-op-when-there's-room
+   fix as #11 entry 1: only engages below the width that fits label +
+   Clear + Select on one line. */
 .hc-resource-picker-wrap {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   width: 100%;
 }
 
-/* Boxed to match the vault-link display fields (.hc-assign-link-display)
-   elsewhere in these modals — purely cosmetic consistency. Linked Book
-   is a different kind of field (a citation record, not a vault path,
-   with Clear/Select instead of Browse/Remove), so this doesn't share
-   any logic with those fields — just the look. (LiveAQuietLife/Claude,
-   2026-08-30) */
+/* Boxed to match the vault-link display fields elsewhere — cosmetic
+   consistency only; Linked Book is a citation record, not a vault path,
+   and shares no logic with them.
+
+   #36: `flex: 1 1 160px`, not `flex: 1` — same zero-basis wrap trap as
+   above. 160px matches .hc-assign-link-display so all picker-style fields
+   size alike. */
 .hc-resource-picker-label {
   font-size: 14px;
-  flex: 1;
+  flex: 1 1 160px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2007,6 +2375,13 @@
   border-radius: 6px;
   background: var(--background-primary);
   box-sizing: border-box;
+}
+
+/* #36: pin Clear/Select to their own content width so they never take
+   part of the wrap-basis math above — same as
+   .hc-linked-note-setting .setting-item-control button. */
+.hc-resource-picker-wrap > button {
+  flex: 0 0 auto;
 }
 
 /* ─── Resource referenced by ─────────────────────────────────────────────────── */
@@ -2086,12 +2461,16 @@
 
 /* ─── Calendar ─────────────────────────────────────────────────────────────── */
 
+/* #13 follow-up: same gap as the other control rows — no overflow
+   handling. Keep this unconditional — gating it behind hc-scaled broke button visibility above 100%.
+ */
 .hc-cal-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 14px;
   gap: 8px;
+  overflow-x: auto;
 }
 
 .hc-cal-view-toggle {
@@ -2150,6 +2529,15 @@
   color: var(--text-normal);
   min-width: 160px;
   text-align: center;
+}
+
+/* The 160px floor keeps the arrows from shifting as month names change
+   length, which there is room for on desktop but not on a phone: at 100%
+   it pushed the next-month arrow off the right edge, and it worsens with
+   Interface scale since the floor is in the scaled coordinate space.
+   The title stays centred; it just takes the width it needs. */
+body.is-mobile .hc-cal-nav-title {
+  min-width: 0;
 }
 
 /* ── Grid (shared month + week) ──────────────────────────────────────────── */
@@ -2469,12 +2857,28 @@
 
 /* ── Filter bar ──────────────────────────────────────────────────────────── */
 
+/* #47: Show → Assignments adds a third filter, and at phone width the row
+   ran past the screen edge; .hc-content's overflow-x:hidden (#31) clipped
+   the Type button entirely, leaving only its label. Wraps instead of
+   scrolling deliberately: these dropdowns open inside .hc-cal-filter-wrap
+   (absolute), and a scrolling row would clip them — the same trap the
+   shared _openFilterDropdown exists to avoid. Confirmed in vault,
+   2026-10-03. (LiveAQuietLife) */
 .hc-cal-filter-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 10px 16px;
   padding-top: 12px;
   border-top: 1px solid var(--background-modifier-border);
+}
+
+/* One label + its button. Wraps as a unit, never split. */
+.hc-cal-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .hc-cal-filter-label {
@@ -2572,6 +2976,44 @@
 .hc-today-item-meta {
   font-size: 10px;
   opacity: 0.75;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* #24: the meta line is dimmed to 0.75 as decorative supporting text, but a
+   warning is not decorative — it opts back out to full opacity. The pill
+   sets its own text color inline, so the flag also re-asserts the warning
+   color to keep it distinguishable from the pill's own foreground.
+ */
+.hc-today-item-meta .hc-term-window-flag {
+  opacity: 1;
+  color: var(--text-warning);
+}
+
+.hc-today-item-meta .hc-term-window-flag svg { width: 11px; height: 11px; }
+
+/* --- Interface scale (adjustable via Settings, 100% = no-op) -------------- */
+/* #13: 90-150% range. zoom, not font-size — scales text, icons, gaps, and
+   padding together. Chromium-only: works on desktop and Android, does
+   nothing on iOS/WebKit (noted in the Settings description, since silent
+   no-ops read as broken). .hc-toolbar is deliberately NOT zoomed — #32
+   tuned its nav row to exactly fill the phone width at 100% with no
+   slack, so zooming pushed buttons off-screen. .hc-today-root is a
+   sibling container, not nested under .hc-root, so it needs the rule
+   explicitly. */
+body {
+  --hc-ui-scale: 1;
+}
+
+/* #13: gated behind body.hc-scaled so at the default 100% the property is
+   genuinely absent, not just neutralized — zoom is non-standard with
+   known compositor/scroll-sync quirks, and being present at all runs the
+   element through that code path. */
+body.hc-scaled .hc-content,
+body.hc-scaled .hc-today-root {
+  zoom: var(--hc-ui-scale, 1);
 }
 
 /* --- E-ink display mode (opt-in via Settings, off by default) ------------- */
@@ -2697,6 +3139,15 @@ body.hc-eink .hc-resource-source-icon {
   margin-bottom: 6px;
 }
 
+/* #11: rows="8" is set in JS, but the mobile modal's constrained height
+   compresses the textarea to about a line and a half. Not cosmetic — this
+   modal warns the user to check every row, since a stray line break
+   silently splits a lecture and bulk-add can't be undone. The textarea
+   should win the space fight and let the modal scroll. */
+body.is-mobile .hc-bulk-textarea {
+  min-height: 9em;
+}
+
 .hc-bulk-summary {
   font-size: 13px;
   font-weight: 600;
@@ -2704,11 +3155,18 @@ body.hc-eink .hc-resource-source-icon {
   color: var(--text-normal);
 }
 
+/* Same mechanism as #45 (.hc-tab-row). overflow-y: auto drops the automatic
+   min-height to zero, and on mobile .modal-content is a column flex container,
+   so when the keyboard shrank the modal, flex-shrink crushed the preview to
+   its two borders — two bare lines between the warning and the buttons.
+   flex-shrink: 0 keeps its content height (still capped by max-height);
+   .modal-content scrolls instead. Inert on desktop, where it isn't a flex item. */
 .hc-bulk-preview {
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
   max-height: 220px;
   overflow-y: auto;
+  flex-shrink: 0;
 }
 
 .hc-bulk-preview:empty { display: none; }
@@ -2780,15 +3238,25 @@ body.hc-eink .hc-resource-source-icon {
   padding-left: 4px;
 }
 
+/* #31: same shape as the Assignments table above — fixed columns
+   (130+104+120=354px) already exceed a phone viewport before Course's
+   minmax(0, 1fr) gets any space, so it collapsed to 0 and "Course"
+   visually spilled into "Status"'s header. Same fix: real floor, table
+   scrolls itself. */
 .hc-courses-table {
   display: flex;
   flex-direction: column;
+  overflow-x: auto;
 }
 
+/* #31: 96px, down from a generous 130px. Each row is its own independent
+   grid, so this must stay a fixed px value or columns stop lining up
+   between rows. Fits "SEMESTER" + sort arrow with room for "Term N", but
+   is tuned to that naming style — long custom names may truncate. */
 .hc-courses-head,
 .hc-courses-row {
   display: grid;
-  grid-template-columns: 130px 104px minmax(0, 1fr) 120px;
+  grid-template-columns: 96px 104px minmax(160px, 1fr) 120px;
   align-items: center;
   gap: 12px;
 }
@@ -2838,6 +3306,11 @@ body.hc-eink .hc-resource-source-icon {
 
 .hc-courses-row--inactive { opacity: 0.55; }
 
+/* #31: text-overflow/nowrap were on this flex container, but the text
+   lives in a child span that, with default min-width:auto, refused to
+   shrink and dragged the box past its grid track — so nothing clipped.
+   Truncation must live on the text-bearing element. min-width:0 stays
+   here so this box still respects the track. */
 .hc-courses-sem {
   display: flex;
   align-items: baseline;
@@ -2845,6 +3318,11 @@ body.hc-eink .hc-resource-source-icon {
   min-width: 0;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.hc-courses-sem-name {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2909,6 +3387,164 @@ body.hc-eink .hc-resource-source-icon {
   border-style: dashed;
 }
 
+/* ─── Assignments table (#15) ──────────────────────────────────────────────
+   Deliberately its own class prefix rather than reusing .hc-courses-*: the two
+   tables share a visual language but not a column count or a row shape, and
+   coupling them would mean every Courses tweak needing a check here.
+ */
+
+/* #31: fixed columns alone (548px) exceed a phone viewport before Title's
+   1fr gets any space, so it collapsed to 0 and the unclipped <th> spilled
+   into "Due". minmax(0,...) also meant the row never grew past the
+   viewport, so there was nothing to scroll to. Chose deliberate
+   horizontal scroll over dropping columns or a phone card layout. */
+.hc-atable {
+  display: flex;
+  flex-direction: column;
+  overflow-x: auto;
+}
+
+.hc-atable-head,
+.hc-atable-row {
+  display: grid;
+  grid-template-columns: 88px 92px minmax(160px, 1fr) 96px 104px 64px 104px;
+  align-items: center;
+  gap: 12px;
+}
+
+.hc-atable-head {
+  padding: 0 14px 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.hc-atable-th {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+
+.hc-atable-th:hover { color: var(--text-muted); }
+.hc-atable-th--active { color: var(--text-muted); }
+
+.hc-atable-sort-icon {
+  display: flex;
+  align-items: center;
+}
+
+.hc-atable-sort-icon svg { width: 12px; height: 12px; }
+
+.hc-atable-row {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--background-modifier-border-hover);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.hc-atable-row:hover { background: var(--background-secondary); }
+
+/* Marks where the class changes — only drawn while sorted by code. */
+.hc-atable-row--seam {
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.hc-atable-row--done { opacity: 0.55; }
+
+.hc-atable-code {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-atable-typecell {
+  min-width: 0;
+  display: flex;
+}
+
+.hc-atable-titlecell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hc-atable-title {
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-normal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Lecture context, demoted under the title rather than given its own column. */
+.hc-atable-context {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-atable-duecell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.hc-atable-due {
+  font-size: 13px;
+  color: var(--text-normal);
+  white-space: nowrap;
+}
+
+.hc-atable-due-note {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.hc-atable-status {
+  justify-self: start;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hc-atable-grade {
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.hc-atable-pace {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Target date passed. Same amber the due-date column uses for urgency, so the
+   two columns don't invent separate warning vocabularies. */
+.hc-atable-pace--passed { color: var(--text-accent); }
+.hc-atable-pace--done { color: var(--text-faint); }
+
+/* Every sparse cell — no due date, no grade, no reading estimate — renders the
+   same dash, matching .hc-courses-status--unset's "nothing here yet" reading
+   rather than leaving a blank that looks like a rendering failure. */
+.hc-atable-empty {
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
 /* ─── Removed semesters modal ─────────────────────────────────────────────── */
 
 .hc-removed-list {
@@ -2941,4 +3577,77 @@ body.hc-eink .hc-resource-source-icon {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 2px;
+}
+
+/* ─── Mobile keyboard clearance ──────────────────────────────────────────── */
+
+/* The Android keyboard covers modal fields, and the page can't observe it:
+   innerHeight never changes and visualViewport fires no resize events — so
+   scrollIntoView, viewport math, and anything event-driven are all dead
+   ends. Obsidian's native layer does know, and publishes --keyboard-height.
+   Shrinking the container (which centers the modal) lifts the modal clear
+   on its own. Inert when closed: the variable is 0px. */
+body.is-mobile .modal-container {
+  height: calc(100% - var(--keyboard-height, 0px));
+}
+
+/* Companion to the rule above — required, not optional. Obsidian's own
+   modal max-height is viewport-based and doesn't shrink with the
+   container, so the modal overflowed the smaller box and flex centering
+   pushed its top off-screen. Capping to the same reduced space activates
+   .modal-content's existing overflow-y:auto. 85vh approximates Obsidian's
+   effective cap; this number is the dial if modals feel too small. */
+body.is-mobile .modal {
+  max-height: calc(85vh - var(--keyboard-height, 0px));
+}
+
+/* #34: pane collapses under keyboard - height:100% has no definite
+   parent to resolve against. 100dvh tracks the visible viewport
+   instead. Do not change this rule without testing the keyboard case
+   first.  */
+body.is-mobile .hc-root {
+  height: 100dvh;
+}
+
+/* #39: .hc-root is 100dvh but starts below Obsidian's view header, so its
+   bottom lands past the fold and .hc-content inherits that. Caps it to the
+   space actually visible. Offsets are measured in main.js
+   (_updateContentCap) since the toolbar wraps to varying heights.
+
+   Never move this onto .hc-root - #34 needs that rule to stay exactly
+   100dvh. The inner max() is not a simplification target: the navbar and
+   keyboard are mutually exclusive on Android, so subtracting both
+   double-counts. The 120px floor keeps a short landscape viewport from
+   collapsing the pane to zero.  */
+body.is-mobile .hc-content {
+  max-height: max(
+    120px,
+    calc(
+      100dvh
+      - var(--hc-root-top, 0px)
+      - var(--hc-toolbar-h, 0px)
+      - max(var(--hc-navbar-h, 0px), var(--keyboard-height, 0px))
+    )
+  );
+}
+
+/* zoom scales the coordinate space inside .hc-content, but the offsets above
+   are measured in real screen pixels - so at zoom 1.2 a 98px navbar reserve
+   only clears ~82 real pixels, and the last entries of a long list end up
+   behind Obsidian's navbar. Dividing by the scale factor makes the cap
+   correct at every Interface scale rather than only at 100%. The shortfall
+   grows with the scale, which is why it showed up at 120 and worsened at
+   150 while 100 looked fine. */
+body.is-mobile.hc-scaled .hc-content {
+  max-height: max(
+    120px,
+    calc(
+      (
+        100dvh
+        - var(--hc-root-top, 0px)
+        - var(--hc-toolbar-h, 0px)
+        - max(var(--hc-navbar-h, 0px), var(--keyboard-height, 0px))
+      ) / var(--hc-ui-scale, 1)
+    )
+  );
 }
