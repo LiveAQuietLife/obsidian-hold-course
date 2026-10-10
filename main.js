@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.9.3 */
+/* --- Hold Course --- v1.10.0 */
 'use strict';
 
 const {
@@ -26,7 +26,7 @@ const TODAY_VIEW_TYPE = 'hold-course-today';
 // white / #1e1e1e and on its own bg, except amber (3.7:1 on white), which is
 // unchanged from earlier versions.
 const COLOR_PALETTE = [
-  { name: 'amber',   accent: '#BA7517', accentDark: '#E5A34F', light: '#FAC775', bg: '#FAEEDA', text: '#633806' },
+  { name: 'amber',   accent: '#BA7517', accentDark: '#E5A34F', accentEink: '#854F0B', light: '#FAC775', bg: '#FAEEDA', text: '#633806' },
   { name: 'blue',    accent: '#1D4ED8', accentDark: '#60A5FA', light: '#93C5FD', bg: '#EFF6FF', text: '#172554' },
   { name: 'red',     accent: '#B91C1C', accentDark: '#F87171', light: '#FCA5A5', bg: '#FEF2F2', text: '#450A0A' },
   { name: 'purple',  accent: '#6D28D9', accentDark: '#A78BFA', light: '#C4B5FD', bg: '#F5F3FF', text: '#2E1065' },
@@ -36,11 +36,11 @@ const COLOR_PALETTE = [
 
 const ASSIGNMENT_TYPE_STYLE = {
   'Reading':    { color: '#0A3D8F', colorDark: '#7EAFF7', bg: '#E8F1FC' },
-  'Writing':    { color: '#C05E0A', colorDark: '#F2A55A', bg: '#FAEADC' },
+  'Writing':    { color: '#C05E0A', colorDark: '#F2A55A', colorEink: '#9A4A08', bg: '#FAEADC' },
   'Quiz':       { color: '#A0235F', colorDark: '#F088BB', bg: '#F8E4EF' },
   'Exam':       { color: '#A0235F', colorDark: '#F088BB', bg: '#F8E4EF' },
-  'Project':    { color: '#4A6FA5', colorDark: '#9BBCE9', bg: '#E4EBF5' },
-  'Discussion': { color: '#5C7A00', colorDark: '#B3D45D', bg: '#EBF3D6' },
+  'Project':    { color: '#4A6FA5', colorDark: '#9BBCE9', colorEink: '#3A5A8A', bg: '#E4EBF5' },
+  'Discussion': { color: '#5C7A00', colorDark: '#B3D45D', colorEink: '#4A6300', bg: '#EBF3D6' },
   'Other':      { color: '#666666', colorDark: '#A8A8A8', bg: '#F0F0F0' },
 };
 
@@ -127,12 +127,95 @@ function isClassGraded(cls) {
   return !(cls && cls.notGraded);
 }
 
+// #25: "Online (no meeting time)". Presence-based like notGraded. While set,
+// the class's meeting days, times, location, and meeting link are hidden and
+// ignored, but kept, so turning it off brings them back. Start/end dates
+// still apply (term window). (2026-10-10)
+function isClassOnline(cls) {
+  return !!(cls && cls.online);
+}
+
 function getColor(index) {
   return COLOR_PALETTE[index % COLOR_PALETTE.length];
 }
 
+// #62: custom types share the Other style, even one named like an unused
+// entry in the style table (e.g. "Quiz").
 function getTypeStyle(type) {
-  return ASSIGNMENT_TYPE_STYLE[type] || ASSIGNMENT_TYPE_STYLE['Other'];
+  const builtIn = ASSIGNMENT_TYPES.includes(type) || type === 'Exam';
+  return (builtIn && ASSIGNMENT_TYPE_STYLE[type]) || ASSIGNMENT_TYPE_STYLE['Other'];
+}
+
+// ─── #62 Custom assignment types ─────────────────────────────────────────────
+// Built-in types stay fixed. Custom types are names stored in
+// settings.customTypes, shared by every class and semester. An assignment
+// stores its type as plain text, same as before. (2026-10-10)
+
+const NEW_TYPE_OPTION = '__hc_new_type__';
+const MAX_TYPE_NAME = 30;
+
+function getCustomTypes(plugin) {
+  const list = plugin && plugin.data && plugin.data.settings && plugin.data.settings.customTypes;
+  return Array.isArray(list) ? list.filter(t => typeof t === 'string' && t.trim()) : [];
+}
+
+// Built-ins in their usual order, custom types A–Z, Other last.
+function getAssignmentTypes(plugin) {
+  const custom = [...getCustomTypes(plugin)].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  return [...ASSIGNMENT_TYPES.filter(t => t !== 'Other'), ...custom, 'Other'];
+}
+
+// Checks a typed name. Returns { name } for a new name, { existing } when it
+// matches a type already in the list (any case), or { error }. `except` is
+// the type being renamed, so renaming "lab" to "Lab" is allowed.
+function checkTypeName(plugin, raw, except = null) {
+  const name = String(raw || '').trim().replace(/\s+/g, ' ');
+  if (!name) return { error: 'Type name is required.' };
+  if (name.length > MAX_TYPE_NAME) return { error: `Keep type names to ${MAX_TYPE_NAME} characters or fewer.` };
+  const lower = name.toLowerCase();
+  if (lower === 'exam') return { error: 'Exams have their own tab. Choose another name.' };
+  const match = getAssignmentTypes(plugin).find(t => t.toLowerCase() === lower && t !== except);
+  if (match) return { existing: match };
+  return { name };
+}
+
+// Type dropdown shared by Add, Edit, and Bulk add assignment. "New type…"
+// asks for a name and selects it. A current value that's no longer in the
+// list is still offered, so opening and saving never changes it. `exclude`
+// drops types (#9 tab locks).
+function addTypeDropdown(setting, plugin, { value, exclude = [], onChange }) {
+  setting.addDropdown(drop => {
+    let current = value;
+    const fill = () => {
+      drop.selectEl.empty();
+      const types = getAssignmentTypes(plugin).filter(t => !exclude.includes(t));
+      if (current && !types.includes(current)) types.push(current);
+      for (const t of types) drop.addOption(t, t);
+      drop.addOption(NEW_TYPE_OPTION, 'New type…');
+      drop.setValue(current);
+    };
+    fill();
+    drop.onChange(v => {
+      if (v !== NEW_TYPE_OPTION) { current = v; onChange(v); return; }
+      drop.setValue(current); // stays put until a name is given
+      new AssignmentTypeNameModal(plugin.app, {
+        title: 'New assignment type',
+        value: '',
+        button: 'Add type',
+        onSubmit: (raw) => {
+          const r = checkTypeName(plugin, raw);
+          if (r.error) { new Notice(r.error); return false; }
+          const name = r.existing || r.name;
+          if (r.name) { plugin.addCustomType(name); plugin.save(); }
+          if (exclude.includes(name)) { new Notice(`${name} can't be chosen here.`); return true; }
+          current = name;
+          fill();
+          onChange(name);
+          return true;
+        },
+      }).open();
+    });
+  });
 }
 
 // Dark-theme awareness: pastel pills (light bg + dark text) are self-contained
@@ -158,12 +241,46 @@ function isDarkTheme() {
   return document.body.classList.contains('theme-dark');
 }
 
+// #68: grayscale mode keeps a color's contrast (luminance survives the
+// conversion), so text that is weak in color stays weak in gray. The .hc-eink
+// CSS only lifts --text-muted/--text-faint; colored text is set inline from
+// here and needs its own branch. Only colors under 4.5:1 get an `*Eink`
+// shade (amber accent 3.72 on white; Writing/Project/Discussion pills
+// 3.69/4.26/4.32 on their own bg), same hue so color e-ink screens keep the
+// cue. Dark-theme variants already clear 4.5:1 on #1e1e1e, except the
+// overdue red (4.24), handled in dueRed(). Normal mode is unchanged.
+// (LiveAQuietLife, 2026-10-09)
+function isEink() {
+  return document.body.classList.contains('hc-eink');
+}
+
 function accentText(color) {
-  return isDarkTheme() ? (color.accentDark || color.accent) : color.accent;
+  if (isDarkTheme()) return color.accentDark || color.accent;
+  return isEink() ? (color.accentEink || color.accent) : color.accent;
 }
 
 function typeText(style) {
-  return isDarkTheme() ? (style.colorDark || style.color) : style.color;
+  if (isDarkTheme()) return style.colorDark || style.color;
+  return isEink() ? (style.colorEink || style.color) : style.color;
+}
+
+// Text on a pastel pill (its own light bg), which stays light in both themes,
+// so no dark-theme branch: only the grayscale shade.
+function pillText(style) {
+  return isEink() ? (style.colorEink || style.color) : style.color;
+}
+
+// Class color as text on its own pastel bg (badges).
+function accentOnBg(color) {
+  return isEink() ? (color.accentEink || color.accent) : color.accent;
+}
+
+// Overdue/today red. `onPill`: drawn on a pastel pill rather than the theme bg.
+// #E24B4A is 3.93 on white, 4.24 on #1e1e1e; grayscale mode uses #A32D2D
+// (7.07 on white, ≥5.8 on every pill bg) or, on dark, #F87171 (6.03).
+function dueRed(onPill) {
+  if (!isEink()) return '#E24B4A';
+  return (isDarkTheme() && !onPill) ? '#F87171' : '#A32D2D';
 }
 
 function getTodayISO() {
@@ -201,10 +318,13 @@ function getDueInfo(isoDate) {
   const diff = getDaysUntil(isoDate);
   if (diff === null) return null;
   const dateStr = formatDate(isoDate);
-  const amber     = isDarkTheme() ? '#E5A34F' : '#BA7517';
+  // #68: grayscale mode uses the darker note shades for the label too.
+  const amber     = isDarkTheme() ? '#E5A34F' : (isEink() ? '#854F0B' : '#BA7517');
   const amberNote = isDarkTheme() ? '#E5A34F' : '#854F0B';
-  if (diff < 0)  return { label: `${dateStr} · overdue`, color: '#E24B4A', note: 'Overdue', noteColor: '#A32D2D', urgency: 'overdue' };
-  if (diff === 0) return { label: `${dateStr} · today`,   color: '#E24B4A', note: 'Today',   noteColor: '#A32D2D', urgency: 'today' };
+  const red       = dueRed(false);
+  const redNote   = (isEink() && isDarkTheme()) ? '#F87171' : '#A32D2D';
+  if (diff < 0)  return { label: `${dateStr} · overdue`, color: red, note: 'Overdue', noteColor: redNote, urgency: 'overdue' };
+  if (diff === 0) return { label: `${dateStr} · today`,   color: red, note: 'Today',   noteColor: redNote, urgency: 'today' };
   if (diff === 1) return { label: `${dateStr} · tomorrow`,color: amber, note: 'Tomorrow',noteColor: amberNote, urgency: 'soon' };
   if (diff <= 7)  return { label: `${dateStr} · ${diff} days`, color: amber, note: `${diff} days`, noteColor: amberNote, urgency: 'soon' };
   return { label: dateStr, color: 'var(--text-muted)', note: `${diff} days`, noteColor: 'var(--text-faint)', urgency: 'upcoming' };
@@ -359,13 +479,19 @@ function getNextAssignmentDue(cls) {
   return pending.sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
 }
 
+// #70: lecture order. `list` is in entry order (cls.lectures is append-only).
+// Undated lectures keep their place; dated lectures are sorted by date within
+// the positions dated lectures hold. All-dated or all-undated lists come out
+// the same as the old rule, which sent every undated lecture to the end, so an
+// undated Lecture 1 sorted after a dated Lecture 2. (2026-10-10)
+function sortLecturesByRule(list) {
+  const dated = list.filter(l => l.date).sort((a, b) => a.date.localeCompare(b.date));
+  let i = 0;
+  return list.map(l => (l.date ? dated[i++] : l));
+}
+
 function getLecturesSorted(cls) {
-  return [...(cls.lectures || [])].sort((a, b) => {
-    if (!a.date && !b.date) return 0;
-    if (!a.date) return 1;
-    if (!b.date) return -1;
-    return a.date.localeCompare(b.date);
-  });
+  return sortLecturesByRule(cls.lectures || []);
 }
 
 // Whether a class has zero schedule/date data anywhere — no meeting days,
@@ -375,7 +501,7 @@ function getLecturesSorted(cls) {
 // so it only fires for classes with no dates at all, not partially-dated
 // ones between assignments.
 function isSelfPacedClass(cls) {
-  if (cls.meetingDays?.length) return false;
+  if (!isClassOnline(cls) && cls.meetingDays?.length) return false;
   for (const lec of (cls.lectures || [])) {
     if (lec.date) return false;
     for (const a of (lec.assignments || [])) {
@@ -808,6 +934,20 @@ function addDaysISO(dateISO, n) {
   return makeISO(d.getFullYear(), d.getMonth() + 1, d.getDate());
 }
 
+// #64: days from a to b (ISO dates), noon-anchored like addDaysISO so a DST
+// change can't round a day away.
+function daysBetweenISO(a, b) {
+  const da = new Date(a + 'T12:00:00'), db = new Date(b + 'T12:00:00');
+  return Math.round((db - da) / 86400000);
+}
+
+// #64: the shift Copy class applies — whole weeks, so a Mon/Wed class stays
+// Mon/Wed. Rounded up, so no shifted date lands before the new start date
+// (the term-window flag would mark it). 0 when the dates already match.
+function copyShiftDays(oldStartISO, newStartISO) {
+  return Math.ceil(daysBetweenISO(oldStartISO, newStartISO) / 7) * 7;
+}
+
 function getWeekStartISO(dateISO) {
   const d = new Date(dateISO + 'T12:00:00');
   const daysBack = (d.getDay() + 6) % 7; // Mon = 0
@@ -821,6 +961,7 @@ function getWeekStartISO(dateISO) {
 // unchanged until all five §1.3 fields are filled in.
 function classMeetsOnDate(cls, dateISO, weekdayName) {
   return !!(
+    !isClassOnline(cls) &&
     cls.meetingDays?.includes(weekdayName) &&
     cls.meetingStartTime && cls.meetingEndTime &&
     cls.startDate && cls.endDate &&
@@ -880,10 +1021,11 @@ function getItemsForDate(sem, dateISO, filterClassId) {
 function getCalItemStyle(item) {
   if (item.kind === 'lecture') {
     const c = getColor(item.cls.colorIndex);
-    return { color: c.accent, bg: c.bg };
+    return { color: accentOnBg(c), bg: c.bg };
   }
-  if (item.kind === 'exam')       return getTypeStyle('Exam');
-  if (item.kind === 'assignment') return getTypeStyle(item.assignment.type);
+  // #68: copy with the pill-text shade; callers draw color on bg.
+  if (item.kind === 'exam')       { const t = getTypeStyle('Exam'); return { color: pillText(t), bg: t.bg }; }
+  if (item.kind === 'assignment') { const t = getTypeStyle(item.assignment.type); return { color: pillText(t), bg: t.bg }; }
   return { color: '#666', bg: '#F0F0F0' };
 }
 
@@ -1477,6 +1619,7 @@ class HoldCoursePlugin extends Plugin {
     // #12: absence is graded (the default) — key only added when the class
     // is explicitly marked ungraded, matching the removed/status idiom.
     if (classData.trackGrades === false) cls.notGraded = true;
+    if (classData.online) cls.online = true; // #25
     // Presence-based like notGraded: absent = automatic color.
     if (picked) cls.colorPicked = true;
     sem.classes.push(cls);
@@ -1638,6 +1781,166 @@ class HoldCoursePlugin extends Plugin {
     if (!cls.colorPicked) cls.colorIndex = firstFreeColorIndex(target.classes);
     target.classes.push(cls);
     return true;
+  }
+
+  // #64: copies a class, with its lectures, assignments, exams, and Library
+  // books, into any semester (its own included). The original is untouched.
+  // opts.dateMode: 'shift' (needs opts.newStartDate and a class startDate),
+  // 'clear', or 'keep'. opts.keepNotes: keep written notes and vault links.
+  // Always reset: statuses, grades, reading progress, book status, class
+  // status. Returns the new class, or null.
+  // ─── #62 custom assignment types ─────────────────────────────────────────
+
+  _forEachAssignment(fn) {
+    for (const sem of (this.data.semesters || [])) {
+      for (const cls of (sem.classes || [])) {
+        for (const a of (cls.assignments || [])) fn(a);
+        for (const lec of (cls.lectures || [])) {
+          for (const a of (lec.assignments || [])) fn(a);
+        }
+      }
+    }
+  }
+
+  addCustomType(name) {
+    const settings = this.data.settings;
+    if (!Array.isArray(settings.customTypes)) settings.customTypes = [];
+    if (!settings.customTypes.includes(name)) settings.customTypes.push(name);
+  }
+
+  countAssignmentsOfType(type) {
+    let n = 0;
+    this._forEachAssignment(a => { if (a.type === type) n++; });
+    return n;
+  }
+
+  // Renames the type and every assignment using it. Returns the count changed.
+  renameCustomType(oldName, newName) {
+    const list = getCustomTypes(this);
+    const i = list.indexOf(oldName);
+    if (i === -1) return 0;
+    list[i] = newName;
+    this.data.settings.customTypes = list;
+    let n = 0;
+    this._forEachAssignment(a => { if (a.type === oldName) { a.type = newName; n++; } });
+    this._retargetTypeFilters(oldName, newName);
+    return n;
+  }
+
+  // Removes the type; assignments using it become Other. Returns the count.
+  deleteCustomType(name) {
+    this.data.settings.customTypes = getCustomTypes(this).filter(t => t !== name);
+    let n = 0;
+    this._forEachAssignment(a => { if (a.type === name) { a.type = 'Other'; n++; } });
+    this._retargetTypeFilters(name, null);
+    return n;
+  }
+
+  // Open views keep a type filter in memory; point it at the new name, or
+  // clear it when the type is gone.
+  _retargetTypeFilters(oldName, newName) {
+    const leaves = (this.app && this.app.workspace) ? this.app.workspace.getLeavesOfType(VIEW_TYPE) : [];
+    for (const leaf of leaves) {
+      const v = leaf.view;
+      if (!v) continue;
+      for (const key of ['globalAssignFilterType', 'classAssignFilterType', 'calFilterType']) {
+        if (v[key] === oldName) v[key] = newName;
+      }
+    }
+  }
+
+  copyClass(sourceSemesterId, targetSemesterId, classId, opts = {}) {
+    const source = (this.data.semesters || []).find(s => s.id === sourceSemesterId);
+    const target = (this.data.semesters || []).find(s => s.id === targetSemesterId);
+    if (!source || !target || isSemesterRemoved(target)) return null;
+    const orig = (source.classes || []).find(c => c.id === classId);
+    if (!orig) return null;
+
+    const mode = opts.dateMode || 'keep';
+    if (mode === 'shift' && (!orig.startDate || !opts.newStartDate)) return null;
+    const keepNotes = opts.keepNotes !== false;
+    const shift = mode === 'shift' ? copyShiftDays(orig.startDate, opts.newStartDate) : 0;
+    const moveDate = (d) => {
+      if (!d) return d;
+      if (mode === 'clear') return '';
+      return shift ? addDaysISO(d, shift) : d;
+    };
+
+    // Plain data all the way down, so a JSON round-trip is a full deep copy.
+    const cls = JSON.parse(JSON.stringify(orig));
+    cls.id = generateId();
+    delete cls.status; // completed/dropped → active ("Not set")
+    if (sourceSemesterId === targetSemesterId) cls.code = `${cls.code} (copy)`;
+    if (!cls.colorPicked) cls.colorIndex = firstFreeColorIndex(target.classes);
+
+    if (mode === 'shift') {
+      cls.startDate = opts.newStartDate;
+      cls.endDate = moveDate(cls.endDate);
+    } else if (mode === 'clear') {
+      cls.startDate = '';
+      cls.endDate = '';
+    }
+
+    const resetAssignment = (a) => {
+      a.id = generateId();
+      a.status = 'not-started';
+      a.grade = '';
+      a.dueDate = moveDate(a.dueDate);
+      if (a.readingPace) {
+        a.readingPace.pagesRead = 0;
+        if (a.readingPace.targetDateOverride) {
+          const t = moveDate(a.readingPace.targetDateOverride);
+          if (t) a.readingPace.targetDateOverride = t;
+          else delete a.readingPace.targetDateOverride;
+        }
+      }
+      if (!keepNotes) { a.notes = ''; a.linkedNote = ''; }
+    };
+    for (const lec of (cls.lectures || [])) {
+      lec.id = generateId();
+      lec.status = 'not-started';
+      lec.date = moveDate(lec.date);
+      if (!keepNotes) { lec.notes = ''; lec.vaultLink = ''; }
+      for (const a of (lec.assignments || [])) resetAssignment(a);
+    }
+    for (const a of (cls.assignments || [])) resetAssignment(a);
+    for (const ex of (cls.exams || [])) {
+      ex.id = generateId();
+      ex.status = 'not-started';
+      ex.grade = '';
+      ex.dueDate = moveDate(ex.dueDate);
+      if (!keepNotes) ex.notes = '';
+    }
+
+    // Library: the books the class depends on, tagged or only linked — same
+    // set moveClass() uses. Same semester: tag the existing records to the
+    // copy too, so the Library doesn't list every book twice. Other semester:
+    // new records (new ids, Unread), and the copy's links point at them.
+    const linked = new Set(this._allClassAssignments(orig).map(a => a.linkedBook).filter(Boolean));
+    const relevant = (source.resources || []).filter(
+      r => (r.classIds || []).includes(orig.id) || linked.has(r.id)
+    );
+    if (sourceSemesterId === targetSemesterId) {
+      for (const r of relevant) {
+        if (!(r.classIds || []).includes(cls.id)) r.classIds = [...(r.classIds || []), cls.id];
+      }
+    } else {
+      if (!target.resources) target.resources = [];
+      const idMap = new Map();
+      for (const r of relevant) {
+        const copy = { ...r, id: generateId(), classIds: [cls.id], status: 'unread' };
+        if (!keepNotes) { copy.vaultLink = ''; copy.notes = ''; }
+        target.resources.push(copy);
+        idMap.set(r.id, copy.id);
+      }
+      for (const a of this._allClassAssignments(cls)) {
+        if (a.linkedBook) a.linkedBook = idMap.get(a.linkedBook) || '';
+      }
+    }
+
+    if (!target.classes) target.classes = [];
+    target.classes.push(cls);
+    return cls;
   }
 
   // ─── Lecture helpers ───────────────────────────────────────────────────────
@@ -1867,6 +2170,9 @@ class HoldCourseSettingTab extends PluginSettingTab {
           this.plugin.data.settings.einkMode = value;
           this.plugin.applyEinkClass();
           await this.plugin.save();
+          // #68: colors set inline are picked at render time; repaint the
+          // main view (save() already repaints Today).
+          this.plugin.refreshMainView();
         }));
 
     // #13: replaces the flat 1.1em guess from #4 with an actual adjustable
@@ -1887,7 +2193,119 @@ class HoldCourseSettingTab extends PluginSettingTab {
           this.plugin.applyUiScale();
           await this.plugin.save();
         }));
+
+    this._renderAssignmentTypes(containerEl);
   }
+
+  // #62: rename/delete custom types. New ones are added from the Type menu.
+  _renderAssignmentTypes(containerEl) {
+    const plugin = this.plugin;
+    const custom = getAssignmentTypes(plugin).filter(t => getCustomTypes(plugin).includes(t));
+    new Setting(containerEl)
+      .setName('Assignment types')
+      .setDesc(custom.length
+        ? 'Your own types. Renaming one updates every assignment that uses it.'
+        : 'No custom types yet. Add one with New type… in the Type menu when adding or editing an assignment.')
+      .setHeading();
+
+    for (const type of custom) {
+      const n = plugin.countAssignmentsOfType(type);
+      new Setting(containerEl)
+        .setName(type)
+        .setDesc(`${n} assignment${n === 1 ? '' : 's'}`)
+        .addExtraButton(b => b.setIcon('pencil').setTooltip('Rename').onClick(() => {
+          new AssignmentTypeNameModal(this.app, {
+            title: 'Rename type',
+            value: type,
+            button: 'Rename',
+            onSubmit: (raw) => {
+              const r = checkTypeName(plugin, raw, type);
+              if (r.error) { new Notice(r.error); return false; }
+              if (r.existing) { new Notice(`There's already a type called ${r.existing}.`); return false; }
+              if (r.name !== type) {
+                plugin.renameCustomType(type, r.name);
+                plugin.save();
+                plugin.refreshMainView();
+              }
+              this.display();
+              return true;
+            },
+          }).open();
+        }))
+        .addExtraButton(b => b.setIcon('trash').setTooltip('Delete').onClick(() => {
+          new DeleteAssignmentTypeModal(this.app, plugin, type, () => {
+            plugin.refreshMainView();
+            this.display();
+          }).open();
+        }));
+    }
+  }
+}
+
+// #62: one small modal for naming a type, used by New type… and Rename.
+// onSubmit(raw) returns true to close.
+class AssignmentTypeNameModal extends Modal {
+  constructor(app, { title, value, button, onSubmit }) {
+    super(app);
+    this.opts = { title, value, button, onSubmit };
+    this.value = value || '';
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: this.opts.title });
+    const submit = () => { if (this.opts.onSubmit(this.value)) this.close(); };
+    new Setting(contentEl).setName('Name').addText(text => {
+      text.setPlaceholder('Lab, Presentation, Quiz').setValue(this.value).onChange(v => this.value = v);
+      text.inputEl.maxLength = MAX_TYPE_NAME;
+      text.inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+      setTimeout(() => { text.inputEl.focus(); text.inputEl.select(); }, 0);
+    });
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const okBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: this.opts.button });
+    okBtn.addEventListener('click', submit);
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+class DeleteAssignmentTypeModal extends Modal {
+  constructor(app, plugin, type, onDelete) {
+    super(app);
+    this.plugin = plugin;
+    this.type = type;
+    this.onDelete = onDelete;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Delete type' });
+    const n = this.plugin.countAssignmentsOfType(this.type);
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: n
+        ? `${n} assignment${n === 1 ? ' uses' : 's use'} ${this.type}. ${n === 1 ? 'It' : 'They'}'ll become Other.`
+        : `No assignments use ${this.type}.`,
+    });
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const deleteBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Delete type' });
+    deleteBtn.addEventListener('click', async () => {
+      this.plugin.deleteCustomType(this.type);
+      await this.plugin.save();
+      this.onDelete();
+      this.close();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
 }
 
 // ─── View ─────────────────────────────────────────────────────────────────────
@@ -2544,6 +2962,13 @@ class HoldCourseView extends ItemView {
           }).open();
         }));
       }
+      // #64: always available — the class's own semester is a valid target.
+      menu.addItem(item => item.setTitle('Copy to semester…').setIcon('copy').onClick(() => {
+        new CopyClassModal(this.app, this.plugin, semesterId, cls, () => {
+          this.plugin.save();
+          this.render();
+        }).open();
+      }));
       menu.addSeparator();
       menu.addItem(item => item.setTitle('Delete class').setIcon('trash-2').onClick(() => {
         new DeleteClassModal(this.app, this.plugin, semesterId, cls, () => {
@@ -2580,8 +3005,13 @@ class HoldCourseView extends ItemView {
       prof.createSpan({ text: cls.professorName });
     }
 
-    // Meeting days (+ time, when set — same row, no extra height)
-    if (cls.meetingDays?.length) {
+    // Meeting days (+ time, when set — same row, no extra height).
+    // #25: an online class shows an Online tag in that spot instead.
+    const online = isClassOnline(cls);
+    if (online) {
+      const daysRow = body.createDiv('hc-class-days');
+      daysRow.createSpan({ cls: 'hc-day-chip hc-online-chip', text: 'Online' });
+    } else if (cls.meetingDays?.length) {
       const daysRow = body.createDiv('hc-class-days');
       for (const day of cls.meetingDays) {
         daysRow.createSpan({ cls: 'hc-day-chip', text: day });
@@ -2595,9 +3025,10 @@ class HoldCourseView extends ItemView {
     // for partial-term classes and a mix of in-person/online classes, where
     // "is this the one I drive to, and is it even running right now" is a
     // daily-glance fact, not just term-level trivia.
-    if (cls.location || (cls.startDate && cls.endDate)) {
+    const cardLocation = online ? '' : cls.location;
+    if (cardLocation || (cls.startDate && cls.endDate)) {
       const scheduleRow = body.createDiv('hc-class-schedule-row');
-      if (cls.location) {
+      if (cardLocation) {
         const loc = scheduleRow.createDiv('hc-class-schedule-item');
         const locIcon = loc.createSpan({ cls: 'hc-inline-icon' });
         setIcon(locIcon, 'map-pin');
@@ -2724,8 +3155,17 @@ class HoldCourseView extends ItemView {
 
     // Logistics row — when and how class happens
     const meta = header.createDiv('hc-class-header-meta');
+    const online = isClassOnline(cls); // #25
 
-    if (cls.meetingDays?.length) {
+    if (online) {
+      const item = meta.createDiv('hc-class-meta-item');
+      const icon = item.createSpan({ cls: 'hc-inline-icon' });
+      setIcon(icon, 'monitor');
+      icon.style.color = accentText(color);
+      item.createSpan({ text: 'Online' });
+    }
+
+    if (!online && cls.meetingDays?.length) {
       const item = meta.createDiv('hc-class-meta-item');
       const icon = item.createSpan({ cls: 'hc-inline-icon' });
       setIcon(icon, 'clock');
@@ -2737,7 +3177,7 @@ class HoldCourseView extends ItemView {
       item.createSpan({ text: clockText });
     }
 
-    if (cls.location) {
+    if (!online && cls.location) {
       const item = meta.createDiv('hc-class-meta-item');
       const icon = item.createSpan({ cls: 'hc-inline-icon' });
       setIcon(icon, 'map-pin');
@@ -2745,7 +3185,7 @@ class HoldCourseView extends ItemView {
       item.createSpan({ text: cls.location });
     }
 
-    if (cls.meetingLink) {
+    if (!online && cls.meetingLink) {
       const item = meta.createDiv('hc-class-meta-item');
       const icon = item.createSpan({ cls: 'hc-inline-icon' });
       setIcon(icon, 'video');
@@ -2927,7 +3367,7 @@ class HoldCourseView extends ItemView {
     const badge = row.createDiv('hc-lecture-badge');
     badge.setText(String(num));
     badge.style.background = color.bg;
-    badge.style.color = color.accent;
+    badge.style.color = accentOnBg(color);
 
     // Title + date
     const info = row.createDiv('hc-lecture-info');
@@ -3209,7 +3649,7 @@ class HoldCourseView extends ItemView {
         dueEl.createDiv({ cls: 'hc-lecture-assign-due-label', text: 'Due' });
         const dueDate = dueEl.createDiv({ cls: 'hc-lecture-assign-due-date', text: formatDate(a.dueDate) });
         if ((info?.urgency === 'overdue' || info?.urgency === 'today') && a.status !== 'done') {
-          dueDate.style.color = '#E24B4A';
+          dueDate.style.color = dueRed(false);
           if (info.urgency === 'overdue') {
             dueEl.createDiv({ cls: 'hc-lecture-assign-overdue', text: 'Overdue' });
           }
@@ -3248,9 +3688,9 @@ class HoldCourseView extends ItemView {
       return a.assignment.dueDate.localeCompare(b.assignment.dueDate);
     });
 
-    // Fixed type list for filter dropdown (matches ASSIGNMENT_TYPES).
+    // Type list for the filter dropdown, custom types included (#62).
     // #9: Reading dropped — nothing in this list is ever type Reading anymore.
-    const presentTypes = ASSIGNMENT_TYPES.filter(t => t !== 'Reading');
+    const presentTypes = getAssignmentTypes(this.plugin).filter(t => t !== 'Reading');
 
     // Apply filters
     let displayed = showDone ? items : items.filter(i => i.assignment.status !== 'done');
@@ -3345,7 +3785,7 @@ class HoldCourseView extends ItemView {
 
     // Left: type pill
     const pill = row.createSpan({ cls: 'hc-assign-pill', text: assignment.type || 'Other' });
-    pill.style.color = typeStyle.color;
+    pill.style.color = pillText(typeStyle);
     pill.style.background = typeStyle.bg;
 
     // Middle: title, lecture, grade (once done)
@@ -3661,7 +4101,7 @@ class HoldCourseView extends ItemView {
     // Type pill + title
     const titleRow = content.createDiv('hc-assign-detail-title-row');
     const pill = titleRow.createSpan({ cls: 'hc-assign-pill hc-assign-pill--lg', text: assignment.type || 'Other' });
-    pill.style.color = typeStyle.color;
+    pill.style.color = pillText(typeStyle);
     pill.style.background = typeStyle.bg;
 
     const assignTitleFlagRow = content.createDiv('hc-title-flag-row');
@@ -3713,18 +4153,7 @@ class HoldCourseView extends ItemView {
       }).open();
     });
 
-    const moveBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
-    const moveIcon = moveBtn.createSpan({ cls: 'hc-btn-icon' });
-    setIcon(moveIcon, 'move');
-    moveBtn.createSpan({ text: 'Move' });
-    moveBtn.addEventListener('click', () => {
-      new MoveAssignmentModal(this.app, this.plugin, sem.id, cls, assignment, lectureId, () => {
-        this.plugin.save();
-        // #9: land on Readings after moving a Reading item.
-        this.currentTab = assignment.type === 'Reading' ? 'Readings' : 'Assignments';
-        this.navigate('class', cls.id);
-      }).open();
-    });
+    // #65: Move button removed; the lecture is changed in Edit now.
 
     const deleteBtn = actionsRow.createEl('button', { cls: 'hc-btn hc-btn--sm hc-btn--danger' });
     const deleteIcon = deleteBtn.createSpan({ cls: 'hc-btn-icon' });
@@ -4604,7 +5033,7 @@ class HoldCourseView extends ItemView {
 
         dropEl.createDiv('hc-sem-drop-divider');
 
-        for (const type of ASSIGNMENT_TYPES) {
+        for (const type of getAssignmentTypes(this.plugin)) { // #62
           const typeStyle = getTypeStyle(type);
           const item = dropEl.createDiv('hc-sem-drop-item');
           if (type === this.globalAssignFilterType) item.addClass('hc-sem-drop-item--active');
@@ -4796,7 +5225,7 @@ class HoldCourseView extends ItemView {
       // Type pill — same treatment as the card list it replaces.
       const pillCell = row.createDiv('hc-atable-typecell');
       const pill = pillCell.createSpan({ cls: 'hc-assign-pill', text: a.type || 'Other' });
-      pill.style.color = typeStyle.color;
+      pill.style.color = pillText(typeStyle);
       pill.style.background = typeStyle.bg;
 
       // Title + lecture context. Context moves under the title rather than
@@ -5137,16 +5566,28 @@ class HoldCourseView extends ItemView {
       // Row actions. Right-click rather than a persistent button: Courses is a
       // quiet table and a "..." on every row would be visual noise for an action
       // most people never need. Appears only when there is somewhere to move to.
+      // #64: Copy is always offered (its own semester counts), so the menu
+      // always opens; Move still only when there's another semester.
       row.addEventListener('contextmenu', (e) => {
-        if (!this.plugin.moveTargetsFor(sem.id).length) return;
         e.preventDefault();
         e.stopPropagation();
         const menu = new Menu();
+        if (this.plugin.moveTargetsFor(sem.id).length) {
+          menu.addItem(item => item
+            .setTitle('Move to semester…')
+            .setIcon('arrow-right-left')
+            .onClick(() => {
+              new MoveClassModal(this.app, this.plugin, sem.id, cls, () => {
+                this.plugin.save();
+                this.render();
+              }).open();
+            }));
+        }
         menu.addItem(item => item
-          .setTitle('Move to semester…')
-          .setIcon('arrow-right-left')
+          .setTitle('Copy to semester…')
+          .setIcon('copy')
           .onClick(() => {
-            new MoveClassModal(this.app, this.plugin, sem.id, cls, () => {
+            new CopyClassModal(this.app, this.plugin, sem.id, cls, () => {
               this.plugin.save();
               this.render();
             }).open();
@@ -5254,7 +5695,9 @@ class HoldCourseView extends ItemView {
       const item = typeGroup.createDiv('hc-cal-legend-item');
       const dot = item.createDiv('hc-cal-legend-dot');
       dot.style.background = style.color;
-      item.createSpan({ cls: 'hc-cal-legend-label', text: type });
+      // #62: custom types share the Other color.
+      const label = type === 'Other' && getCustomTypes(this.plugin).length ? 'Other & custom' : type;
+      item.createSpan({ cls: 'hc-cal-legend-label', text: label });
     }
   }
 
@@ -5308,7 +5751,7 @@ class HoldCourseView extends ItemView {
           pill.style.textDecoration = 'line-through';
         } else {
           pill.style.background = style.bg;
-          pill.style.color = overdue ? '#E24B4A' : style.color;
+          pill.style.color = overdue ? dueRed(true) : style.color;
         }
         pill.setText(calItemDisplayTitle(item));
       }
@@ -5362,7 +5805,7 @@ class HoldCourseView extends ItemView {
           pill.style.textDecoration = 'line-through';
         } else {
           pill.style.background = style.bg;
-          pill.style.color = overdue ? '#E24B4A' : style.color;
+          pill.style.color = overdue ? dueRed(true) : style.color;
         }
         pill.setText(calItemDisplayTitle(item));
       }
@@ -5492,7 +5935,7 @@ class HoldCourseView extends ItemView {
 
         typeDropEl.createDiv('hc-sem-drop-divider');
 
-        for (const type of ASSIGNMENT_TYPES) {
+        for (const type of getAssignmentTypes(this.plugin)) { // #62
           const typeStyle = getTypeStyle(type);
           const item = typeDropEl.createDiv('hc-sem-drop-item');
           if (type === this.calFilterType) item.addClass('hc-sem-drop-item--active');
@@ -5958,7 +6401,8 @@ class DeleteSemesterModal extends Modal {
 // string, or null if valid.
 function validateClassSchedule(formData) {
   const { startDate, endDate, meetingStartTime, meetingEndTime } = formData;
-  const anyTimeSet = !!(meetingStartTime || meetingEndTime);
+  // #25: an online class's times are hidden and ignored, so not checked.
+  const anyTimeSet = !formData.online && !!(meetingStartTime || meetingEndTime);
   if (anyTimeSet) {
     if (!meetingStartTime || !meetingEndTime) {
       return 'Both start and end time are required together.';
@@ -5992,6 +6436,7 @@ class AddClassModal extends Modal {
       meetingDays: [],
       location: '', startDate: '', endDate: '', meetingStartTime: '', meetingEndTime: '',
       trackGrades: true,
+      online: false,
     };
     // #53 / Discussion #18: preselect the color addClass() would choose, so
     // the swatch shown is the one you get. Only a tap marks it picked.
@@ -6100,9 +6545,22 @@ class AddClassModal extends Modal {
   }
 
   _renderScheduleFields(contentEl) {
-    this._renderDaysPicker(contentEl);
+    // #25: Online (no meeting time). Hidden fields keep their values in
+    // formData, so turning this off brings them back.
+    new Setting(contentEl)
+      .setName('Online (no meeting time)')
+      .setDesc('Hides meeting days, times, location, and meeting link.')
+      .addToggle(toggle => {
+        toggle.setValue(this.formData.online).onChange(v => {
+          this.formData.online = v;
+          contentEl.empty();
+          this._renderScheduleFields(contentEl);
+        });
+      });
+    const online = this.formData.online;
+    if (!online) this._renderDaysPicker(contentEl);
 
-    new Setting(contentEl).setName('Location').addText(text => {
+    if (!online) new Setting(contentEl).setName('Location').addText(text => {
       text.setPlaceholder('Room 214 or Zoom').setValue(this.formData.location).onChange(v => this.formData.location = v);
     });
 
@@ -6115,6 +6573,8 @@ class AddClassModal extends Modal {
       text.inputEl.type = 'date';
       text.setValue(this.formData.endDate).onChange(v => this.formData.endDate = v);
     });
+
+    if (online) return;
 
     renderTimePicker(contentEl, 'Start time', this.formData.meetingStartTime, v => this.formData.meetingStartTime = v);
     renderTimePicker(contentEl, 'End time', this.formData.meetingEndTime, v => this.formData.meetingEndTime = v);
@@ -6177,9 +6637,11 @@ class EditClassModal extends Modal {
       meetingStartTime: cls.meetingStartTime || '',
       meetingEndTime: cls.meetingEndTime || '',
       trackGrades: isClassGraded(cls),
+      online: isClassOnline(cls),
       colorIndex: typeof cls.colorIndex === 'number' ? cls.colorIndex % COLOR_PALETTE.length : 0,
     };
     this.origColorIndex = this.formData.colorIndex;
+    this.colorTouched = false; // #69
     const sem = plugin.data.semesters.find(s => s.id === semesterId);
     this.semClasses = sem ? sem.classes : [];
   }
@@ -6244,6 +6706,7 @@ class EditClassModal extends Modal {
 
     renderColorPicker(contentEl, this.semClasses, this.cls, this.formData.colorIndex, i => {
       this.formData.colorIndex = i;
+      this.colorTouched = true; // #69
     });
   }
 
@@ -6276,9 +6739,22 @@ class EditClassModal extends Modal {
   }
 
   _renderScheduleFields(contentEl) {
-    this._renderDaysPicker(contentEl);
+    // #25: Online (no meeting time). Hidden fields keep their values in
+    // formData, so turning this off brings them back.
+    new Setting(contentEl)
+      .setName('Online (no meeting time)')
+      .setDesc('Hides meeting days, times, location, and meeting link.')
+      .addToggle(toggle => {
+        toggle.setValue(this.formData.online).onChange(v => {
+          this.formData.online = v;
+          contentEl.empty();
+          this._renderScheduleFields(contentEl);
+        });
+      });
+    const online = this.formData.online;
+    if (!online) this._renderDaysPicker(contentEl);
 
-    new Setting(contentEl).setName('Location').addText(text => {
+    if (!online) new Setting(contentEl).setName('Location').addText(text => {
       text.setValue(this.formData.location).onChange(v => this.formData.location = v);
     });
 
@@ -6291,6 +6767,8 @@ class EditClassModal extends Modal {
       text.inputEl.type = 'date';
       text.setValue(this.formData.endDate).onChange(v => this.formData.endDate = v);
     });
+
+    if (online) return;
 
     renderTimePicker(contentEl, 'Start time', this.formData.meetingStartTime, v => this.formData.meetingStartTime = v);
     renderTimePicker(contentEl, 'End time', this.formData.meetingEndTime, v => this.formData.meetingEndTime = v);
@@ -6341,9 +6819,16 @@ class EditClassModal extends Modal {
     // can't delete a key, so handled directly on the live class object.
     if (this.formData.trackGrades) delete this.cls.notGraded;
     else this.cls.notGraded = true;
-    // #53 / Discussion #18: only an actual change marks the color as picked,
-    // so opening and saving Edit class never pins an automatic color.
-    if (this.formData.colorIndex !== this.origColorIndex) {
+    // #25: presence-based, same as notGraded.
+    if (this.formData.online) this.cls.online = true;
+    else delete this.cls.online;
+    // #53 / Discussion #18: only a swatch tap marks the color as picked, so
+    // opening and saving Edit class never pins an automatic color.
+    // #69: a tap, not a change. Comparing to the opening index meant tapping
+    // the color a class already had did nothing, so it couldn't be kept
+    // through a move. Same rule as Add class, where any tap counts.
+    // (2026-10-09)
+    if (this.colorTouched) {
       this.cls.colorIndex = this.formData.colorIndex;
       this.cls.colorPicked = true;
     }
@@ -6418,6 +6903,138 @@ class MoveClassModal extends Modal {
       }
       this.close();
     });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// #64: Copy class. Decisions on hc-logic-notes #64 (2026-10-09): any
+// semester incl. its own; dates shift by whole weeks to a new start date, or
+// clear (keep only offered when the class has no start date to shift from);
+// one "Keep notes and note links" toggle, on by default; progress always
+// resets; the rest of the class setup comes along unchanged.
+class CopyClassModal extends Modal {
+  constructor(app, plugin, sourceSemesterId, cls, onCopy) {
+    super(app);
+    this.plugin = plugin;
+    this.sourceSemesterId = sourceSemesterId;
+    this.cls = cls;
+    this.onCopy = onCopy;
+    this.targetId = sourceSemesterId;
+    this.canShift = !!cls.startDate;
+    this.dateMode = this.canShift ? 'shift' : 'keep';
+    this.newStartDate = '';
+    this.keepNotes = true;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Copy class' });
+
+    const lectures = (this.cls.lectures || []).length;
+    const assignments = this.plugin._allClassAssignments(this.cls).length;
+    const exams = (this.cls.exams || []).length;
+    const n = (v, s) => `${v} ${v === 1 ? s : s + 's'}`;
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: `"${this.cls.code} — ${this.cls.name}" is copied with ${n(lectures, 'lecture')}, ${n(assignments, 'assignment')}, and ${n(exams, 'exam')}. The original isn't changed.`,
+    });
+
+    const targets = this.plugin.visibleSemesters();
+    const targetOptions = {};
+    for (const s of targets) {
+      targetOptions[s.id] = s.id === this.sourceSemesterId ? `${s.name} (this semester)` : s.name;
+    }
+    new Setting(contentEl).setName('Copy to').addDropdown(dd => {
+      dd.addOptions(targetOptions);
+      dd.setValue(this.targetId);
+      dd.onChange(v => { this.targetId = v; this._renderLibraryNote(); });
+    });
+
+    const dateOptions = this.canShift
+      ? { shift: 'Move to a new start date', clear: 'Clear dates' }
+      : { keep: 'Keep dates as they are', clear: 'Clear dates' };
+    new Setting(contentEl).setName('Dates').addDropdown(dd => {
+      dd.addOptions(dateOptions);
+      dd.setValue(this.dateMode);
+      dd.onChange(v => { this.dateMode = v; this._renderDateFields(); });
+    });
+    this.dateWrap = contentEl.createDiv();
+    this._renderDateFields();
+
+    new Setting(contentEl)
+      .setName('Keep notes and note links')
+      .setDesc('Key Concepts & Lesson Goal, assignment and exam notes, and links to vault notes.')
+      .addToggle(t => t.setValue(this.keepNotes).onChange(v => { this.keepNotes = v; }));
+
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: 'Statuses, grades, and reading progress start over. Professor, schedule, and location come along and can be edited afterwards.',
+    });
+    this.libraryNoteEl = contentEl.createEl('p', { cls: 'hc-modal-body' });
+    this._renderLibraryNote();
+
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const copyBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: 'Copy class' });
+    copyBtn.addEventListener('click', () => this._copy());
+  }
+
+  _renderLibraryNote() {
+    if (!this.libraryNoteEl) return;
+    this.libraryNoteEl.setText(this.targetId === this.sourceSemesterId
+      ? 'Its Library books are shared with the copy.'
+      : 'Its Library books are copied into that semester, marked Unread.');
+  }
+
+  _renderDateFields() {
+    this.dateWrap.empty();
+    if (this.dateMode !== 'shift') return;
+    let previewEl = null;
+    const updatePreview = () => {
+      if (!previewEl) return;
+      if (!this.newStartDate) { previewEl.setText(''); return; }
+      const days = copyShiftDays(this.cls.startDate, this.newStartDate);
+      const weeks = Math.abs(days / 7);
+      const dir = days > 0 ? 'later' : 'earlier';
+      const range = this.cls.endDate
+        ? ` Class runs ${formatDate(this.newStartDate)} – ${formatDate(addDaysISO(this.cls.endDate, days))}.`
+        : '';
+      previewEl.setText(days === 0
+        ? `Dates stay the same.${range}`
+        : `Dates move ${weeks} ${weeks === 1 ? 'week' : 'weeks'} ${dir}, so lectures keep their weekdays.${range}`);
+    };
+    new Setting(this.dateWrap)
+      .setName('New start date')
+      .setDesc(`Currently ${formatDate(this.cls.startDate)}.`)
+      .addText(text => {
+        text.inputEl.type = 'date';
+        text.inputEl.value = this.newStartDate;
+        text.onChange(v => { this.newStartDate = v; updatePreview(); });
+      });
+    previewEl = this.dateWrap.createEl('p', { cls: 'hc-modal-body' });
+    updatePreview();
+  }
+
+  _copy() {
+    if (this.dateMode === 'shift' && !this.newStartDate) {
+      new Notice('Pick a new start date, or choose Clear dates.');
+      return;
+    }
+    const target = this.plugin.data.semesters.find(s => s.id === this.targetId);
+    const copy = this.plugin.copyClass(this.sourceSemesterId, this.targetId, this.cls.id, {
+      dateMode: this.dateMode,
+      newStartDate: this.newStartDate,
+      keepNotes: this.keepNotes,
+    });
+    if (copy) {
+      this.onCopy();
+      new Notice(`"${copy.code}" copied to ${target ? target.name : 'the selected semester'}.`);
+    }
+    this.close();
   }
 
   onClose() { this.contentEl.empty(); }
@@ -6565,12 +7182,7 @@ class AddLectureModal extends Modal {
         this.formData.date = v;
         if (!cls || !v || totalExisting === 0) { warning.style.display = 'none'; return; }
         // Simulate where this new lecture would land
-        const simulated = [...existingSorted, { date: v, _new: true }].sort((a, b) => {
-          if (!a.date && !b.date) return 0;
-          if (!a.date) return 1;
-          if (!b.date) return -1;
-          return a.date.localeCompare(b.date);
-        });
+        const simulated = sortLecturesByRule([...(cls.lectures || []), { date: v, _new: true }]); // #70
         const insertedPos = simulated.findIndex(l => l._new) + 1;
         if (insertedPos !== totalExisting + 1) {
           warning.setText(`⚠ This date inserts the lecture at position ${insertedPos} of ${totalExisting + 1}. Existing lecture numbers will update on save.`);
@@ -6634,14 +7246,9 @@ class EditLectureModal extends Modal {
       const checkReorder = (v) => {
         this.formData.date = v;
         if (!cls || !v) { warning.style.display = 'none'; return; }
-        const simulated = [...(cls.lectures || [])].map(l =>
+        const simulated = sortLecturesByRule((cls.lectures || []).map(l => // #70
           l.id === this.lec.id ? { ...l, date: v } : l
-        ).sort((a, b) => {
-          if (!a.date && !b.date) return 0;
-          if (!a.date) return 1;
-          if (!b.date) return -1;
-          return a.date.localeCompare(b.date);
-        });
+        ));
         const newPos = simulated.findIndex(l => l.id === this.lec.id) + 1;
         if (newPos !== currentPos) {
           warning.setText(`⚠ This date moves the lecture from position ${currentPos} to ${newPos}. All lecture numbers will update on save.`);
@@ -6714,7 +7321,10 @@ class BulkAddLecturesModal extends Modal {
     this.text = '';
     this.startDate = '';
     const cls = plugin.findClass(semesterId, classId);
-    this.meetingDays = [...((cls && cls.meetingDays) || [])];
+    // #25: an online class has no meeting pattern, so automatic dating is
+    // hidden and lectures are added undated (dates typed on a line still count).
+    this.online = isClassOnline(cls);
+    this.meetingDays = this.online ? [] : [...((cls && cls.meetingDays) || [])];
     this.parsed = { rows: [], counts: { lectures: 0, dated: 0, undated: 0, skipped: 0 }, patternActive: false };
   }
 
@@ -6736,27 +7346,29 @@ class BulkAddLecturesModal extends Modal {
     this.textarea.setAttribute('rows', '8');
     this.textarea.addEventListener('input', () => { this.text = this.textarea.value; this._refresh(); });
 
-    new Setting(contentEl)
-      .setName('Assign dates automatically')
-      .setDesc('Pick the first day of class. Dates follow the meeting days below. A blank line between lectures skips one meeting (for breaks).')
-      .addText(text => {
-        text.inputEl.type = 'date';
-        const onDate = (v) => { this.startDate = v; this._refresh(); };
-        text.inputEl.addEventListener('input',  e => onDate(e.target.value));
-        text.inputEl.addEventListener('change', e => onDate(e.target.value));
-      });
+    if (!this.online) {
+      new Setting(contentEl)
+        .setName('Assign dates automatically')
+        .setDesc('Pick the first day of class. Dates follow the meeting days below. A blank line between lectures skips one meeting (for breaks).')
+        .addText(text => {
+          text.inputEl.type = 'date';
+          const onDate = (v) => { this.startDate = v; this._refresh(); };
+          text.inputEl.addEventListener('input',  e => onDate(e.target.value));
+          text.inputEl.addEventListener('change', e => onDate(e.target.value));
+        });
 
-    const daysSetting = new Setting(contentEl).setName('Meeting days');
-    const picker = daysSetting.controlEl.createDiv('hc-days-picker');
-    for (const day of DAYS) {
-      const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: day, type: 'button' });
-      if (this.meetingDays.includes(day)) chip.addClass('hc-day-toggle--active');
-      chip.addEventListener('click', () => {
-        const idx = this.meetingDays.indexOf(day);
-        if (idx === -1) { this.meetingDays.push(day); chip.addClass('hc-day-toggle--active'); }
-        else { this.meetingDays.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
-        this._refresh();
-      });
+      const daysSetting = new Setting(contentEl).setName('Meeting days');
+      const picker = daysSetting.controlEl.createDiv('hc-days-picker');
+      for (const day of DAYS) {
+        const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: day, type: 'button' });
+        if (this.meetingDays.includes(day)) chip.addClass('hc-day-toggle--active');
+        chip.addEventListener('click', () => {
+          const idx = this.meetingDays.indexOf(day);
+          if (idx === -1) { this.meetingDays.push(day); chip.addClass('hc-day-toggle--active'); }
+          else { this.meetingDays.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
+          this._refresh();
+        });
+      }
     }
 
     this.summaryEl = contentEl.createDiv('hc-bulk-summary');
@@ -6818,7 +7430,7 @@ class BulkAddLecturesModal extends Modal {
     const cls = this.plugin.findClass(this.semesterId, this.classId);
     const existing = (cls && cls.lectures || []).length;
     if (existing > 0) {
-      this.existingNote.setText(`This class already has ${existing} lecture${existing === 1 ? '' : 's'}. New lectures sort by date among them; undated lectures keep this order at the end.`);
+      this.existingNote.setText(`This class already has ${existing} lecture${existing === 1 ? '' : 's'}. New lectures are added after them. Dated lectures sort by date; undated ones keep their place.`);
     }
 
     this.saveBtn.setText(`Add ${counts.lectures} lecture${counts.lectures === 1 ? '' : 's'}`);
@@ -6883,10 +7495,9 @@ class BulkAddAssignmentsModal extends Modal {
     this.textarea.setAttribute('rows', '8');
     this.textarea.addEventListener('input', () => { this.text = this.textarea.value; this._refresh(); });
 
-    new Setting(contentEl).setName('Type').addDropdown(drop => {
-      for (const t of ASSIGNMENT_TYPES) drop.addOption(t, t);
-      drop.setValue(this.type);
-      drop.onChange(v => { this.type = v; this._refresh(); });
+    addTypeDropdown(new Setting(contentEl).setName('Type'), this.plugin, { // #62
+      value: this.type,
+      onChange: v => { this.type = v; this._refresh(); },
     });
 
     this.summaryEl = contentEl.createDiv('hc-bulk-summary');
@@ -7012,13 +7623,10 @@ class AddAssignmentModal extends Modal {
       // so no dropdown to make it with.
       this.formData.type = this.lockedType;
     } else {
-      new Setting(contentEl).setName('Type').addDropdown(drop => {
-        for (const t of ASSIGNMENT_TYPES) {
-          if (this.excludeTypes.includes(t)) continue;
-          drop.addOption(t, t);
-        }
-        drop.setValue(this.formData.type);
-        drop.onChange(v => { this.formData.type = v; this._updateConditional(contentEl); });
+      addTypeDropdown(new Setting(contentEl).setName('Type'), this.plugin, { // #62
+        value: this.formData.type,
+        exclude: this.excludeTypes,
+        onChange: v => { this.formData.type = v; this._updateConditional(contentEl); },
       });
     }
 
@@ -7128,10 +7736,15 @@ class EditAssignmentModal extends Modal {
     this.cls = cls;
     this.assignment = assignment;
     this.onSave = onSave;
+    // #65: lecture membership is structural (which list the assignment lives
+    // in), so read it rather than a field. Saved through moveAssignment().
+    const found = plugin.findAssignment(semesterId, cls.id, assignment.id);
+    this.originalLectureId = found ? found.lectureId : null;
     this.formData = {
       title: assignment.title || '',
       type: assignment.type || 'Other',
       dueDate: assignment.dueDate || '',
+      lectureId: this.originalLectureId,
       linkedBook: assignment.linkedBook || '',
       linkedNote: assignment.linkedNote || '',
     };
@@ -7156,19 +7769,40 @@ class EditAssignmentModal extends Modal {
       text.inputEl.focus();
     });
 
-    new Setting(contentEl).setName('Type').addDropdown(drop => {
-      for (const t of ASSIGNMENT_TYPES) drop.addOption(t, t);
-      drop.setValue(this.formData.type);
-      drop.onChange(v => {
+    addTypeDropdown(new Setting(contentEl).setName('Type'), this.plugin, { // #62
+      value: this.formData.type,
+      onChange: v => {
         this.formData.type = v;
         titleEl.setText(this._modalLabel());
         this._updateConditional(contentEl);
+      },
+    });
+
+    // #65: Lecture dropdown, replacing the separate Move button/modal. Same
+    // options and due-date autofill as Add assignment (and the old Move
+    // dialog): picking a lecture with a date fills it in, visible before Save.
+    let dueDateInputEl = null;
+    new Setting(contentEl).setName('Lecture').addDropdown(drop => {
+      drop.addOption('', 'Class-level (no lecture)');
+      const sorted = getLecturesSorted(this.cls);
+      sorted.forEach((lec, i) => drop.addOption(lec.id, `Lecture ${i + 1} — ${lec.title}`));
+      drop.setValue(this.formData.lectureId || '');
+      drop.onChange(v => {
+        this.formData.lectureId = v || null;
+        if (v && dueDateInputEl) {
+          const lec = this.cls.lectures.find(l => l.id === v);
+          if (lec?.date) {
+            dueDateInputEl.value = lec.date;
+            this.formData.dueDate = lec.date;
+          }
+        }
       });
     });
 
     new Setting(contentEl).setName('Due date').addText(text => {
       text.inputEl.type = 'date';
       text.inputEl.value = this.formData.dueDate;
+      dueDateInputEl = text.inputEl;
       text.onChange(v => this.formData.dueDate = v);
     });
 
@@ -7239,6 +7873,10 @@ class EditAssignmentModal extends Modal {
       linkedBook: this.formData.type === 'Reading' ? this.formData.linkedBook : '',
       linkedNote: this.formData.linkedNote,
     });
+    // #65: after the field edits, so the moved record carries them.
+    if ((this.formData.lectureId || null) !== (this.originalLectureId || null)) {
+      this.plugin.moveAssignment(this.semesterId, this.cls.id, this.assignment.id, this.formData.lectureId);
+    }
     this.onSave();
     this.close();
   }
@@ -7419,65 +8057,6 @@ class DeleteAssignmentModal extends Modal {
       this.onDelete();
       this.close();
     });
-  }
-
-  onClose() { this.contentEl.empty(); }
-}
-
-class MoveAssignmentModal extends Modal {
-  constructor(app, plugin, semesterId, cls, assignment, currentLectureId, onSave) {
-    super(app);
-    this.plugin = plugin;
-    this.semesterId = semesterId;
-    this.cls = cls;
-    this.assignment = assignment;
-    this.onSave = onSave;
-    this.formData = { lectureId: currentLectureId, dueDate: assignment.dueDate || '' };
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    this._makeDraggable(this);
-    contentEl.addClass('hc-modal');
-    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Move to lecture' });
-
-    let dueDateInputEl = null;
-
-    new Setting(contentEl).setName('Lecture').addDropdown(drop => {
-      drop.addOption('', 'Class-level (no lecture)');
-      const sorted = getLecturesSorted(this.cls);
-      sorted.forEach((lec, i) => drop.addOption(lec.id, `Lecture ${i + 1} — ${lec.title}`));
-      drop.setValue(this.formData.lectureId || '');
-      drop.onChange(v => {
-        this.formData.lectureId = v || null;
-        if (dueDateInputEl) {
-          if (v) {
-            const lec = this.cls.lectures.find(l => l.id === v);
-            if (lec?.date) {
-              dueDateInputEl.value = lec.date;
-              this.formData.dueDate = lec.date;
-            }
-          }
-        }
-      });
-    });
-
-    new Setting(contentEl).setName('Due date').addText(text => {
-      text.inputEl.type = 'date';
-      text.inputEl.value = this.formData.dueDate;
-      dueDateInputEl = text.inputEl;
-      text.onChange(v => this.formData.dueDate = v);
-    });
-
-    this._renderFooter(contentEl, 'Move', () => this._save());
-  }
-
-  _save() {
-    this.assignment.dueDate = this.formData.dueDate;
-    this.plugin.moveAssignment(this.semesterId, this.cls.id, this.assignment.id, this.formData.lectureId);
-    this.onSave();
-    this.close();
   }
 
   onClose() { this.contentEl.empty(); }
@@ -8213,7 +8792,7 @@ function _renderLinkedNoteField(container) {
 const DRAGGABLE_MODALS = [
   AddSemesterModal, EditSemesterModal, AddClassModal, EditClassModal,
   AddLectureModal, EditLectureModal, BulkAddLecturesModal,
-  AddAssignmentModal, BulkAddAssignmentsModal, EditAssignmentModal, MoveAssignmentModal,
+  AddAssignmentModal, BulkAddAssignmentsModal, EditAssignmentModal,
   ReadingPaceSetupModal, ReadingPaceLogModal,
   AddExamModal, EditExamModal,
   QuickAddResourceModal, AddResourceModal, EditResourceModal,
@@ -8234,7 +8813,6 @@ AddAssignmentModal.prototype._renderLinkedNoteField  = _renderLinkedNoteField;
 EditAssignmentModal.prototype._renderLinkedNoteField = _renderLinkedNoteField;
 ReadingPaceSetupModal.prototype._renderFooter = _renderFooter;
 ReadingPaceLogModal.prototype._renderFooter   = _renderFooter;
-MoveAssignmentModal.prototype._renderFooter = _renderFooter;
 AddExamModal.prototype._renderFooter        = _renderFooter;
 EditExamModal.prototype._renderFooter       = _renderFooter;
 AddResourceModal.prototype._renderFooter    = _renderFooter;

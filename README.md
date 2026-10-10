@@ -19,6 +19,7 @@ Hold Course runs on desktop and mobile.
 - [Semesters](#semesters)
 - [Classes](#classes)
 - [Moving a Class](#moving-a-class)
+- [Copying a Class](#copying-a-class)
 - [Lectures](#lectures)
 - [Assignments](#assignments)
 - [Readings](#readings)
@@ -31,6 +32,7 @@ Hold Course runs on desktop and mobile.
 - [Command Palette Shortcuts](#command-palette-shortcuts)
 - [Linked Notes](#linked-notes)
 - [Settings](#settings)
+- [For Teachers](#for-teachers)
 - [Mobile](#mobile)
 - [Data Storage](#data-storage)
 
@@ -112,15 +114,17 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 
 - **Details** — class name, class code, course page URL, track grades
 - **People** — professor name and email, office hours, TA name and email and office hours
-- **Schedule** — meeting days, location, start/end date, start/end time, and a meeting link
+- **Schedule** — an Online (no meeting time) toggle, meeting days, location, start/end date, start/end time, and a meeting link
 
 Only the class name is required; fill in the rest as you have it.
 
 **Opening a class:** Click the class card. Each class has five tabs: **Lectures**, **Assignments**, **Readings**, **Exams**, and **Library**.
 
-**Editing or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. A class can also be edited from the **Edit** button in its detail screen — editing uses the same Details/People/Schedule tabs as adding a class.
+**Editing, copying, or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. **Copy to semester…** is on the class's own menu and on its right-click menu in Courses — see [Copying a Class](#copying-a-class). A class can also be edited from the **Edit** button in its detail screen — editing uses the same Details/People/Schedule tabs as adding a class.
 
 **Class schedule:** When a class has meeting days, a start and end time, and a start and end date all set, Hold Course knows exactly when that class meets. Log a lecture on a day that matches, and its meeting time is shown automatically — no need to re-enter it per lecture. Leave any one of those fields blank and nothing changes: this is entirely opt-in, and existing classes are unaffected until you fill them in. Times are entered with a custom picker — hour and minute dropdowns with an AM/PM toggle — to match the rest of the plugin.
+
+**Online classes:** For a class with no live meetings, turn on **Online (no meeting time)** at the top of the Schedule tab. Meeting days, times, location, and meeting link are hidden, and the class shows an **Online** tag on its card and in its header instead. Start and end dates still apply, and the course page URL stays on the Details tab. Anything you'd already entered in the hidden fields is kept, not deleted — turn the toggle off and it comes back.
 
 **Lecture progress:** Once you've marked at least one lecture done, the class card shows a progress fraction — lectures completed out of total logged.
 
@@ -156,6 +160,20 @@ This is most useful if you're building your own curriculum across terms — a cl
 
 ---
 
+## Copying a Class
+
+Copying makes a fresh version of a class in any semester — next term's run of the same course, or a second section in the same term. The original isn't changed.
+
+**Copying a class:** Choose **Copy to semester…** from the class's menu, or right-click it in the Courses view. Pick the semester; a class copied into its own semester gets " (copy)" added to its code.
+
+**What comes along:** Lectures, assignments, exams, and Library books. Within the same semester the copy shares the existing books; in another semester it gets its own copies, marked Unread.
+
+**Dates:** Give the copy a new start date and every date moves with it, in whole weeks so lectures keep their weekdays. Or clear the dates and fill them in later. If the class has no start date, you can also keep its dates as they are.
+
+**Starting over:** Statuses, grades, reading progress, and the class's status reset, so the copy starts fresh. Your notes and note links come along unless you turn off **Keep notes and note links**. A color you chose for the class is kept; an automatic one gets the first free color in the new semester.
+
+---
+
 ## Lectures
 
 Inside a class, the **Lectures** tab lists all logged lectures in order.
@@ -166,11 +184,13 @@ Inside a class, the **Lectures** tab lists all logged lectures in order.
 
 Dates can be filled in for you. Pick the first day of class, confirm the meeting days, and dates walk the calendar from there, one lecture per meeting. A blank line skips a meeting, which is how you handle a reading week or a holiday. A date at the end of a line marks that lecture as an out-of-band session — a guest lecture or a makeup — placing it on that date without consuming a meeting slot. ISO (`2026-08-24`), `Aug 24` / `24 Aug`, and numeric (`8/24`) formats are all accepted.
 
+For an [online class](#classes), automatic dating is hidden, since there are no meeting days to follow; a date typed at the end of a line is still used.
+
 A live preview shows every parsed lecture and the date it will land on before anything is added. Short titles are highlighted for a second look, since a pasted line break can quietly split one lecture into two. A bulk add can't be undone in a single step, so the preview is worth reading.
 
 **Status:** Each lecture has a status pill that cycles through **Not Started / In Progress / Done**. Click the pill — from the list or the detail screen — to advance it. Done lectures appear with muted styling — present in the record, but visually stepped back so your attention goes to what's ahead. Completed lectures can be hidden completely by using the **Show done/Hide done** toggle.
 
-**Sort order:** Use the sort toggle to switch between oldest-first and newest-first.
+**Sort order:** Use the sort toggle to switch between oldest-first and newest-first. Dated lectures sort by date. A lecture without a date stays where you added it, so an undated Lecture 1 still comes before a dated Lecture 2. Lecture numbers follow the same order.
 
 **Lecture detail:** Click a lecture to open its detail screen, where you can edit its fields, jot key concepts and lesson goals, link the lecture to a note in your vault, and see every assignment attached to it. Assignments can be added here one at a time or in bulk.
 
@@ -193,6 +213,8 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 **Bulk adding assignments:** Open a lecture and click **Bulk add** in its Assignments section. One assignment per line — each becomes an assignment attached to that lecture and inherits the lecture's date as its due date. One type applies to the whole batch, so paste one kind at a time. A live preview shows every assignment before anything is added, and the same caution applies: check the rows, because a bulk add can't be undone in a single step.
 
 **Assignment types:** Each assignment has a type — Reading, Writing, Project, Discussion, or Other — color-coded throughout the plugin so you can scan quickly.
+
+**Your own types:** Choose **New type…** in the Type menu when adding or editing an assignment (or in Bulk add) and give it a name, such as Lab, Quiz, or Presentation. Your types are shared by all your classes and semesters, appear in every type filter, and use the same gray as Other. Rename or delete them under *Settings > Assignment types*: renaming updates every assignment that uses the type, and deleting one changes those assignments to Other.
 
 **Grade:** Assignments have an optional grade field. Fill it in after graded work is returned. Once an assignment is marked done, a recorded grade appears as a quiet pill next to its title in every list view. Grade doesn't apply to Readings, so the field is never shown there. You can also turn grading off entirely for a class — see the Track grades toggle under Classes — which hides the Grade field and chip everywhere for that class, useful for self-study or audited classes with no assigned grades.
 
@@ -407,9 +429,23 @@ Hold Course's settings are under *Settings > Community plugins > Hold Course*.
 
 This works on desktop and Android. It has no effect on iOS, which doesn't support the underlying CSS property — the setting is simply inert there rather than broken.
 
-**E-ink display mode** — adjusts contrast and removes transitions for slow-refresh displays. Off by default; it isn't detected automatically, since the CSS feature meant to detect e-ink displays isn't implemented in the browser engine Obsidian uses.
+**Grayscale display mode** — increases text contrast and size for e-ink displays (such as Boox tablets) or a phone or tablet set to grayscale, both of which wash out low-contrast text. Colored text — overdue dates, class names, assignment type labels — switches to darker shades of the same colors. Off by default; it isn't detected automatically, since the CSS feature meant to detect e-ink displays isn't implemented in the browser engine Obsidian uses.
+
+**Assignment types** — your own assignment types, each with how many assignments use it, and buttons to rename or delete it. New types are added from the Type menu when adding or editing an assignment.
 
 <img src="screenshots/1.9.0-settings.jpg" width="700" alt="Settings">
+
+---
+
+## For Teachers
+
+Hold Course is built around one person's own coursework, but several features suit planning a course you teach:
+
+- **[Copy a class](#copying-a-class)** for each section or term. Dates move to the new start date in whole weeks, and statuses start over.
+- **[Online classes](#classes)** drop the meeting fields when there's no live session.
+- **[Your own assignment types](#assignments)** — Lab, Quiz, Homework, Peer review — are set up once and shared by every class and section, and each one can be filtered on Assignments and Calendar.
+
+What it doesn't do: types are labels only, with no grade weights, and each assignment has a single status — yours. Hold Course is a planning tool, not a gradebook, and doesn't track individual students.
 
 ---
 

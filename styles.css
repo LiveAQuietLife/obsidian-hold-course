@@ -3066,6 +3066,15 @@ body.hc-eink .hc-resource-source-icon {
   color: var(--hc-dim-muted);
 }
 
+/* #68: the term-window flag uses the theme's warning orange (#ec7500 in the
+   default light theme, about 2.95:1 on white), which goes pale gray in
+   grayscale. The icon shape carries the meaning, so full text color is fine.
+   The second selector matches the Today-strip rule's specificity. */
+body.hc-eink .hc-term-window-flag,
+body.hc-eink .hc-today-item-meta .hc-term-window-flag {
+  color: var(--text-normal);
+}
+
 .hc-today-empty {
   font-size: 13px;
   color: var(--text-muted);
