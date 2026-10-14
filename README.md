@@ -29,6 +29,7 @@ Hold Course runs on desktop and mobile.
 - [Assignments View](#assignments-view)
 - [Courses](#courses)
 - [HC Today Sidebar](#hc-today-sidebar)
+- [Daily Note Agenda](#daily-note-agenda)
 - [Command Palette Shortcuts](#command-palette-shortcuts)
 - [Linked Notes](#linked-notes)
 - [Settings](#settings)
@@ -224,6 +225,8 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Term-window flag:** If an assignment or exam falls outside its class's own start and end dates, a small warning icon appears next to its title. It catches a due date that's drifted outside the term without you having to cross-check dates by hand. The icon only appears once a class has both dates set on its Schedule tab, and clears on its own once the item is marked done.
 
+**Word goal (Writing):** Link a Writing assignment to its draft note, then turn on **Track a word goal** in the assignment's Word Goal section and enter a target word count and a date (defaults to the due date). Hold Course counts what's in the draft and shows what's left, for example `1,800 words to go, 4 days — ~450/day`, on the assignment and as a **Goal:** line in the class's Assignments tab. There's nothing to log: keep writing in the draft and the count updates the next time you look. The info tooltip shows words written so far. Click the line to change the target or date. Like reading pace, the per-day figure is recalculated from what's left: writing more lowers it, and a day passing raises it.
+
 **Assignment detail:** Click an assignment to open its detail screen, where you can edit all fields, link the assignment to a note in your vault, or quick-add a resource to the Library.
 
 <img src="screenshots/1.9.0-assignments.jpg" width="700" alt="Lectures">
@@ -249,13 +252,14 @@ Readings never show a grade field or grade chip — grading doesn't apply to the
 ### Reading pace
 
 Turn on **Track pace for this reading** on a reading and Hold Course will
-work out how many pages a day it takes to finish on time. It asks two
-things: how many pages in total, and by what date (defaults to the due
-date).
+work out how much a day it takes to finish on time. A reading can be
+measured in **pages**, which you enter, or in **words**, counted from a
+linked note (see [Measuring in words](#measuring-in-words) below). For pages,
+it asks two things: how many pages in total, and by what date (defaults to
+the due date).
 
 **The page count is whatever you say it is.** Hold Course never looks at how
-long a book is or how many pages a linked note has — it only knows the
-number you typed. If a 400-page book is assigned but you only need chapters
+long a book or PDF is — it only knows the number you typed. If a 400-page book is assigned but you only need chapters
 4–7, enter the pages for chapters 4–7. If a reading spans two books and a
 PDF, add them up and enter one number.
 
@@ -285,6 +289,33 @@ the line so you can see which one moved.
 
 The pace figure also appears as its own column in the cross-class
 [Assignments view](#assignments-view).
+
+#### Measuring in words
+
+When a reading is linked to a Markdown note, the setup dialog offers
+**Measure by: Pages / Words**, with Words chosen for you. Hold Course then
+counts the note's words itself, leaving out frontmatter, comments, embeds,
+and link targets, and shows the pace in minutes:
+
+`~40 min left, 3 days — ~13 min/day`
+
+The word count is in the info tooltip next to the line. Minutes come from
+your reading speed, set under *Settings > Reading pace > Words per minute*
+(225 by default; lower it for dense or technical reading).
+
+**Logging:** click the pace line and choose where you are in **Finished
+through**: Not started, any heading in the note, or Finished. Choosing a
+heading counts that section, everything above it, and any subheadings under
+it as read. A note with no headings asks for a **percent** instead.
+
+**The count follows the note.** If you edit the note, it's recounted the
+next time you look. If you rename or delete the heading you logged, the
+reading keeps its last count and Log progress asks you to pick again. If the
+linked note itself goes missing, the line says **Linked note missing**.
+
+**Switching:** change between pages and words any time in **Edit setup**.
+Each keeps its own progress, so switching back loses nothing. Readings
+linked to a PDF or a book are measured in pages.
 
 ---
 
@@ -397,6 +428,33 @@ Each item shows its title and a subtitle line with the class name and item type.
 
 ---
 
+## Daily Note Agenda
+
+Hold Course can show a day's agenda inside a note, which makes it a natural fit for your daily notes. Add this code block to a note, or to your daily note template so every new daily note gets one:
+
+````
+```hold-course-agenda
+```
+````
+
+The command **Insert live agenda block** types it for you.
+
+**What it shows:** overdue assignments first, each with its due date, then that day's lectures (with meeting times), assignments, and exams, styled like the HC Today sidebar. Readings with pace tracking and writing with a word goal show their pace line underneath. Done items are struck through. A day with nothing on it says **Nothing scheduled**.
+
+**Which day:** in a daily note, the block reads the date from the note's name using your Daily Notes format, so last Tuesday's note shows last Tuesday. In any other note it shows today. To pick a date yourself, add a line inside the block:
+
+````
+```hold-course-agenda
+date: 2026-10-20
+```
+````
+
+**Live:** the block isn't text written into your note — it's drawn from your Hold Course data each time, so it stays current as you mark things done. Overdue items in an older note are as of that note's date; anything you've finished since drops off. Click any item to open it in Hold Course.
+
+**A fixed copy:** to keep a plain list that won't change, use **Insert agenda as text**. It writes the same agenda as ordinary Markdown bullets at the cursor (plain bullets rather than checkboxes, so task plugins don't pick them up).
+
+---
+
 ## Command Palette Shortcuts
 
 Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P) for quick access without opening the plugin first:
@@ -410,6 +468,8 @@ Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P
 - Add a lecture — opens the Add Lecture dialog for the current class (requires an open class screen)
 - Add an assignment — opens the Add Assignment dialog for the current class (requires an open class screen)
 - Export Hold Course data snapshot — copies `data.json` to a timestamped backup file in the plugin folder
+- Insert live agenda block — adds a `hold-course-agenda` block at the cursor (see [Daily Note Agenda](#daily-note-agenda))
+- Insert agenda as text — writes the note's day's agenda as a plain Markdown list at the cursor
 
 All commands are hotkey-bindable via Settings > Hotkeys.
 
@@ -418,6 +478,8 @@ All commands are hotkey-bindable via Settings > Hotkeys.
 ## Linked Notes
 
 Any lecture, assignment, or exam can be linked to an existing note in your vault. Set the link from the item's detail screen. Linked notes open directly from the detail screen.
+
+A linked Markdown note can also be measured: a reading's note for [reading pace in words](#measuring-in-words), and a Writing assignment's draft for its word goal.
 
 ---
 
@@ -430,6 +492,8 @@ Hold Course's settings are under *Settings > Community plugins > Hold Course*.
 This works on desktop and Android. It has no effect on iOS, which doesn't support the underlying CSS property — the setting is simply inert there rather than broken.
 
 **Grayscale display mode** — increases text contrast and size for e-ink displays (such as Boox tablets) or a phone or tablet set to grayscale, both of which wash out low-contrast text. Colored text — overdue dates, class names, assignment type labels — switches to darker shades of the same colors. Off by default; it isn't detected automatically, since the CSS feature meant to detect e-ink displays isn't implemented in the browser engine Obsidian uses.
+
+**Reading pace > Words per minute** — your reading speed, used to turn word counts into minutes for readings measured in words. 225 by default; leave the box empty to use the default.
 
 **Assignment types** — your own assignment types, each with how many assignments use it, and buttons to rename or delete it. New types are added from the Type menu when adding or editing an assignment.
 

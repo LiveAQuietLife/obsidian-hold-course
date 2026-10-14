@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.10.0 */
+/* --- Hold Course --- v1.11.0 */
 'use strict';
 
 const {
@@ -11,6 +11,7 @@ const {
   Menu,
   setIcon,
   FuzzySuggestModal,
+  MarkdownRenderChild,
 } = require('obsidian');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -357,6 +358,174 @@ function renderTermWindowFlag(container, dueDate, cls, isDone) {
   // the convention used everywhere else in this file (status pills, etc.).
 }
 
+// #63 (F6): module-level handles for the free helpers below, which have no
+// plugin argument. Set once in onload(). Absent (as in scenario scripts that
+// never call onload) means "can't measure", and the helpers say so rather
+// than throwing.
+const HC = { plugin: null, measure: null };
+
+const DEFAULT_WORDS_PER_MINUTE = 225;
+
+// #63: settings.wordsPerMinute absent means the default. Not written on load.
+function getWordsPerMinute() {
+  const v = HC.plugin && HC.plugin.data && HC.plugin.data.settings
+    ? parseInt(HC.plugin.data.settings.wordsPerMinute, 10) : NaN;
+  return v > 0 ? v : DEFAULT_WORDS_PER_MINUTE;
+}
+
+// ─── F6: measuring ──────────────────────────────────────────────────────────
+// One service that measures a vault note, so #63 (reading pace), #20 (writing
+// progress), and later time estimates and the heavy-week warning all count
+// the same way. Returns plain data; callers decide what it means. New kinds
+// of measure (pages, minutes) get added as new keys on the result.
+
+// Removes what isn't read as prose: frontmatter is cut by the caller;
+// comments, embeds, URLs, link targets, HTML tags, callout markers, footnote
+// refs, block IDs, and numbered-list numbers go here. Link text stays ([[a|b]] → b, [t](u) → t).
+// Markdown punctuation needs no stripping: the word pattern ignores it.
+function stripForCount(line) {
+  return line
+    .replace(/!\[\[[^\]]*\]\]/g, ' ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[\[([^\]|]*)\|([^\]]*)\]\]/g, ' $2 ')
+    .replace(/\[\[([^\]]*)\]\]/g, (_, t) => ' ' + t.replace(/[#^]/g, ' ') + ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, ' $1 ')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/^\s*(>\s*)+\[![^\]]*\][+-]?/, ' ')
+    .replace(/\[\^[^\]]*\]/g, ' ')
+    .replace(/\s\^[A-Za-z0-9-]+\s*$/, ' ')
+    .replace(/^\s*(>\s*)*\d+[.)]\s/, ' ');
+}
+
+// Words are runs of letters/digits (with marks, so pointed Hebrew and
+// accented Greek count as one word), joined by an apostrophe, hyphen, or
+// period ("don't", "well-known", "e.g"). Chinese and Japanese characters
+// count one each, as Obsidian's own word count does.
+const WORD_PATTERN = /[぀-ヿ㐀-䶿一-鿿]|[\p{L}\p{N}\p{M}]+(?:['’.\-][\p{L}\p{N}\p{M}]+)*/gu;
+
+function countWords(text) {
+  const m = text.match(WORD_PATTERN);
+  return m ? m.length : 0;
+}
+
+// Measures a note's Markdown text: total words, plus each heading with
+// `start` (words before it) and `through` (words up to the end of its
+// section — the next heading at the same or a higher level — so finishing
+// an H2 includes its H3s). Headings inside code fences don't count as
+// headings. Heading words count as part of their own section.
+function measureMarkdown(raw) {
+  let text = String(raw || '').replace(/\r\n?/g, '\n');
+  const fm = text.match(/^---\n[\s\S]*?\n---(\n|$)/);
+  if (fm) text = text.slice(fm[0].length);
+  text = text.replace(/%%[\s\S]*?%%/g, ' ').replace(/<!--[\s\S]*?-->/g, ' ');
+
+  let words = 0;
+  let fence = null;
+  const headings = [];
+  for (const line of text.split('\n')) {
+    const f = line.match(/^\s*(`{3,}|~{3,})/);
+    if (f) {
+      if (!fence) fence = f[1][0];
+      else if (f[1][0] === fence) fence = null;
+      continue;
+    }
+    const h = fence ? null : line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+    if (h) {
+      const label = stripForCount(h[2]).replace(/[*_=~`]/g, '').replace(/\s+/g, ' ').trim();
+      headings.push({ level: h[1].length, text: label || h[2].trim(), start: words });
+    }
+    words += countWords(stripForCount(line));
+  }
+  for (let i = 0; i < headings.length; i++) {
+    let end = words;
+    for (let j = i + 1; j < headings.length; j++) {
+      if (headings[j].level <= headings[i].level) { end = headings[j].start; break; }
+    }
+    headings[i].through = end;
+  }
+  return { words, headings };
+}
+
+// Caches one measure per note, keyed by path and checked against the file's
+// mtime and size, so an edited note is recounted the next time it's viewed —
+// no file watcher. peek() is synchronous for render code: it returns what's
+// cached (marked stale if the file changed) and starts a recount in the
+// background; onUpdate fires once counts land so views can repaint. A file
+// that can't be read is cached as unreadable, so a failure can't loop.
+class NoteMeasureService {
+  constructor(app, onUpdate) {
+    this.app = app;
+    this.onUpdate = onUpdate;
+    this.cache = new Map();
+    this.pending = new Map(); // path → in-flight count
+    this._timer = null;
+  }
+
+  resolve(path) {
+    const p = (path || '').trim();
+    if (!p) return null;
+    let f = this.app.vault.getAbstractFileByPath(p);
+    if (!f || !f.extension) {
+      f = this.app.metadataCache.getFirstLinkpathDest(p.replace(/\.md$/i, ''), '') || null;
+    }
+    return f && f.extension ? f : null;
+  }
+
+  isMarkdown(path) {
+    const f = this.resolve(path);
+    return !!f && f.extension.toLowerCase() === 'md';
+  }
+
+  _fresh(f) {
+    const c = this.cache.get(f.path);
+    return c && c.mtime === f.stat.mtime && c.size === f.stat.size ? c : null;
+  }
+
+  // { status: 'missing' } | { status: 'pending' } | { status: 'ok', words, headings, stale? }
+  peek(path) {
+    const f = this.resolve(path);
+    if (!f || f.extension.toLowerCase() !== 'md') return { status: 'missing' };
+    const fresh = this._fresh(f);
+    if (fresh) return fresh.m ? { status: 'ok', ...fresh.m } : { status: 'missing' };
+    this._count(f).then(() => this._notify());
+    const old = this.cache.get(f.path);
+    return old && old.m ? { status: 'ok', stale: true, ...old.m } : { status: 'pending' };
+  }
+
+  // Awaitable version for dialogs: always returns an up-to-date measure, or
+  // null when the note is missing or unreadable.
+  async measure(path) {
+    const f = this.resolve(path);
+    if (!f || f.extension.toLowerCase() !== 'md') return null;
+    const fresh = this._fresh(f) || await this._count(f);
+    return fresh && fresh.m ? { ...fresh.m } : null;
+  }
+
+  // One read per file at a time; a second caller shares the first's result.
+  _count(f) {
+    if (this.pending.has(f.path)) return this.pending.get(f.path);
+    const stamp = { mtime: f.stat.mtime, size: f.stat.size };
+    const p = this.app.vault.cachedRead(f)
+      .then(t => measureMarkdown(t), () => null)
+      .then(m => {
+        const entry = { ...stamp, m };
+        this.cache.set(f.path, entry);
+        this.pending.delete(f.path);
+        return entry;
+      });
+    this.pending.set(f.path, p);
+    return p;
+  }
+
+  _notify() {
+    if (this._timer || !this.onUpdate) return;
+    this._timer = setTimeout(() => { this._timer = null; this.onUpdate(); }, 50);
+  }
+}
+
+// ─── Reading pace ───────────────────────────────────────────────────────────
+
 // #30: target date resolution for reading-pace tracking. targetDateOverride
 // wins when present; otherwise falls back to the assignment's own due date.
 // Leaving it absent (rather than always writing the due date in) is what lets
@@ -367,75 +536,199 @@ function getReadingPaceTargetDate(assignment) {
   return rp.targetDateOverride || assignment.dueDate || null;
 }
 
-// #30: compact one-line reading-pace indicator. Returns null when there's
-// nothing to show — no readingPace, or hidden — so the call site can treat
-// absence as "render nothing" rather than an empty string. Days-remaining is
-// counted inclusively (+1) so a due-today target resolves to 1 day, not 0 —
-// avoids a divide-by-zero without needing a separate due-today branch.
-// Returns { text, tooltip } rather than a bare string — tooltip is only set
-// on the per-day state, since that's the one whose live-recalculating nature
-// reads as a bug on first encounter: re-averaging after logging progress
-// looks like it's contradicting itself unless it's clear the number was
-// never a fixed today-only quota.
-function getReadingPaceLine(assignment) {
+// #63: which heading a stored mark points at. Marks store the heading's text,
+// level, and which occurrence it is (n), so two "Summary" H2s stay apart.
+function findMarkedHeading(headings, mark) {
+  let seen = 0;
+  for (let i = 0; i < headings.length; i++) {
+    const h = headings[i];
+    if (h.level === mark.level && h.text === mark.heading) {
+      if (seen === (mark.n || 0)) return i;
+      seen++;
+    }
+  }
+  return -1;
+}
+
+// #63: words read under a mark. absent → not started; {end} → finished;
+// {percent}; {heading, level, n} → through that heading's section. A heading
+// that's gone falls back to the count saved when it was logged (lost: true).
+function resolveWordsRead(rp, m) {
+  const mark = rp.wordMark;
+  if (!mark) return { read: 0, lost: false };
+  if (mark.end) return { read: m.words, lost: false };
+  if (mark.percent !== undefined) {
+    return { read: Math.round(m.words * Math.min(100, Math.max(0, mark.percent)) / 100), lost: false };
+  }
+  const i = findMarkedHeading(m.headings, mark);
+  if (i < 0) return { read: Math.min(rp.wordsRead || 0, m.words), lost: true };
+  return { read: m.headings[i].through, lost: false };
+}
+
+// #63: the one place the pace numbers are worked out (Principle 4). The
+// inline line, the compact column, and the Assignments sort all read it.
+// Returns null when there's nothing to show (no readingPace, or hidden).
+// Otherwise { unit, status: 'ok'|'missing'|'pending', remaining, total,
+// days, perDay, ... }. remaining/perDay are pages for pages, minutes for
+// words. days is null with no target date and <= 0 once it's passed.
+// Days-remaining is counted inclusively (+1) so a due-today target resolves
+// to 1 day, not 0.
+function getReadingPaceState(assignment) {
   const rp = assignment.readingPace;
   if (!rp || rp.hidden) return null;
 
-  const remaining = (rp.totalPages || 0) - (rp.pagesRead || 0);
-  if (remaining <= 0) return { text: '0 pages remaining', tooltip: null };
+  const target = getReadingPaceTargetDate(assignment);
+  const days = target ? getDaysUntil(target) + 1 : null;
 
-  const targetDate = getReadingPaceTargetDate(assignment);
-  if (!targetDate) {
-    return { text: `${remaining} page${remaining === 1 ? '' : 's'} remaining`, tooltip: null };
-  }
-
-  const daysRemaining = getDaysUntil(targetDate) + 1;
-  if (daysRemaining <= 0) {
+  if (rp.unit !== 'words') {
+    const remaining = (rp.totalPages || 0) - (rp.pagesRead || 0);
     return {
-      text: `${remaining} page${remaining === 1 ? '' : 's'} remaining — target date passed`,
-      tooltip: null,
+      unit: 'pages', status: 'ok', remaining, days,
+      perDay: remaining > 0 && days > 0 ? remaining / days : null,
     };
   }
+
+  const m = HC.measure ? HC.measure.peek(assignment.linkedNote) : { status: 'missing' };
+  if (m.status !== 'ok') return { unit: 'words', status: m.status, days };
+  const { read, lost } = resolveWordsRead(rp, m);
+  const wordsLeft = Math.max(0, m.words - read);
+  const wpm = getWordsPerMinute();
+  const remaining = Math.ceil(wordsLeft / wpm);
+  return {
+    unit: 'words', status: 'ok', remaining, days, lost, wpm,
+    wordsLeft, wordsTotal: m.words,
+    perDay: remaining > 0 && days > 0 ? remaining / days : null,
+  };
+}
+
+// #63: "40 min", "1 h 5 min", "2 h".
+function formatMinutes(n) {
+  if (n < 60) return `${n} min`;
+  const h = Math.floor(n / 60), m = n % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+const PACE_PER_DAY_TOOLTIP = (what) => `Recalculated from what's left, spread evenly across the days remaining — not a fixed target for today alone. ${what} lowers it; a day passing raises it.`;
+
+// #30: compact one-line reading-pace indicator. Returns null when there's
+// nothing to show — no readingPace, or hidden — so the call site can treat
+// absence as "render nothing" rather than an empty string.
+// Returns { text, tooltip } rather than a bare string — tooltip is only set
+// on the per-day state for pages, since that's the one whose
+// live-recalculating nature reads as a bug on first encounter. #63: word
+// readings always carry a tooltip, since that's where the word count lives.
+function getReadingPaceLine(assignment) {
+  const s = getReadingPaceState(assignment);
+  if (!s) return null;
+
+  if (s.unit === 'words') {
+    if (s.status === 'missing') return { text: 'Linked note missing', tooltip: null };
+    if (s.status === 'pending') return { text: 'Counting words…', tooltip: null };
+    const fmt = (n) => n.toLocaleString('en-US');
+    const words = `${fmt(s.wordsLeft)} of ${fmt(s.wordsTotal)} words left, at ${s.wpm} words a minute.`;
+    if (s.remaining <= 0) return { text: '0 min left', tooltip: words };
+    const left = `~${formatMinutes(s.remaining)} left`;
+    if (s.days === null) return { text: left, tooltip: words };
+    if (s.days <= 0) return { text: `${left} — target date passed`, tooltip: words };
+    return {
+      text: `${left}, ${s.days} day${s.days === 1 ? '' : 's'} — ~${formatMinutes(Math.ceil(s.perDay))}/day`,
+      tooltip: `${words} ${PACE_PER_DAY_TOOLTIP('Logging progress')}`,
+    };
+  }
+
+  const remaining = s.remaining;
+  if (remaining <= 0) return { text: '0 pages remaining', tooltip: null };
+  const pages = `${remaining} page${remaining === 1 ? '' : 's'}`;
+  if (s.days === null) return { text: `${pages} remaining`, tooltip: null };
+  if (s.days <= 0) return { text: `${pages} remaining — target date passed`, tooltip: null };
 
   // #30 follow-up: show the inputs, not just the quotient. Math.ceil alone
   // collapsed 20/5 and 19/5 to the same "~4", so logging a page looked like
   // it did nothing — the number only visibly moves when a day passes. One
   // decimal makes a log register immediately, and surfacing pages-left and
   // days-left makes it obvious which term changed.
-  const perDay = remaining / daysRemaining;
-  const perDayText = Number.isInteger(perDay) ? String(perDay) : perDay.toFixed(1);
+  const perDayText = Number.isInteger(s.perDay) ? String(s.perDay) : s.perDay.toFixed(1);
   return {
-    text: `${remaining} page${remaining === 1 ? '' : 's'} left, ${daysRemaining} day${daysRemaining === 1 ? '' : 's'} — ${perDayText}/day`,
-    tooltip: "Recalculated from what's left, spread evenly across the days remaining — not a fixed target for today alone. Logging pages lowers it; a day passing raises it.",
+    text: `${pages} left, ${s.days} day${s.days === 1 ? '' : 's'} — ${perDayText}/day`,
+    tooltip: PACE_PER_DAY_TOOLTIP('Logging pages'),
   };
 }
 
 // #15: column-width variant of getReadingPaceLine. The inline version's copy
 // ("19 pages left, 5 days — 3.8/day") is written to be read once, in place;
-// a table column needs the same three states in a few characters. Deliberately
+// a table column needs the same states in a few characters. Deliberately
 // a separate function rather than a mode flag on getReadingPaceLine — the two
 // have different callers, different widths, and no shared formatting beyond
-// the underlying numbers. Returns null on the same conditions as its sibling
-// so call sites treat absence identically.
+// the underlying numbers (which both take from getReadingPaceState).
 function getReadingPaceCompact(assignment) {
-  const rp = assignment.readingPace;
-  if (!rp || rp.hidden) return null;
+  const s = getReadingPaceState(assignment);
+  if (!s) return null;
 
-  const remaining = (rp.totalPages || 0) - (rp.pagesRead || 0);
-  if (remaining <= 0) return { text: '0 left', state: 'done' };
+  if (s.status === 'missing') return { text: 'No note', state: 'passed' };
+  if (s.status === 'pending') return { text: '…', state: 'plain' };
+  if (s.remaining <= 0) return { text: '0 left', state: 'done' };
 
-  const targetDate = getReadingPaceTargetDate(assignment);
-  if (!targetDate) return { text: `${remaining} left`, state: 'plain' };
+  const left = s.unit === 'words' ? formatMinutes(s.remaining) : String(s.remaining);
+  if (s.days === null) return { text: `${left} left`, state: 'plain' };
+  if (s.days <= 0) return { text: `${left} left`, state: 'passed' };
 
-  const daysRemaining = getDaysUntil(targetDate) + 1;
-  if (daysRemaining <= 0) return { text: `${remaining} left`, state: 'passed' };
+  // One decimal for pages, so the column moves when a log lands — same
+  // reason as the inline line above. Still compact: "3.8/day". Minutes are
+  // whole: a logged section moves them by far more than one.
+  if (s.unit === 'words') return { text: `${formatMinutes(Math.ceil(s.perDay))}/day`, state: 'plain' };
+  return { text: `${Number.isInteger(s.perDay) ? s.perDay : s.perDay.toFixed(1)}/day`, state: 'plain' };
+}
 
-  // One decimal here too, so the table column moves when a log lands — same
-  // reason as the inline line above. Still compact: "3.8/day".
-  const perDay = remaining / daysRemaining;
+// Sort key for the Assignments "Reading estimate" column: work per day,
+// unrounded, to match the display. Pages/day and minutes/day share one scale
+// here — each is "how much a day" in the unit shown. Untracked, missing, and
+// still-counting rows return null and sink like undated ones.
+function getReadingPaceRank(assignment) {
+  const s = getReadingPaceState(assignment);
+  if (!s || s.status !== 'ok') return null;
+  if (s.remaining <= 0) return 0;
+  if (s.days === null || s.days <= 0) return s.remaining;
+  return s.perDay;
+}
+
+// ─── Writing goal (#20) ─────────────────────────────────────────────────────
+// The reverse of reading pace: a target word count, measured against the
+// linked draft note by the same F6 service. Nothing to log — what's written
+// is what's in the note. Presence-based like readingPace: assignment.
+// writingGoal = { targetWords, targetDateOverride?, hidden? }.
+
+function getWritingGoalState(assignment) {
+  const g = assignment.writingGoal;
+  if (!g || g.hidden) return null;
+  const target = g.targetDateOverride || assignment.dueDate || null;
+  const days = target ? getDaysUntil(target) + 1 : null;
+  const m = HC.measure ? HC.measure.peek(assignment.linkedNote) : { status: 'missing' };
+  if (m.status !== 'ok') return { status: m.status, days };
+  const goal = g.targetWords || 0;
+  const left = Math.max(0, goal - m.words);
   return {
-    text: `${Number.isInteger(perDay) ? perDay : perDay.toFixed(1)}/day`,
-    state: 'plain',
+    status: 'ok', goal, written: m.words, left, days,
+    perDay: left > 0 && days > 0 ? left / days : null,
+  };
+}
+
+// { text, tooltip } or null, same contract as getReadingPaceLine. Words per
+// day are whole: a writing session moves them by far more than one.
+function getWritingGoalLine(assignment) {
+  const s = getWritingGoalState(assignment);
+  if (!s) return null;
+  if (s.status === 'missing') return { text: 'Draft note missing', tooltip: null };
+  if (s.status === 'pending') return { text: 'Counting words…', tooltip: null };
+
+  const fmt = (n) => n.toLocaleString('en-US');
+  const written = `${fmt(s.written)} of ${fmt(s.goal)} words written.`;
+  if (s.left <= 0) return { text: `Goal reached — ${fmt(s.written)} of ${fmt(s.goal)} words`, tooltip: null };
+  const left = `${fmt(s.left)} word${s.left === 1 ? '' : 's'} to go`;
+  if (s.days === null) return { text: left, tooltip: written };
+  if (s.days <= 0) return { text: `${left} — target date passed`, tooltip: written };
+  return {
+    text: `${left}, ${s.days} day${s.days === 1 ? '' : 's'} — ~${fmt(Math.ceil(s.perDay))}/day`,
+    tooltip: `${written} ${PACE_PER_DAY_TOOLTIP('Writing more')}`,
   };
 }
 
@@ -1029,6 +1322,211 @@ function getCalItemStyle(item) {
   return { color: '#666', bg: '#F0F0F0' };
 }
 
+// Done-ness for any date item (lecture, assignment, exam). Was a Today view
+// method; #71 shares it with the daily note agenda.
+function isItemDone(item) {
+  if (item.kind === 'lecture')    return item.lec.status === 'done';
+  if (item.kind === 'assignment') return item.assignment.status === 'done';
+  if (item.kind === 'exam')       return item.exam.status === 'done';
+  return false;
+}
+
+// A lecture carries a start time only once a class meeting slot has been
+// merged onto it for that date (getItemsForDate, §1.3).
+function itemStartTime(item) {
+  return item.kind === 'lecture' && item.meetingStartTime ? item.meetingStartTime : null;
+}
+
+// Untimed first, then timed by start time — the Today sidebar's order.
+function orderDayItems(items) {
+  const untimed = items.filter(i => !itemStartTime(i));
+  const timed = items.filter(i => itemStartTime(i))
+    .sort((a, b) => itemStartTime(a).localeCompare(itemStartTime(b)));
+  return { untimed, timed };
+}
+
+// One item pill, shared by the Today sidebar and the daily note agenda (#71).
+// opts.note: extra meta text (the agenda's "due Oct 9"); opts.subline: a
+// line under the pill (pace or word goal).
+function renderTodayItem(container, item, onClick, opts = {}) {
+  const style  = getCalItemStyle(item);
+  const isDone = isItemDone(item);
+  const row    = container.createDiv('hc-today-item');
+
+  const pill = row.createDiv('hc-today-pill');
+  if (isDone) {
+    pill.style.background = 'var(--background-modifier-border)';
+    pill.style.color      = 'var(--text-muted)';
+  } else {
+    pill.style.background = style.bg;
+    pill.style.color      = style.color;
+  }
+  if (item.kind === 'lecture') pill.addClass('hc-today-pill--lecture');
+
+  const titleEl = pill.createDiv({ cls: 'hc-today-item-title', text: item.title });
+  if (isDone) titleEl.style.textDecoration = 'line-through';
+
+  const meta = pill.createDiv({ cls: 'hc-today-item-meta' });
+  meta.setText(itemMetaText(item) + (opts.note ? ' · ' + opts.note : ''));
+
+  // #24: term-window flag, missing from this view in the original sweep —
+  // the pill layout doesn't use the hc-title-flag-row wrapper the other
+  // eight sites share, so it was skipped. Rendered onto the meta line
+  // rather than the title so a long title still ellipsizes against the
+  // full pill width. Lectures are deliberately excluded: they have no due
+  // date, so there is nothing to check them against.
+  if (item.kind === 'assignment') {
+    renderTermWindowFlag(meta, item.assignment.dueDate, item.cls, isDone);
+  } else if (item.kind === 'exam') {
+    renderTermWindowFlag(meta, item.exam.dueDate, item.cls, isDone);
+  }
+
+  if (opts.subline) row.createDiv({ cls: 'hc-agenda-subline', text: opts.subline });
+
+  row.addEventListener('click', () => onClick(item));
+}
+
+function itemMetaText(item) {
+  if (item.kind === 'lecture') {
+    let t = item.cls.code + ' · Lecture';
+    if (item.meetingStartTime) t += ' · ' + formatTimeRange(item.meetingStartTime, item.meetingEndTime);
+    return t;
+  }
+  if (item.kind === 'exam') return item.cls.code + ' · Exam';
+  return item.cls.code + ' · ' + item.assignment.type;
+}
+
+// ─── Daily note agenda (#71) ────────────────────────────────────────────────
+// Kept as plain data ("what's on day X") with rendering on top, so the ICS
+// export and reminders can reuse it later.
+
+// { date, overdue: [items], items: [items] }.
+// - items: every semester's items for the date (getItemsForDate, so the #55
+//   completed/dropped rule applies), in the Today sidebar's order. Every
+//   semester rather than the current one, so an old daily note still shows
+//   its own day.
+// - overdue: current semester only, so years of unticked items don't pile up.
+//   Assignments due before the date and not done, oldest first: "overdue as
+//   of that day", read live, so items finished since then drop off.
+function getAgendaForDate(plugin, dateISO) {
+  const all = [];
+  for (const sem of (plugin.data.semesters || [])) {
+    if (isSemesterRemoved(sem)) continue;
+    all.push(...getItemsForDate(sem, dateISO, null));
+  }
+  const { untimed, timed } = orderDayItems(all);
+
+  const overdue = [];
+  const cur = plugin.getCurrentSemester();
+  for (const cls of ((cur && cur.classes) || [])) {
+    if (isClassInactive(cls)) continue;
+    const add = (a, lectureId) => {
+      if (a.dueDate && a.dueDate < dateISO && a.status !== 'done') {
+        overdue.push({ kind: 'assignment', title: a.title, cls, assignment: a, lectureId });
+      }
+    };
+    for (const a of (cls.assignments || [])) add(a, null);
+    for (const lec of (cls.lectures || [])) for (const a of (lec.assignments || [])) add(a, lec.id);
+  }
+  overdue.sort((a, b) => a.assignment.dueDate.localeCompare(b.assignment.dueDate));
+
+  return { date: dateISO, overdue, items: [...untimed, ...timed] };
+}
+
+// The pace or word goal line for an agenda item, or null.
+function agendaSubline(item) {
+  if (item.kind !== 'assignment') return null;
+  const line = getReadingPaceLine(item.assignment) || getWritingGoalLine(item.assignment);
+  return line ? line.text : null;
+}
+
+function getDailyNoteFormat(app) {
+  try {
+    const dn = app.internalPlugins && app.internalPlugins.getPluginById('daily-notes');
+    const f = dn && dn.instance && dn.instance.options && dn.instance.options.format;
+    return f || 'YYYY-MM-DD';
+  } catch (e) {
+    return 'YYYY-MM-DD';
+  }
+}
+
+// Which date an agenda shows: a "date:" line in the block wins (YYYY-MM-DD or
+// "today"); then the note's name read with the Daily Notes format (a format
+// with folders, like YYYY/MM/YYYY-MM-DD, is matched against the end of the
+// path); otherwise today. Returns { date } or { error } for a bad date line.
+function resolveAgendaDate(app, source, sourcePath) {
+  const line = (source || '').match(/^\s*date:\s*(.+?)\s*$/m);
+  if (line) {
+    const v = line[1];
+    if (v.toLowerCase() === 'today') return { date: getTodayISO() };
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m && isValidYMD(+m[1], +m[2], +m[3])) return { date: v };
+    return { error: `Couldn't read the date “${v}”. Use YYYY-MM-DD, or "today".` };
+  }
+
+  const path = (sourcePath || '').replace(/\.md$/i, '');
+  if (path) {
+    const format = getDailyNoteFormat(app);
+    const depth = format.split('/').length;
+    const tail = path.split('/').slice(-depth).join('/');
+    const mo = typeof window !== 'undefined' && window.moment;
+    if (mo) {
+      const d = mo(tail, format, true);
+      if (d.isValid()) return { date: d.format('YYYY-MM-DD') };
+    } else if (/^\d{4}-\d{2}-\d{2}$/.test(tail)) {
+      return { date: tail };
+    }
+  }
+  return { date: getTodayISO() };
+}
+
+// The live block's view.
+function renderAgenda(el, plugin, dateISO) {
+  el.empty();
+  const root = el.createDiv('hc-agenda');
+  const ag = getAgendaForDate(plugin, dateISO);
+  const open = (item) => plugin.openItem(item);
+
+  if (ag.overdue.length) {
+    const sec = root.createDiv('hc-today-section');
+    sec.createDiv({ cls: 'hc-today-section-label', text: 'Overdue' });
+    for (const item of ag.overdue) {
+      renderTodayItem(sec, item, open, { note: `due ${formatDate(item.assignment.dueDate)}`, subline: agendaSubline(item) });
+    }
+  }
+
+  const sec = root.createDiv('hc-today-section');
+  sec.createDiv({ cls: 'hc-today-section-label', text: formatDateWithDay(dateISO) });
+  if (!ag.items.length) {
+    sec.createDiv({ cls: 'hc-today-empty-msg', text: 'Nothing scheduled.' });
+    return;
+  }
+  for (const item of ag.items) renderTodayItem(sec, item, open, { subline: agendaSubline(item) });
+}
+
+// The snapshot command's Markdown. Plain bullets, not checkboxes, so the
+// Tasks plugin and the like don't pick the lines up as tasks; done items
+// are struck through.
+function agendaMarkdown(plugin, dateISO) {
+  const ag = getAgendaForDate(plugin, dateISO);
+  const lines = [];
+  const bullet = (item, note) => {
+    const title = isItemDone(item) ? `~~${item.title}~~` : item.title;
+    lines.push(`- ${title} · ${itemMetaText(item)}${note ? ' · ' + note : ''}`);
+    const sub = agendaSubline(item);
+    if (sub) lines.push(`    - ${sub}`);
+  };
+  if (ag.overdue.length) {
+    lines.push('**Overdue**');
+    for (const item of ag.overdue) bullet(item, `due ${formatDate(item.assignment.dueDate)}`);
+    lines.push('');
+  }
+  lines.push(`**${formatDateWithDay(dateISO)}**`);
+  if (!ag.items.length) lines.push('Nothing scheduled.');
+  for (const item of ag.items) bullet(item, null);
+  return lines.join('\n') + '\n';
+}
+
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 class HoldCoursePlugin extends Plugin {
@@ -1043,6 +1541,12 @@ class HoldCoursePlugin extends Plugin {
     this._pendingForce = false;
 
     const changed = await this._loadAndNormalize();
+    // #63 (F6): handles for the free pace helpers. A finished word count
+    // repaints the main view, the only place pace lines show.
+    HC.plugin = this;
+    HC.measure = new NoteMeasureService(this.app, () => { this.refreshMainView(); this.refreshAgendaBlocks(); });
+    // #71: live agenda blocks currently on screen; repainted on every change.
+    this._agendaBlocks = new Set();
     this.applyEinkClass();
     this.applyUiScale();
 
@@ -1080,6 +1584,43 @@ class HoldCoursePlugin extends Plugin {
       id: 'open-hold-course',
       name: 'Open Hold Course',
       callback: () => this.activateView(),
+    });
+
+    // #71: daily note agenda. The block is live: nothing is written into the
+    // note. Each rendered block registers itself and is dropped when Obsidian
+    // unloads it (note closed, re-rendered, or edited).
+    this.registerMarkdownCodeBlockProcessor('hold-course-agenda', (source, el, ctx) => {
+      const block = {
+        draw: () => {
+          const r = resolveAgendaDate(this.app, source, ctx.sourcePath);
+          if (r.error) {
+            el.empty();
+            el.createDiv({ cls: 'hc-agenda-error', text: `Hold Course agenda: ${r.error}` });
+            return;
+          }
+          renderAgenda(el, this, r.date);
+        },
+      };
+      block.draw();
+      const child = new MarkdownRenderChild(el);
+      child.register(() => this._agendaBlocks.delete(block));
+      ctx.addChild(child);
+      this._agendaBlocks.add(block);
+    });
+
+    this.addCommand({
+      id: 'hc-insert-agenda-block',
+      name: 'Insert live agenda block',
+      editorCallback: (editor) => editor.replaceSelection('```hold-course-agenda\n```\n'),
+    });
+
+    this.addCommand({
+      id: 'hc-insert-agenda',
+      name: 'Insert agenda as text',
+      editorCallback: (editor, view) => {
+        const r = resolveAgendaDate(this.app, '', view && view.file ? view.file.path : '');
+        editor.replaceSelection(agendaMarkdown(this, r.date));
+      },
     });
 
     this.addCommand({
@@ -1378,6 +1919,35 @@ class HoldCoursePlugin extends Plugin {
     for (const leaf of leaves) {
       if (leaf.view instanceof HoldCourseTodayView) leaf.view.render();
     }
+    // #71: every path that repaints Today (save, reload from disk) also
+    // repaints agenda blocks, since they show the same items.
+    this.refreshAgendaBlocks();
+  }
+
+  refreshAgendaBlocks() {
+    for (const b of (this._agendaBlocks || [])) b.draw();
+  }
+
+  // Opens a date item (lecture, assignment, exam) in the main view. Was the
+  // Today view's _navigateToItem; #71 shares it with the agenda.
+  async openItem(item) {
+    const { workspace } = this.app;
+
+    // Ensure main HC tab is open
+    let mainLeaf = workspace.getLeavesOfType(VIEW_TYPE)[0];
+    if (!mainLeaf) {
+      mainLeaf = workspace.getLeaf('tab');
+      await mainLeaf.setViewState({ type: VIEW_TYPE, active: true });
+    }
+    workspace.revealLeaf(mainLeaf);
+
+    // Navigate to the item
+    const view = mainLeaf.view;
+    if (!(view instanceof HoldCourseView)) return;
+
+    if (item.kind === 'lecture')    view.navigate('lecture',    item.cls.id, item.lec.id);
+    if (item.kind === 'assignment') view.navigate('assignment', item.cls.id, item.lectureId, item.assignment.id);
+    if (item.kind === 'exam')       view.navigate('exam',       item.cls.id, null, null, item.exam.id);
   }
 
   // Companion to refreshTodayView() — same pattern, main dashboard view.
@@ -1888,11 +2458,20 @@ class HoldCoursePlugin extends Plugin {
       a.dueDate = moveDate(a.dueDate);
       if (a.readingPace) {
         a.readingPace.pagesRead = 0;
+        // #63: word readings start over too.
+        delete a.readingPace.wordMark;
+        delete a.readingPace.wordsRead;
         if (a.readingPace.targetDateOverride) {
           const t = moveDate(a.readingPace.targetDateOverride);
           if (t) a.readingPace.targetDateOverride = t;
           else delete a.readingPace.targetDateOverride;
         }
+      }
+      // #20: the goal is setup, so it comes along; its date moves with the rest.
+      if (a.writingGoal && a.writingGoal.targetDateOverride) {
+        const t = moveDate(a.writingGoal.targetDateOverride);
+        if (t) a.writingGoal.targetDateOverride = t;
+        else delete a.writingGoal.targetDateOverride;
       }
       if (!keepNotes) { a.notes = ''; a.linkedNote = ''; }
     };
@@ -2194,7 +2773,32 @@ class HoldCourseSettingTab extends PluginSettingTab {
           await this.plugin.save();
         }));
 
+    this._renderReadingPace(containerEl);
     this._renderAssignmentTypes(containerEl);
+  }
+
+  // #63: words per minute turns word counts into minutes for readings
+  // measured in words. Absent means the default; clearing the box restores it.
+  _renderReadingPace(containerEl) {
+    new Setting(containerEl).setName('Reading pace').setHeading();
+    new Setting(containerEl)
+      .setName('Words per minute')
+      .setDesc(`Used to turn word counts into minutes for readings measured in words. The default is ${DEFAULT_WORDS_PER_MINUTE}; use a lower number for dense or technical reading.`)
+      .addText(text => {
+        text.inputEl.type = 'number';
+        text.inputEl.min = '1';
+        text.setPlaceholder(String(DEFAULT_WORDS_PER_MINUTE));
+        const cur = this.plugin.data.settings.wordsPerMinute;
+        text.setValue(cur ? String(cur) : '');
+        text.onChange(async (v) => {
+          const n = parseInt(v, 10);
+          if (v.trim() === '') delete this.plugin.data.settings.wordsPerMinute;
+          else if (n > 0) this.plugin.data.settings.wordsPerMinute = n;
+          else return;
+          await this.plugin.save();
+          this.plugin.refreshMainView();
+        });
+      });
   }
 
   // #62: rename/delete custom types. New ones are added from the Type menu.
@@ -3801,6 +4405,31 @@ class HoldCourseView extends ItemView {
       mid.createSpan({ cls: 'hc-grade-chip', text: assignment.grade.trim() });
     }
 
+    // #20: word goal line, labelled like the Readings list's Pace: line.
+    // Click opens the goal dialog; the row's own click stays navigation.
+    const goalLine = getWritingGoalLine(assignment);
+    if (goalLine) {
+      const goalRow = mid.createDiv('hc-reading-pace-row');
+      goalRow.createSpan({ cls: 'hc-reading-ref-label', text: 'Goal:' });
+      const goalEl = goalRow.createSpan({ cls: 'hc-reading-pace-line', text: goalLine.text });
+      goalEl.addEventListener('click', (e) => {
+        e.stopPropagation();
+        new WritingGoalModal(this.app, assignment, () => {
+          this.plugin.save();
+          this.render(true);
+        }).open();
+      });
+      if (goalLine.tooltip) {
+        const infoIcon = goalRow.createSpan({ cls: 'hc-reading-pace-info' });
+        setIcon(infoIcon, 'info');
+        infoIcon.setAttribute('aria-label', goalLine.tooltip);
+        infoIcon.addEventListener('click', (e) => {
+          e.stopPropagation();
+          new Notice(goalLine.tooltip, 6000);
+        });
+      }
+    }
+
     // Right: status (matches the lecture/exam position), then due date
     const right = row.createDiv('hc-assign-due');
     const isDone = assignment.status === 'done';
@@ -4262,6 +4891,10 @@ class HoldCourseView extends ItemView {
       renderBookSection();
     }
 
+    // #20/#63: the pace and goal sections below read the linked note, so a
+    // link change repaints them too. They assign this when they render.
+    let refreshNoteDependents = () => {};
+
     // Linked note (all types)
     {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Linked Note' });
@@ -4289,6 +4922,7 @@ class HoldCourseView extends ItemView {
             assignment.linkedNote = noteInput.value.trim();
             this.plugin.save();
             renderNoteSection();
+            refreshNoteDependents();
           });
         }
 
@@ -4298,6 +4932,7 @@ class HoldCourseView extends ItemView {
             assignment.linkedNote = selectedPath;
             this.plugin.save();
             renderNoteSection();
+            refreshNoteDependents();
           }).open();
         });
 
@@ -4314,6 +4949,7 @@ class HoldCourseView extends ItemView {
             assignment.linkedNote = '';
             this.plugin.save();
             renderNoteSection();
+            refreshNoteDependents();
           });
         }
       };
@@ -4376,6 +5012,59 @@ class HoldCourseView extends ItemView {
         }
       };
       renderPaceSection();
+      refreshNoteDependents = renderPaceSection;
+    }
+
+    // #20: word goal, Writing only. Same presence/hidden pattern as reading
+    // pace. Progress comes from the linked draft note, so the line opens the
+    // goal dialog (target words, by when) rather than a log.
+    if (assignment.type === 'Writing') {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Word Goal' });
+      const goalSection = content.createDiv('hc-reading-pace-section');
+
+      const renderGoalSection = () => {
+        goalSection.empty();
+        const reopen = () => { this.plugin.save(); renderGoalSection(); };
+
+        new Setting(goalSection).setName('Track a word goal for this writing').addToggle(toggle => {
+          toggle.setValue(!!(assignment.writingGoal && !assignment.writingGoal.hidden));
+          toggle.onChange(value => {
+            if (value) {
+              if (!assignment.writingGoal) {
+                if (!(HC.measure && HC.measure.isMarkdown(assignment.linkedNote))) {
+                  new Notice('Link your draft (a Markdown note) in Linked Note first.');
+                  renderGoalSection();
+                  return;
+                }
+                new WritingGoalModal(this.app, assignment, reopen).open();
+                return;
+              }
+              assignment.writingGoal.hidden = false;
+            } else if (assignment.writingGoal) {
+              assignment.writingGoal.hidden = true;
+            }
+            reopen();
+          });
+        });
+
+        const goalLine = getWritingGoalLine(assignment);
+        if (goalLine) {
+          const row = goalSection.createDiv('hc-reading-pace-row');
+          const lineEl = row.createSpan({ cls: 'hc-reading-pace-line', text: goalLine.text });
+          lineEl.addEventListener('click', () => new WritingGoalModal(this.app, assignment, reopen).open());
+          if (goalLine.tooltip) {
+            const infoIcon = row.createSpan({ cls: 'hc-reading-pace-info' });
+            setIcon(infoIcon, 'info');
+            infoIcon.setAttribute('aria-label', goalLine.tooltip);
+            infoIcon.addEventListener('click', (e) => {
+              e.stopPropagation();
+              new Notice(goalLine.tooltip, 6000);
+            });
+          }
+        }
+      };
+      renderGoalSection();
+      refreshNoteDependents = renderGoalSection;
     }
   }
 
@@ -5113,21 +5802,10 @@ class HoldCourseView extends ItemView {
       return txt(a.title).localeCompare(txt(b.title));
     };
 
-    // Reading estimate sorts by pages-per-day, not by the string shown —
+    // Reading estimate sorts by work per day, not by the string shown —
     // "9/day" must not sort above "14/day". Untracked rows sink like undated.
-    const paceRank = (a) => {
-      const rp = a.readingPace;
-      if (!rp || rp.hidden) return null;
-      const remaining = (rp.totalPages || 0) - (rp.pagesRead || 0);
-      if (remaining <= 0) return 0;
-      const target = getReadingPaceTargetDate(a);
-      if (!target) return remaining;
-      const days = getDaysUntil(target) + 1;
-      // Unrounded, to match the one-decimal display (#30 follow-up) — a
-      // rounded rank sorted 3.2/day and 3.8/day as equals.
-      // (LiveAQuietLife, 2026-10-03)
-      return days <= 0 ? remaining : remaining / days;
-    };
+    // #63: the rule now lives in getReadingPaceRank, shared with words.
+    const paceRank = (a) => getReadingPaceRank(a);
 
     allAssigns.sort((a, b) => {
       let primary = 0;
@@ -7884,32 +8562,62 @@ class EditAssignmentModal extends Modal {
   onClose() { this.contentEl.empty(); }
 }
 
+// #63: the Measure by row, shared by setup and Edit setup. Only shown when
+// words are possible (the linked note is Markdown) or already chosen, so a
+// reading with no note link looks exactly as it did before.
+function addMeasureByRow(containerEl, unit, onChange) {
+  new Setting(containerEl).setName('Measure by').addDropdown(dd => {
+    dd.addOption('pages', 'Pages');
+    dd.addOption('words', 'Words (from linked note)');
+    dd.setValue(unit);
+    dd.onChange(onChange);
+  });
+}
+
 // #30: first-ever setup for reading-pace tracking. Only opens when
 // assignment.readingPace doesn't exist yet — re-enabling after hide skips
 // this entirely (see _renderAssignmentDetail's toggle handler). onDone fires
 // on any close (Save, Cancel, or the X) so the caller's toggle re-render
 // always reflects what actually happened, not just the Save path.
+// #63: Words is offered, and preselected, when the linked note is Markdown.
 class ReadingPaceSetupModal extends Modal {
   constructor(app, assignment, onDone) {
     super(app);
     this.assignment = assignment;
     this.onDone = onDone;
-    this.formData = { totalPages: '', targetDate: assignment.dueDate || '' };
+    this.canWords = !!(HC.measure && HC.measure.isMarkdown(assignment.linkedNote));
+    this.formData = {
+      unit: this.canWords ? 'words' : 'pages',
+      totalPages: '',
+      targetDate: assignment.dueDate || '',
+    };
   }
 
-  onOpen() {
+  onOpen() { this._render(); }
+
+  _render() {
     const { contentEl } = this;
     contentEl.empty();
     this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Track this reading' });
 
-    new Setting(contentEl).setName('Total pages').addText(text => {
-      text.inputEl.type = 'number';
-      text.inputEl.min = '1';
-      text.inputEl.focus();
-      text.onChange(v => this.formData.totalPages = v);
-    });
+    if (this.canWords) {
+      addMeasureByRow(contentEl, this.formData.unit, v => { this.formData.unit = v; this._render(); });
+    }
+
+    if (this.formData.unit === 'pages') {
+      new Setting(contentEl).setName('Total pages').addText(text => {
+        text.inputEl.type = 'number';
+        text.inputEl.min = '1';
+        text.inputEl.value = this.formData.totalPages;
+        text.inputEl.focus();
+        text.onChange(v => this.formData.totalPages = v);
+      });
+    } else {
+      const name = (this.assignment.linkedNote || '').split('/').pop();
+      contentEl.createDiv({ cls: 'hc-reading-pace-modal-note', text: `Words are counted from ${name}, and recounted when it changes.` });
+    }
 
     new Setting(contentEl).setName('By when').addText(text => {
       text.inputEl.type = 'date';
@@ -7921,11 +8629,12 @@ class ReadingPaceSetupModal extends Modal {
   }
 
   _save() {
+    const words = this.formData.unit === 'words';
     const pages = parseInt(this.formData.totalPages, 10);
-    if (!pages || pages < 1) { new Notice('Enter a page count of at least 1.'); return; }
+    if (!words && (!pages || pages < 1)) { new Notice('Enter a page count of at least 1.'); return; }
     if (!this.formData.targetDate) { new Notice('Pick a target date.'); return; }
 
-    this.assignment.readingPace = { totalPages: pages, pagesRead: 0 };
+    this.assignment.readingPace = words ? { unit: 'words' } : { totalPages: pages, pagesRead: 0 };
     if (this.formData.targetDate !== this.assignment.dueDate) {
       this.assignment.readingPace.targetDateOverride = this.formData.targetDate;
     }
@@ -7936,11 +8645,14 @@ class ReadingPaceSetupModal extends Modal {
 }
 
 // #30: logs progress against an existing readingPace, and doubles as the
-// only edit surface for its setup (total pages / target date) — reachable
-// any time, not gated behind a toggle-off/on cycle. "Edit setup" writes
-// immediately on its own Save and returns to the progress screen; it doesn't
-// share an undo scope with the outer Cancel. Accepted simplification — two
-// nested undo scopes would cost more than the edge case is worth.
+// only edit surface for its setup (unit / total pages / target date) —
+// reachable any time, not gated behind a toggle-off/on cycle. "Edit setup"
+// writes immediately on its own Save and returns to the progress screen; it
+// doesn't share an undo scope with the outer Cancel. Accepted simplification
+// — two nested undo scopes would cost more than the edge case is worth.
+// #63: word readings log "Finished through: [heading]" (or a percent when
+// the note has no headings). The note is measured fresh when the dialog
+// opens, so the heading list matches the note as it is now.
 class ReadingPaceLogModal extends Modal {
   constructor(app, assignment, onDone) {
     super(app);
@@ -7948,9 +8660,31 @@ class ReadingPaceLogModal extends Modal {
     this.onDone = onDone;
     this.pagesReadInput = String(assignment.readingPace.pagesRead || 0);
     this.editingSetup = false;
+    this.measured = undefined; // undefined: not yet; null: note missing
+    this.choice = null;        // words: selected option value
+    this.percentInput = '';
   }
 
   onOpen() { this._render(); }
+
+  async _measure() {
+    this.measured = HC.measure ? await HC.measure.measure(this.assignment.linkedNote) : null;
+    const rp = this.assignment.readingPace;
+    const m = this.measured;
+    if (m) {
+      const mark = rp.wordMark;
+      const { read, lost } = resolveWordsRead(rp, m);
+      this.lost = lost;
+      if (!mark) this.choice = 'start';
+      else if (mark.end) this.choice = 'end';
+      else if (lost) this.choice = 'keep';
+      // A percent logged before the note had headings: offer to keep it.
+      else if (mark.percent !== undefined) this.choice = m.headings.length ? 'keep' : 'percent';
+      else this.choice = 'h' + findMarkedHeading(m.headings, mark);
+      this.percentInput = String(m.words ? Math.round(read / m.words * 100) : 0);
+    }
+    this._render();
+  }
 
   _render() {
     const { contentEl } = this;
@@ -7958,11 +8692,25 @@ class ReadingPaceLogModal extends Modal {
     this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     const rp = this.assignment.readingPace;
+    const words = rp.unit === 'words';
 
-    if (!this.editingSetup) {
-      contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Log progress' });
-      contentEl.createDiv({ cls: 'hc-reading-pace-modal-status', text: getReadingPaceLine(this.assignment).text });
+    if (this.editingSetup) { this._renderSetup(contentEl, rp); return; }
 
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Log progress' });
+
+    if (words && this.measured === undefined) {
+      contentEl.createDiv({ cls: 'hc-reading-pace-modal-status', text: 'Counting words…' });
+      if (!this._measuring) {
+        this._measuring = true;
+        this._measure().finally(() => { this._measuring = false; });
+      }
+      return;
+    }
+
+    const line = getReadingPaceLine(this.assignment);
+    if (line) contentEl.createDiv({ cls: 'hc-reading-pace-modal-status', text: line.text });
+
+    if (!words) {
       new Setting(contentEl).setName('Pages read so far').addText(text => {
         text.inputEl.type = 'number';
         text.inputEl.min = '0';
@@ -7970,20 +8718,84 @@ class ReadingPaceLogModal extends Modal {
         text.inputEl.focus();
         text.onChange(v => this.pagesReadInput = v);
       });
-
-      const editLink = contentEl.createEl('a', { cls: 'hc-reading-pace-edit-link', text: 'Edit setup' });
-      editLink.addEventListener('click', (e) => {
-        e.preventDefault();
-        this.editingSetup = true;
-        this.editTotalPages = String(rp.totalPages || '');
-        this.editTargetDate = rp.targetDateOverride || this.assignment.dueDate || '';
-        this._render();
+    } else if (!this.measured) {
+      contentEl.createDiv({
+        cls: 'hc-reading-pace-modal-note',
+        text: "The linked note can't be found. Link it again in the reading's Note field, or switch to pages in Edit setup.",
       });
-
-      this._renderFooter(contentEl, 'Save', () => this._saveProgress());
     } else {
-      contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit setup' });
+      this._renderWordProgress(contentEl, rp, this.measured);
+    }
 
+    this._renderEditLink(contentEl, rp);
+    if (words && !this.measured) {
+      const footer = contentEl.createDiv('hc-modal-footer');
+      footer.createEl('button', { cls: 'hc-btn', text: 'Close' }).addEventListener('click', () => this.close());
+    } else {
+      this._renderFooter(contentEl, 'Save', () => this._saveProgress());
+    }
+  }
+
+  _renderWordProgress(contentEl, rp, m) {
+    if (this.lost && rp.wordMark && rp.wordMark.heading !== undefined) {
+      contentEl.createDiv({
+        cls: 'hc-reading-pace-modal-note',
+        text: `The heading “${rp.wordMark.heading}” is no longer in the note. Pick where you are again.`,
+      });
+    }
+
+    if (!m.headings.length) {
+      new Setting(contentEl).setName('Percent read').addText(text => {
+        text.inputEl.type = 'number';
+        text.inputEl.min = '0';
+        text.inputEl.max = '100';
+        text.inputEl.value = this.percentInput;
+        text.inputEl.focus();
+        text.onChange(v => { this.percentInput = v; this.choice = 'percent'; });
+      });
+      return;
+    }
+
+    // Indent by level, relative to the note's top level, so a note that
+    // starts at H2 isn't indented throughout. Options are plain text, so
+    // the indent is non-breaking spaces.
+    const top = Math.min(...m.headings.map(h => h.level));
+    new Setting(contentEl).setName('Finished through').addDropdown(dd => {
+      if (this.choice === 'keep') {
+        dd.addOption('keep', `Keep last count (${(rp.wordsRead || 0).toLocaleString('en-US')} words)`);
+      }
+      dd.addOption('start', 'Not started');
+      m.headings.forEach((h, i) => {
+        dd.addOption('h' + i, '   '.repeat(h.level - top) + h.text);
+      });
+      dd.addOption('end', 'Finished');
+      dd.setValue(this.choice === 'percent' ? 'start' : this.choice);
+      dd.selectEl.addClass('hc-reading-pace-heading-select');
+      dd.onChange(v => this.choice = v);
+    });
+  }
+
+  _renderEditLink(contentEl, rp) {
+    const editLink = contentEl.createEl('a', { cls: 'hc-reading-pace-edit-link', text: 'Edit setup' });
+    editLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.editingSetup = true;
+      this.editUnit = rp.unit === 'words' ? 'words' : 'pages';
+      this.editTotalPages = String(rp.totalPages || '');
+      this.editTargetDate = rp.targetDateOverride || this.assignment.dueDate || '';
+      this._render();
+    });
+  }
+
+  _renderSetup(contentEl, rp) {
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Edit setup' });
+
+    const canWords = !!(HC.measure && HC.measure.isMarkdown(this.assignment.linkedNote));
+    if (canWords || rp.unit === 'words') {
+      addMeasureByRow(contentEl, this.editUnit, v => { this.editUnit = v; this._render(); });
+    }
+
+    if (this.editUnit === 'pages') {
       new Setting(contentEl).setName('Total pages').addText(text => {
         text.inputEl.type = 'number';
         text.inputEl.min = '1';
@@ -7991,38 +8803,136 @@ class ReadingPaceLogModal extends Modal {
         text.inputEl.focus();
         text.onChange(v => this.editTotalPages = v);
       });
-
-      new Setting(contentEl).setName('By when').addText(text => {
-        text.inputEl.type = 'date';
-        text.inputEl.value = this.editTargetDate;
-        text.onChange(v => this.editTargetDate = v);
-      });
-
-      this._renderFooter(contentEl, 'Save', () => this._saveSetup());
     }
+
+    new Setting(contentEl).setName('By when').addText(text => {
+      text.inputEl.type = 'date';
+      text.inputEl.value = this.editTargetDate;
+      text.onChange(v => this.editTargetDate = v);
+    });
+
+    this._renderFooter(contentEl, 'Save', () => this._saveSetup());
   }
 
   _saveProgress() {
-    const pages = parseInt(this.pagesReadInput, 10);
-    if (isNaN(pages) || pages < 0) { new Notice('Enter a valid number of pages.'); return; }
-    this.assignment.readingPace.pagesRead = pages;
+    const rp = this.assignment.readingPace;
+    if (rp.unit !== 'words') {
+      const pages = parseInt(this.pagesReadInput, 10);
+      if (isNaN(pages) || pages < 0) { new Notice('Enter a valid number of pages.'); return; }
+      rp.pagesRead = pages;
+      this.close();
+      return;
+    }
+
+    const m = this.measured;
+    const c = this.choice;
+    if (c === 'keep') { this.close(); return; }
+    if (c === 'start') delete rp.wordMark;
+    else if (c === 'end') rp.wordMark = { end: true };
+    else if (c === 'percent') {
+      const p = parseFloat(this.percentInput);
+      if (isNaN(p) || p < 0 || p > 100) { new Notice('Enter a percent from 0 to 100.'); return; }
+      rp.wordMark = { percent: p };
+    } else {
+      const i = parseInt(c.slice(1), 10);
+      const h = m.headings[i];
+      // n: which occurrence of this text at this level, so duplicate
+      // headings ("Summary" in every chapter) stay distinct.
+      let n = 0;
+      for (let j = 0; j < i; j++) {
+        if (m.headings[j].level === h.level && m.headings[j].text === h.text) n++;
+      }
+      rp.wordMark = { heading: h.text, level: h.level, n };
+    }
+    // Saved alongside the mark: the fallback if the heading later vanishes.
+    rp.wordsRead = resolveWordsRead(rp, m).read;
+    if (!rp.wordMark) delete rp.wordsRead;
     this.close();
   }
 
   _saveSetup() {
+    const rp = this.assignment.readingPace;
+    const words = this.editUnit === 'words';
     const pages = parseInt(this.editTotalPages, 10);
-    if (!pages || pages < 1) { new Notice('Enter a page count of at least 1.'); return; }
+    if (!words && (!pages || pages < 1)) { new Notice('Enter a page count of at least 1.'); return; }
     if (!this.editTargetDate) { new Notice('Pick a target date.'); return; }
 
-    const rp = this.assignment.readingPace;
-    rp.totalPages = pages;
+    // Each unit keeps its own fields, so switching back loses nothing.
+    if (words) rp.unit = 'words';
+    else {
+      delete rp.unit;
+      rp.totalPages = pages;
+      if (rp.pagesRead === undefined) rp.pagesRead = 0;
+    }
     if (this.editTargetDate !== this.assignment.dueDate) {
       rp.targetDateOverride = this.editTargetDate;
     } else {
       delete rp.targetDateOverride;
     }
     this.editingSetup = false;
+    this.measured = undefined;
     this._render();
+  }
+
+  onClose() { this.contentEl.empty(); this.onDone(); }
+}
+
+// #20: sets up or edits a writing goal: target words and by when. One
+// dialog for both, since there's no progress to log — the draft note is the
+// progress. onDone fires on any close, like ReadingPaceSetupModal.
+class WritingGoalModal extends Modal {
+  constructor(app, assignment, onDone) {
+    super(app);
+    this.assignment = assignment;
+    this.onDone = onDone;
+    const g = assignment.writingGoal;
+    this.isNew = !g;
+    this.formData = {
+      targetWords: g && g.targetWords ? String(g.targetWords) : '',
+      targetDate: (g && g.targetDateOverride) || assignment.dueDate || '',
+    };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this._makeDraggable(this);
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: this.isNew ? 'Set a word goal' : 'Word goal' });
+
+    const line = this.isNew ? null : getWritingGoalLine(this.assignment);
+    if (line) contentEl.createDiv({ cls: 'hc-reading-pace-modal-status', text: line.text });
+
+    const name = (this.assignment.linkedNote || '').split('/').pop();
+    if (name) contentEl.createDiv({ cls: 'hc-reading-pace-modal-note', text: `Words written are counted from ${name}.` });
+
+    new Setting(contentEl).setName('Target words').addText(text => {
+      text.inputEl.type = 'number';
+      text.inputEl.min = '1';
+      text.inputEl.value = this.formData.targetWords;
+      text.inputEl.focus();
+      text.onChange(v => this.formData.targetWords = v);
+    });
+
+    new Setting(contentEl).setName('By when').addText(text => {
+      text.inputEl.type = 'date';
+      text.inputEl.value = this.formData.targetDate;
+      text.onChange(v => this.formData.targetDate = v);
+    });
+
+    this._renderFooter(contentEl, this.isNew ? 'Start tracking' : 'Save', () => this._save());
+  }
+
+  _save() {
+    const words = parseInt(this.formData.targetWords, 10);
+    if (!words || words < 1) { new Notice('Enter a word count of at least 1.'); return; }
+    if (!this.formData.targetDate) { new Notice('Pick a target date.'); return; }
+
+    const g = this.assignment.writingGoal || (this.assignment.writingGoal = {});
+    g.targetWords = words;
+    if (this.formData.targetDate !== this.assignment.dueDate) g.targetDateOverride = this.formData.targetDate;
+    else delete g.targetDateOverride;
+    this.close();
   }
 
   onClose() { this.contentEl.empty(); this.onDone(); }
@@ -8624,14 +9534,6 @@ class HoldCourseTodayView extends ItemView {
     this._renderSection(root, sem, tomorrowISO, 'Tomorrow');
   }
 
-  // A lecture only carries a start time once a matching class meeting slot
-  // has merged one onto it for today; everything else (assignments, exams,
-  // untimed lectures) has no time-of-day concept.
-  _itemStartTime(item) {
-    if (item.kind === 'lecture' && item.meetingStartTime) return item.meetingStartTime;
-    return null;
-  }
-
   _renderSection(root, sem, dateISO, label) {
     const items = getItemsForDate(sem, dateISO, null);
 
@@ -8643,10 +9545,7 @@ class HoldCourseTodayView extends ItemView {
       return;
     }
 
-    const untimed = items.filter(i => !this._itemStartTime(i));
-    const timed   = items
-      .filter(i => this._itemStartTime(i))
-      .sort((a, b) => this._itemStartTime(a).localeCompare(this._itemStartTime(b)));
+    const { untimed, timed } = orderDayItems(items);
 
     // Band labels only earn their place when there's an actual split to
     // announce — a single unadorned list otherwise, no header hanging over
@@ -8659,80 +9558,9 @@ class HoldCourseTodayView extends ItemView {
         text: label === 'Today' ? 'Due today' : 'Due tomorrow',
       });
     }
-    for (const item of untimed) this._renderTodayItem(section, item);
-    for (const item of timed)   this._renderTodayItem(section, item);
-  }
-
-  _renderTodayItem(section, item) {
-    const style   = getCalItemStyle(item);
-    const isDone  = this._isItemDone(item);
-    const row     = section.createDiv('hc-today-item');
-
-    const pill = row.createDiv('hc-today-pill');
-    if (isDone) {
-      pill.style.background = 'var(--background-modifier-border)';
-      pill.style.color      = 'var(--text-muted)';
-    } else {
-      pill.style.background = style.bg;
-      pill.style.color      = style.color;
-    }
-    if (item.kind === 'lecture') pill.addClass('hc-today-pill--lecture');
-
-    const titleEl = pill.createDiv({ cls: 'hc-today-item-title', text: item.title });
-    if (isDone) titleEl.style.textDecoration = 'line-through';
-
-    const meta = pill.createDiv({ cls: 'hc-today-item-meta' });
-    let metaText;
-    if (item.kind === 'lecture') {
-      metaText = item.cls.code + ' · Lecture';
-      if (item.meetingStartTime) metaText += ' · ' + formatTimeRange(item.meetingStartTime, item.meetingEndTime);
-    } else if (item.kind === 'exam') {
-      metaText = item.cls.code + ' · Exam';
-    } else {
-      metaText = item.cls.code + ' · ' + item.assignment.type;
-    }
-    meta.setText(metaText);
-
-    // #24: term-window flag, missing from this view in the original sweep —
-    // the pill layout doesn't use the hc-title-flag-row wrapper the other
-    // eight sites share, so it was skipped. Rendered onto the meta line
-    // rather than the title so a long title still ellipsizes against the
-    // full pill width. Lectures are deliberately excluded: they have no due
-    // date, so there is nothing to check them against.
-    if (item.kind === 'assignment') {
-      renderTermWindowFlag(meta, item.assignment.dueDate, item.cls, isDone);
-    } else if (item.kind === 'exam') {
-      renderTermWindowFlag(meta, item.exam.dueDate, item.cls, isDone);
-    }
-
-    row.addEventListener('click', () => this._navigateToItem(item));
-  }
-
-  _isItemDone(item) {
-    if (item.kind === 'lecture')    return item.lec.status === 'done';
-    if (item.kind === 'assignment') return item.assignment.status === 'done';
-    if (item.kind === 'exam')       return item.exam.status === 'done';
-    return false;
-  }
-
-  async _navigateToItem(item) {
-    const { workspace } = this.app;
-
-    // Ensure main HC tab is open
-    let mainLeaf = workspace.getLeavesOfType(VIEW_TYPE)[0];
-    if (!mainLeaf) {
-      mainLeaf = workspace.getLeaf('tab');
-      await mainLeaf.setViewState({ type: VIEW_TYPE, active: true });
-    }
-    workspace.revealLeaf(mainLeaf);
-
-    // Navigate to the item
-    const view = mainLeaf.view;
-    if (!(view instanceof HoldCourseView)) return;
-
-    if (item.kind === 'lecture')    view.navigate('lecture',    item.cls.id, item.lec.id);
-    if (item.kind === 'assignment') view.navigate('assignment', item.cls.id, item.lectureId, item.assignment.id);
-    if (item.kind === 'exam')       view.navigate('exam',       item.cls.id, null, null, item.exam.id);
+    const open = (item) => this.plugin.openItem(item);
+    for (const item of untimed) renderTodayItem(section, item, open);
+    for (const item of timed)   renderTodayItem(section, item, open);
   }
 }
 
@@ -8793,7 +9621,7 @@ const DRAGGABLE_MODALS = [
   AddSemesterModal, EditSemesterModal, AddClassModal, EditClassModal,
   AddLectureModal, EditLectureModal, BulkAddLecturesModal,
   AddAssignmentModal, BulkAddAssignmentsModal, EditAssignmentModal,
-  ReadingPaceSetupModal, ReadingPaceLogModal,
+  ReadingPaceSetupModal, ReadingPaceLogModal, WritingGoalModal,
   AddExamModal, EditExamModal,
   QuickAddResourceModal, AddResourceModal, EditResourceModal,
 ];
@@ -8813,6 +9641,7 @@ AddAssignmentModal.prototype._renderLinkedNoteField  = _renderLinkedNoteField;
 EditAssignmentModal.prototype._renderLinkedNoteField = _renderLinkedNoteField;
 ReadingPaceSetupModal.prototype._renderFooter = _renderFooter;
 ReadingPaceLogModal.prototype._renderFooter   = _renderFooter;
+WritingGoalModal.prototype._renderFooter      = _renderFooter;
 AddExamModal.prototype._renderFooter        = _renderFooter;
 EditExamModal.prototype._renderFooter       = _renderFooter;
 AddResourceModal.prototype._renderFooter    = _renderFooter;

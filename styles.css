@@ -1967,6 +1967,20 @@ body.is-mobile .hc-assign-note-input-wrap {
   margin: 4px 0 12px;
 }
 
+/* #63: explanatory line in the pace dialogs (words counted from…, note
+   missing, heading gone). Same size as the status line, normal color. */
+.hc-reading-pace-modal-note {
+  font-size: 13px;
+  color: var(--text-normal);
+  margin-bottom: 12px;
+}
+
+/* #63: long heading names would push the Finished through menu off a
+   phone screen; cap it and let the browser truncate. */
+.hc-reading-pace-heading-select {
+  max-width: min(60vw, 320px);
+}
+
 /* --- Exam list -------------------------------------------------------------- */
 
 .hc-exam-list {
@@ -2993,6 +3007,27 @@ body.is-mobile .hc-cal-nav-title {
 }
 
 .hc-today-item-meta .hc-term-window-flag svg { width: 11px; height: 11px; }
+
+/* #71: daily note agenda block. Reuses the Today sidebar's section and pill
+   classes; this only lays out the block inside a note. */
+.hc-agenda {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0;
+}
+
+/* Pace or word goal line under an agenda item. */
+.hc-agenda-subline {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 8px 0;
+}
+
+.hc-agenda-error {
+  font-size: 12px;
+  color: var(--text-error);
+}
 
 /* --- Interface scale (adjustable via Settings, 100% = no-op) -------------- */
 /* #13: 90-150% range. zoom, not font-size — scales text, icons, gaps, and
