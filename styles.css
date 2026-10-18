@@ -3300,7 +3300,7 @@ body.is-mobile .hc-bulk-textarea {
 .hc-courses-head,
 .hc-courses-row {
   display: grid;
-  grid-template-columns: 96px 104px minmax(160px, 1fr) 120px;
+  grid-template-columns: 96px 104px minmax(160px, 1fr) 56px 96px 120px;
   align-items: center;
   gap: 12px;
 }
@@ -3429,6 +3429,62 @@ body.is-mobile .hc-bulk-textarea {
   color: var(--text-faint);
   border-color: var(--background-modifier-border);
   border-style: dashed;
+}
+
+/* Credits and Grade columns (2026-10-17). */
+.hc-courses-credits {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-courses-grade {
+  justify-self: start;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-normal);
+  white-space: nowrap;
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  cursor: pointer;
+}
+
+.hc-courses-grade:hover { background: var(--background-modifier-hover); }
+
+/* Computed, not final: muted. */
+.hc-courses-grade--progress {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-courses-grade-tag {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.hc-courses-grade--none {
+  font-weight: 400;
+  color: var(--text-faint);
+  cursor: inherit;
+}
+
+.hc-courses-grade--none:hover { background: none; }
+
+/* Phone: Code is hidden (the course name identifies the class), which
+   keeps Grade closer to the visible area. Each row is its own grid, so the
+   template is redefined, not just the cell hidden. */
+body.is-phone .hc-courses-th--code,
+body.is-phone .hc-courses-code { display: none; }
+
+body.is-phone .hc-courses-head,
+body.is-phone .hc-courses-row {
+  grid-template-columns: 96px minmax(140px, 1fr) 48px 96px 120px;
 }
 
 /* ─── Assignments table (#15) ──────────────────────────────────────────────
@@ -3695,3 +3751,101 @@ body.is-mobile.hc-scaled .hc-content {
     )
   );
 }
+
+/* ─── #67 Grades tab ─────────────────────────────────────────────────────── */
+.hc-grades { display: flex; flex-direction: column; gap: 16px; }
+.hc-grades-summary {
+  padding: 12px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+}
+.hc-grades-current { display: flex; align-items: baseline; gap: 10px; }
+.hc-grades-letter { font-size: 1.8em; font-weight: 700; line-height: 1.1; }
+.hc-grades-pct { font-size: 1.1em; color: var(--text-muted); }
+.hc-grades-current--empty { font-size: 1.1em; font-weight: 600; color: var(--text-muted); }
+.hc-grades-sub { font-size: var(--font-ui-small); color: var(--text-muted); margin-top: 4px; }
+.hc-grades-section { display: flex; flex-direction: column; gap: 6px; }
+.hc-grades-heading { font-weight: 600; }
+.hc-grades-desc, .hc-grades-note { font-size: var(--font-ui-small); color: var(--text-muted); }
+.hc-grades-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hc-grades-label { min-width: 10em; }
+.hc-grades-count { color: var(--text-faint); font-size: var(--font-ui-small); }
+.hc-grades-input { width: 8em; }
+.hc-grades-input--num { width: 5em; }
+.hc-grades-unit { color: var(--text-muted); }
+.hc-grades-result { font-weight: 500; }
+.hc-grades-result--warn { color: var(--text-warning); }
+.hc-grades-table { width: 100%; border-collapse: collapse; font-size: var(--font-ui-small); }
+.hc-grades-table th, .hc-grades-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.hc-grades-table th { color: var(--text-muted); font-weight: 500; }
+.hc-grades-muted { color: var(--text-faint); }
+.hc-scale-editor { display: flex; flex-direction: column; gap: 4px; }
+.hc-scale-row { display: flex; align-items: center; gap: 6px; }
+.hc-scale-letter { width: 5em; }
+.hc-scale-min { width: 5em; }
+.hc-scale-sep { color: var(--text-muted); font-size: var(--font-ui-small); }
+.hc-scale-editor > .hc-btn { align-self: flex-start; margin-top: 4px; }
+
+.hc-settings-scale { padding: 4px 0 16px; }
+
+/* #67: hidden but kept (Edit class grade fields while Track grades is off) */
+.hc-hidden { display: none !important; }
+
+/* ─── #72 Attendance ─────────────────────────────────────────────────────── */
+.hc-attendance-meta { cursor: pointer; }
+.hc-attendance-meta:hover { text-decoration: underline; }
+.hc-attendance--near { color: var(--text-warning); }
+.hc-attendance--below { color: var(--text-error); font-weight: 600; }
+.hc-class-attendance { font-size: var(--font-ui-small); margin-top: 4px; }
+.hc-attendance-summary { font-weight: 600; margin-bottom: 4px; }
+.hc-attendance-list { display: flex; flex-direction: column; max-height: 55vh; overflow-y: auto; margin-top: 10px; }
+.hc-attendance-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  padding: 6px 0; border-bottom: 1px solid var(--background-modifier-border);
+}
+.hc-attendance-date { min-width: 8em; }
+.hc-attendance-pills { display: flex; gap: 4px; flex-wrap: wrap; }
+.hc-attendance-pill {
+  font-size: var(--font-ui-smaller); padding: 2px 8px; border-radius: 100px;
+  border: 1px solid var(--background-modifier-border); background: transparent; color: var(--text-muted);
+  box-shadow: none; height: auto; cursor: pointer;
+}
+.hc-attendance-pill--on { color: var(--text-on-accent); background: var(--interactive-accent); border-color: var(--interactive-accent); }
+.hc-attendance-pill--absent.hc-attendance-pill--on { background: var(--color-red); border-color: var(--color-red); }
+
+/* #72: attendance mark on a lecture's date line. Present is a faint check;
+   the others are words. Lives on the date line so the mobile right-hand
+   group (#11) gets no wider. */
+.hc-lecture-att {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 6px; cursor: pointer; border-radius: 4px; padding: 0 2px;
+}
+.hc-lecture-att:hover, .hc-lecture-att:focus-visible { background: var(--background-modifier-hover); }
+.hc-lecture-att svg { width: 12px; height: 12px; }
+.hc-lecture-att--present { color: var(--text-muted); }
+.hc-lecture-att--absent { color: var(--text-error); font-weight: 500; }
+.hc-lecture-att--excused, .hc-lecture-att--cancelled { color: var(--text-muted); font-style: italic; }
+.hc-lecture-att-sep { color: var(--text-faint); font-style: normal; }
+body.is-mobile .hc-lecture-att { padding: 2px 4px; }
+
+/* #72: chevron on the header attendance line, the lecture rows' "tap to
+   open" cue, so it reads as clickable on mobile where there's no hover. */
+.hc-attendance-chevron { display: inline-flex; align-items: center; color: var(--text-faint); }
+.hc-attendance-chevron svg { width: 12px; height: 12px; }
+
+/* #72: a long description with a small control (toggle, short number). The
+   control keeps its natural width, so the description uses the rest of the
+   row instead of half of it. */
+.hc-modal .hc-setting-wide-desc .setting-item-info { flex: 1 1 auto; }
+.hc-modal .hc-setting-wide-desc .setting-item-control { flex: 0 0 auto; }
+.hc-modal .hc-setting-wide-desc .setting-item-control input[type="number"] { width: 6em; }
+/* Mobile: the #18 rule (body.is-mobile .hc-class-modal .setting-item-info
+   { flex: 0 0 auto }) outranks the rule above, and Obsidian keeps toggle rows
+   horizontal on mobile, so the description wouldn't shrink: it ran off-screen
+   on one line and pushed the toggle out of view. */
+body.is-mobile .hc-modal .hc-setting-wide-desc .setting-item-info { flex: 1 1 auto; min-width: 0; }

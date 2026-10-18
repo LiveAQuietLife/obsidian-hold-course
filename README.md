@@ -10,6 +10,59 @@ Hold Course runs on desktop and mobile.
 
 ---
 
+## Screenshots
+
+<details>
+<summary>Show screenshots</summary>
+
+**Overview**
+
+<img src="screenshots/1.9.0-dashboard.jpg" width="700" alt="Overview">
+
+**Editing a semester**
+
+<img src="screenshots/1.9.0-edit-term.jpg" width="700" alt="Editing a semester">
+
+**Lectures**
+
+<img src="screenshots/1.9.0-lectures.jpg" width="700" alt="Lectures">
+
+**Lecture detail**
+
+<img src="screenshots/1.9.0-lecture%20detail.jpg" width="700" alt="Lecture detail">
+
+**Assignments**
+
+<img src="screenshots/1.9.0-assignments.jpg" width="700" alt="Assignments">
+
+**Readings**
+
+<img src="screenshots/1.9.0-readings.jpg" width="700" alt="Readings">
+
+**Library**
+
+<img src="screenshots/1.9.0-library.jpg" width="700" alt="Library">
+
+**Calendar (month)**
+
+<img src="screenshots/1.9.0-calendar.jpg" width="700" alt="Calendar (month)">
+
+**Assignments view**
+
+<img src="screenshots/1.9.0-global-assignments.jpg" width="700" alt="Assignments view">
+
+**Courses**
+
+<img src="screenshots/1.9.0-courses.jpg" width="700" alt="Courses">
+
+**Settings**
+
+<img src="screenshots/1.9.0-settings.jpg" width="700" alt="Settings">
+
+</details>
+
+---
+
 ## Table of Contents
 
 - [What It Is](#what-it-is)
@@ -24,6 +77,8 @@ Hold Course runs on desktop and mobile.
 - [Assignments](#assignments)
 - [Readings](#readings)
 - [Exams](#exams)
+- [Grades](#grades)
+- [Attendance](#attendance)
 - [Library](#library)
 - [Calendar View](#calendar-view)
 - [Assignments View](#assignments-view)
@@ -67,9 +122,7 @@ On first launch you'll see the **Overview** — an empty workspace. Here's the t
 4. **Add exams** on the Exams tab for any high-stakes dates you need to track separately.
 5. **Add resources** to the Library as you encounter them, or quick-add them from within a lecture or assignment and fill in the details later.
 
-From there, it's a matter of advancing item statuses as the semester moves until finally you end with this:
-
-<img src="screenshots/1.9.0-dashboard.jpg" width="900" alt="Main Dashboard">
+From there, it's a matter of advancing item statuses as the semester moves. To see what a semester in progress looks like, open [Screenshots](#screenshots) at the top of this page.
 
 ---
 
@@ -103,8 +156,6 @@ The semester dropdown at the top of the Overview lets you switch between semeste
 
 **Deleting a semester:** Open the dropdown and select **Delete Semester**. Since this removes every class, lecture, assignment, exam, and library resource under that semester, the confirmation dialog states exactly how much is about to be deleted. This cannot be undone.
 
-<img src="screenshots/1.9.0-edit-term.jpg" width="500" alt="Edit Term">
-
 ---
 
 ## Classes
@@ -113,13 +164,13 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 
 **Adding a class:** Click **+ Add Class** to open the Add Class dialog, organized into three tabs so the form never requires scrolling to find Save:
 
-- **Details** — class name, class code, course page URL, track grades
+- **Details** — class name, class code, course page URL, track grades, and (when grades are tracked) credits and final grade
 - **People** — professor name and email, office hours, TA name and email and office hours
-- **Schedule** — an Online (no meeting time) toggle, meeting days, location, start/end date, start/end time, and a meeting link
+- **Schedule** — an Online (no meeting time) toggle, meeting days, location, start/end date, start/end time, a meeting link, and Track attendance with an optional minimum
 
 Only the class name is required; fill in the rest as you have it.
 
-**Opening a class:** Click the class card. Each class has five tabs: **Lectures**, **Assignments**, **Readings**, **Exams**, and **Library**.
+**Opening a class:** Click the class card. Each class has five tabs: **Lectures**, **Assignments**, **Readings**, **Exams**, and **Library**, plus a sixth, **[Grades](#grades)**, when the class tracks grades.
 
 **Editing, copying, or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. **Copy to semester…** is on the class's own menu and on its right-click menu in Courses — see [Copying a Class](#copying-a-class). A class can also be edited from the **Edit** button in its detail screen — editing uses the same Details/People/Schedule tabs as adding a class.
 
@@ -195,13 +246,7 @@ A live preview shows every parsed lecture and the date it will land on before an
 
 **Lecture detail:** Click a lecture to open its detail screen, where you can edit its fields, jot key concepts and lesson goals, link the lecture to a note in your vault, and see every assignment attached to it. Assignments can be added here one at a time or in bulk.
 
-
-<img src="screenshots/1.9.0-lectures.jpg" width="700" alt="Lectures">
-
 ---
-
-
-<img src="screenshots/1.9.0-lecture detail.jpg" width="700" alt="Lectures">
 
 ---
 
@@ -229,8 +274,6 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Assignment detail:** Click an assignment to open its detail screen, where you can edit all fields, link the assignment to a note in your vault, or quick-add a resource to the Library.
 
-<img src="screenshots/1.9.0-assignments.jpg" width="700" alt="Lectures">
-
 ---
 
 ## Readings
@@ -246,8 +289,6 @@ Inside a class, the **Readings** tab lists everything assigned as reading — pu
 **Status and due date:** Readings use the same **Not Started / In Progress / Done** status pill and due-date display as Assignments. Use the **Show done/Hide done** toggle to declutter a finished reading list.
 
 Readings never show a grade field or grade chip — grading doesn't apply to them.
-
-<img src="screenshots/1.9.0-readings.jpg" width="700" alt="Readings">
 
 ### Reading pace
 
@@ -333,6 +374,43 @@ Exams appear on the Calendar in their own color, distinct from lectures and assi
 
 ---
 
+## Grades
+
+A class with **Track grades** on has a **Grades** tab. It works out your grade from the grades you've already entered on assignments and exams. There's nothing new to fill in on each item.
+
+**What counts:** a grade is read as a percent. "92", "92%", and "18/20" (90%) all work, and a letter such as "A-" counts as the middle of its band on the grading scale. Scores over 100% are allowed. Anything else, such as "pass", is left out, and the Graded work table at the bottom of the tab shows which items were and weren't counted. Readings aren't graded work.
+
+**Weights:** enter the percent of the final grade for each assignment type and for exams, from your syllabus. Leave them all blank to count every graded item equally. If the weights don't add up to 100, Hold Course scales them and says so.
+
+**Target:** enter the grade you're aiming for, a letter or a percent. Hold Course tells you the average you need on the remaining work to reach it. Remaining work is anything not graded yet.
+
+**Grading scale:** A–F by default (A from 93, A- from 90, B+ from 87, and so on down to F). Change it for all classes in [Settings](#settings) → Grades, or turn on **Use a different scale for this class** on a class's Grades tab.
+
+**Current grade vs. final grade:**
+
+- The **current grade** is the one on the Grades tab. It's calculated from your graded work so far, and the target uses it. It changes as you enter grades.
+- The **final grade** is the one you type into Add class or Edit class, under Track grades. It's the official grade, as your school posts it. Hold Course doesn't check it against the calculation, and in [Courses](#courses) it takes the place of the calculated grade.
+
+Leave Final grade blank until the school posts it. Until then, Courses shows the calculated grade, marked "so far".
+
+**Credits** are entered in the same place. Courses adds them up.
+
+---
+
+## Attendance
+
+For a school with an attendance requirement, turn on **Track attendance** in Add class or Edit class → Schedule. Optionally, set a **Minimum attendance (%)**.
+
+**Meetings come from the schedule.** Attendance needs the class's meeting days, start and end times, and start and end dates. Hold Course works out each meeting from the start date through today; you don't add them. Online classes don't track attendance.
+
+**Marking:** every meeting counts as present until you mark it otherwise. In the class header, the attendance line ("Attendance 92% (2 absences) · minimum 75%") opens the list of meetings, newest first. Mark each one **Present**, **Absent**, **Excused**, or **Cancelled**. You can also mark a meeting from its lecture: on a meeting date, a lecture shows the mark beside its date (a small check for present, or the word for anything else). Tap it to change the mark.
+
+**The percent** is present meetings out of present plus absent. Excused and cancelled meetings don't count either way.
+
+**Warnings:** with a minimum set, the class card on the dashboard shows the attendance line when you're within 5 points of the minimum or below it. Otherwise it stays out of the way.
+
+---
+
 ## Library
 
 The **Library** tab collects every resource associated with a class — books, articles, reference works — into a single list. Resources accumulate here as you add them, and each one tracks which lectures and assignments reference it.
@@ -346,8 +424,6 @@ The **Library** tab collects every resource associated with a class — books, a
 **Linked Book:** Reading assignments can be linked directly to a resource in the Library. For all other assignment types, a Linked Note field is available instead. Both are set from the assignment's detail screen.
 
 **Resource detail:** Click any resource to see everything associated with it: the classes it belongs to, its type, and every lecture and assignment that references it — each one clickable through to the item itself.
-
-<img src="screenshots/1.9.0-library.jpg" width="700" alt="Library">
 
 ---
 
@@ -371,9 +447,6 @@ The **Calendar** shows all your lectures, assignments, and exams across all clas
 
 Done items appear with strikethrough and muted styling in both the calendar and the day detail popover.
 
-
-<img src="screenshots/1.9.0-calendar.jpg" width="700" alt="Monthly View Calendar">
-
 ---
 
 ## Assignments View
@@ -390,27 +463,23 @@ Click any assignment to open its detail screen.
 
 Inside a class, assignments still appear as cards — this table is only the global view, where seeing everything side by side is the point. On a narrow screen the table scrolls sideways rather than dropping columns, so nothing is hidden.
 
-<img src="screenshots/1.9.0-global-assignments.jpg" width="700" alt="Global Assignments">
-
 ---
 
 ## Courses
 
-The **Courses** button in the toolbar opens a cross-semester view of every class you've logged, in one table — a record of what you've taken alongside what you're taking now, rather than a working view of the current term. The header shows the totals: how many classes across how many semesters.
+The **Courses** button in the toolbar opens a cross-semester view of every class you've logged, in one table — a record of what you've taken alongside what you're taking now, rather than a working view of the current term. The header shows the totals: how many classes across how many semesters, and your credits (dropped classes aren't counted).
 
-Columns are semester, course code, course name, and status.
+Columns are semester, course code, course name, credits, grade, and status. On a phone, the course code is hidden to make room.
+
+**Grade:** a final grade you typed in shows as entered. Otherwise the [calculated grade](#grades) shows in gray with its percent, marked "so far". A dash means there's no grade to show: the class isn't graded, has no graded work yet, or was dropped. Click a grade to open that class's Grades tab.
 
 **Filtering:** The **All years** and **All terms** dropdowns narrow the list. Both stack.
 
-**Sorting:** Click any column heading to sort by it; click again to reverse.
+**Sorting:** Click any column heading to sort by it; click again to reverse. Credits and Grade start highest first, and classes without a value always sort last.
 
 **Status:** Each class can be marked **Ongoing**, **Completed**, or **Dropped**. Click the status cell to set it. A dash means no status is set yet — status is optional, and a class works exactly the same without one. Completed and dropped classes appear muted, so finished work steps back and current work stays prominent.
 
 Click any row to open that class's Lectures tab. Right-clicking a class here is also how you [move it to a different semester](#moving-a-class).
-
-
-<img src="screenshots/1.9.0-courses.jpg" width="700" alt="Global Assignments">
-
 
 ---
 
@@ -495,9 +564,9 @@ This works on desktop and Android. It has no effect on iOS, which doesn't suppor
 
 **Reading pace > Words per minute** — your reading speed, used to turn word counts into minutes for readings measured in words. 225 by default; leave the box empty to use the default.
 
-**Assignment types** — your own assignment types, each with how many assignments use it, and buttons to rename or delete it. New types are added from the Type menu when adding or editing an assignment.
+**Grades** — the grading scale used by every class that doesn't have its own: a letter and the minimum percent for it, one per row. Add or remove letters, or use **Reset to default** to go back to the A–F scale. See [Grades](#grades).
 
-<img src="screenshots/1.9.0-settings.jpg" width="700" alt="Settings">
+**Assignment types** — your own assignment types, each with how many assignments use it, and buttons to rename or delete it. New types are added from the Type menu when adding or editing an assignment.
 
 ---
 
@@ -509,7 +578,7 @@ Hold Course is built around one person's own coursework, but several features su
 - **[Online classes](#classes)** drop the meeting fields when there's no live session.
 - **[Your own assignment types](#assignments)** — Lab, Quiz, Homework, Peer review — are set up once and shared by every class and section, and each one can be filtered on Assignments and Calendar.
 
-What it doesn't do: types are labels only, with no grade weights, and each assignment has a single status — yours. Hold Course is a planning tool, not a gradebook, and doesn't track individual students.
+What it doesn't do: grade weights and attendance are for your own grade, not a class roster, and each assignment has a single status — yours. Hold Course is a planning tool, not a gradebook, and doesn't track individual students.
 
 ---
 

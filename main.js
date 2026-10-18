@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.11.0 */
+/* --- Hold Course --- v1.12.0 */
 'use strict';
 
 const {
@@ -134,6 +134,388 @@ function isClassGraded(cls) {
 // still apply (term window). (2026-10-10)
 function isClassOnline(cls) {
   return !!(cls && cls.online);
+}
+
+// ─── #67 Grades (F7) ─────────────────────────────────────────────────────────
+// Grades are computed, never stored. Item `grade` stays free text and is read
+// as a percent here. All class keys are additive and optional: gradeWeights
+// ({ type: percent }), gradeScale (per-class override), targetGrade (letter or
+// percent), credits, finalGrade (typed; wins over the computed letter).
+// #75: notGraded also means "no credits". (2026-10-15)
+
+const DEFAULT_GRADE_SCALE = [
+  { letter: 'A', min: 93 }, { letter: 'A-', min: 90 },
+  { letter: 'B+', min: 87 }, { letter: 'B', min: 83 }, { letter: 'B-', min: 80 },
+  { letter: 'C+', min: 77 }, { letter: 'C', min: 73 }, { letter: 'C-', min: 70 },
+  { letter: 'D+', min: 67 }, { letter: 'D', min: 63 }, { letter: 'D-', min: 60 },
+  { letter: 'F', min: 0 },
+];
+
+// A usable scale: letter text and a finite minimum on every row, at least one
+// row, highest minimum first. Returns a sorted copy, or null.
+function normalizeGradeScale(scale) {
+  if (!Array.isArray(scale)) return null;
+  const rows = scale
+    .filter(r => r && typeof r.letter === 'string' && r.letter.trim() && Number.isFinite(Number(r.min)))
+    .map(r => ({ letter: r.letter.trim(), min: Number(r.min) }));
+  if (!rows.length) return null;
+  return rows.sort((a, b) => b.min - a.min);
+}
+
+// The one scale rule: the class override, else the settings scale, else the default.
+function getGradeScale(plugin, cls) {
+  return normalizeGradeScale(cls && cls.gradeScale)
+    || normalizeGradeScale(plugin && plugin.data && plugin.data.settings && plugin.data.settings.gradeScale)
+    || DEFAULT_GRADE_SCALE.map(r => ({ ...r }));
+}
+
+function letterForPercent(pct, scale) {
+  if (!Number.isFinite(pct)) return '';
+  const band = scale.find(r => pct >= r.min);
+  return (band || scale[scale.length - 1]).letter;
+}
+
+// A letter's band on the scale (case-insensitive): { min, max }. The top band
+// runs to 100; the bottom band starts at its own minimum.
+function letterBand(letter, scale) {
+  const key = String(letter || '').trim().toLowerCase();
+  const i = scale.findIndex(r => r.letter.toLowerCase() === key);
+  if (i < 0) return null;
+  const max = i === 0 ? Math.max(100, scale[0].min) : scale[i - 1].min;
+  return { min: scale[i].min, max };
+}
+
+// Reads an item's grade text as a percent: "92", "92%", "18/20" (90), or a
+// letter on the scale (the middle of its band). Anything else returns null
+// and is left out of the calculation.
+function parseGrade(text, scale) {
+  const s = String(text == null ? '' : text).trim();
+  if (!s) return null;
+  let m = s.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+  if (m) {
+    const den = Number(m[2]);
+    return den > 0 ? (Number(m[1]) / den) * 100 : null;
+  }
+  m = s.match(/^(\d+(?:\.\d+)?)\s*%?$/);
+  if (m) return Number(m[1]);
+  const band = letterBand(s, scale);
+  return band ? (band.min + band.max) / 2 : null;
+}
+
+// A target as a percent: a letter means the bottom of its band.
+function parseTargetGrade(text, scale) {
+  const s = String(text == null ? '' : text).trim();
+  if (!s) return null;
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*%?$/);
+  if (m) return Number(m[1]);
+  const band = letterBand(s, scale);
+  return band ? band.min : null;
+}
+
+// ─── The item walker (Principle 3) ───────────────────────────────────────────
+// One way to walk assignments: class-level first, then each lecture's, in
+// stored order. fn(assignment, lecture or null). Readings included; callers
+// filter. (2026-10-15)
+function forEachClassAssignment(cls, fn) {
+  for (const a of ((cls && cls.assignments) || [])) fn(a, null);
+  for (const lec of ((cls && cls.lectures) || [])) {
+    for (const a of (lec.assignments || [])) fn(a, lec);
+  }
+}
+
+// The same walk over semesters: fn(assignment, cls, lecture or null, sem).
+// Pass one semester as [sem] to scope it.
+function forEachAssignment(semesters, fn) {
+  for (const sem of (semesters || [])) {
+    for (const cls of (sem.classes || [])) {
+      forEachClassAssignment(cls, (a, lec) => fn(a, cls, lec, sem));
+    }
+  }
+}
+
+// Every graded item in a class: assignments (class-level and per lecture)
+// except Readings, plus exams under the category "Exam".
+function getGradedItems(cls) {
+  const out = [];
+  forEachClassAssignment(cls, a => { if (a.type !== 'Reading') out.push({ item: a, category: a.type || 'Other' }); });
+  for (const ex of (cls.exams || [])) out.push({ item: ex, category: 'Exam' });
+  return out;
+}
+
+// Positive weights only; null when the class has none (plain average).
+function getGradeWeights(cls) {
+  const w = cls && cls.gradeWeights;
+  if (!w || typeof w !== 'object') return null;
+  const out = {};
+  for (const [k, v] of Object.entries(w)) {
+    const n = Number(v);
+    if (n > 0) out[k] = n;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// The one grade calculation. Returns:
+//   current      percent so far (graded work only), or null
+//   letter       current letter on the class's scale
+//   weightTotal  sum of weights (null when unweighted)
+//   unweighted   items whose category has no weight (left out when weighted)
+//   unweightedCats  their count by category
+//   unreadable   items whose grade text couldn't be read (left out)
+//   remaining    count of items with no grade yet (plus empty weighted categories)
+//   target       target percent, or null
+//   needed       average needed on the remaining work to reach the target,
+//                or null (no target, or nothing remaining)
+//   reached      with nothing remaining: whether the target is met
+// Inside a category each item counts equally. The final grade is linear in
+// the remaining average x: final = base + slope * x.
+function computeClassGrade(plugin, cls) {
+  const scale = getGradeScale(plugin, cls);
+  const weights = getGradeWeights(cls);
+  const res = {
+    scale, current: null, letter: '', weightTotal: null,
+    unweighted: [], unweightedCats: {}, unreadable: [], remaining: 0,
+    target: parseTargetGrade(cls && cls.targetGrade, scale), needed: null, reached: null,
+  };
+  const cats = {};
+  for (const { item, category } of getGradedItems(cls || {})) {
+    if (weights && !(category in weights)) {
+      res.unweighted.push(item);
+      res.unweightedCats[category] = (res.unweightedCats[category] || 0) + 1;
+      continue;
+    }
+    const c = cats[category] || (cats[category] = { sum: 0, graded: 0, open: 0 });
+    const text = (item.grade || '').trim();
+    if (!text) { c.open++; continue; }
+    const pct = parseGrade(text, scale);
+    if (pct === null) { res.unreadable.push(item); continue; }
+    c.sum += pct; c.graded++;
+  }
+
+  let base = 0, slope = 0;
+  if (weights) {
+    const total = Object.values(weights).reduce((s, v) => s + v, 0);
+    res.weightTotal = total;
+    let curSum = 0, curW = 0;
+    for (const [cat, w] of Object.entries(weights)) {
+      const c = cats[cat] || { sum: 0, graded: 0, open: 0 };
+      const share = w / total;
+      const n = c.graded + c.open;
+      if (n === 0) { slope += share; res.remaining++; continue; }
+      if (c.graded) { curSum += w * (c.sum / c.graded); curW += w; }
+      base += share * (c.sum / n);
+      slope += share * (c.open / n);
+      res.remaining += c.open;
+    }
+    if (curW > 0) res.current = curSum / curW;
+  } else {
+    let sum = 0, graded = 0, open = 0;
+    for (const c of Object.values(cats)) { sum += c.sum; graded += c.graded; open += c.open; }
+    const n = graded + open;
+    if (graded) res.current = sum / graded;
+    if (n) { base = sum / n; slope = open / n; }
+    res.remaining = open;
+  }
+
+  res.letter = letterForPercent(res.current, scale);
+  if (res.target !== null) {
+    if (slope > 0) res.needed = (res.target - base) / slope;
+    else if (res.current !== null) res.reached = base >= res.target;
+  }
+  return res;
+}
+
+// The class's final grade for display and later transcript use: the typed
+// value wins; otherwise the computed letter. Null for ungraded classes.
+function getClassFinalGrade(plugin, cls) {
+  if (!isClassGraded(cls)) return null;
+  const typed = (cls.finalGrade || '').trim();
+  if (typed) return { text: typed, typed: true };
+  const g = computeClassGrade(plugin, cls);
+  return g.current === null ? null : { text: g.letter, typed: false, percent: g.current };
+}
+
+// #75 groundwork: an ungraded class carries no credits.
+function getClassCredits(cls) {
+  if (!isClassGraded(cls)) return null;
+  const raw = cls && cls.credits;
+  if (raw == null || String(raw).trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+// One decimal at most: 85 → "85", 85.25 → "85.3".
+function formatPercent(n) {
+  return String(Math.round(n * 10) / 10);
+}
+
+// The target sentence for the Grades tab. Returns { text, warn } or null.
+function gradeTargetText(g, raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  if (g.target === null) {
+    return { warn: true, text: `Couldn’t read “${s}”. Use a letter from your grading scale or a percent.` };
+  }
+  const goal = /^\d+(\.\d+)?$/.test(s) ? `${s}%` : s;
+  if (g.needed !== null) {
+    const n = g.needed;
+    if (n <= 0) return { warn: false, text: `You’ll reach ${goal} even with zeros on the remaining work.` };
+    const need = `${formatPercent(n)}%`;
+    if (n > 100) return { warn: true, text: `To reach ${goal}, you’d need an average of ${need} on the remaining work. That’s over 100%, so it would take extra credit.` };
+    return { warn: false, text: `To reach ${goal}, you need an average of ${need} (${letterForPercent(n, g.scale)}) on the remaining work.` };
+  }
+  if (g.reached === true) return { warn: false, text: `No work remains, and your grade meets ${goal}.` };
+  if (g.reached === false) return { warn: true, text: `No work remains, and your grade is below ${goal}.` };
+  return { warn: false, text: 'Add assignments or exams to see what you need.' };
+}
+
+// Scale editor shared by Settings and the Grades tab. `rows` is the current
+// scale; onChange gets the new, sorted scale. At least one row always stays.
+function renderGradeScaleEditor(container, rows, onChange) {
+  const box = container.createDiv('hc-scale-editor');
+  const current = normalizeGradeScale(rows) || DEFAULT_GRADE_SCALE.map(r => ({ ...r }));
+  const commit = next => onChange(normalizeGradeScale(next) || current);
+  const inputs = []; // [letter, min] per row, for re-keying focus after a re-sort
+  current.forEach((r, i) => {
+    const row = box.createDiv('hc-scale-row');
+    const letter = row.createEl('input', { cls: 'hc-scale-letter', attr: { type: 'text', 'aria-label': 'Letter', 'data-hc-focus': `sl:${i}` } });
+    letter.value = r.letter;
+    row.createSpan({ cls: 'hc-scale-sep', text: 'from' });
+    const min = row.createEl('input', { cls: 'hc-scale-min', attr: { type: 'number', step: 'any', 'aria-label': 'Minimum percent', 'data-hc-focus': `sm:${i}` } });
+    min.value = String(r.min);
+    row.createSpan({ cls: 'hc-scale-sep', text: '%' });
+    inputs.push([letter, min]);
+    const update = () => {
+      const minVal = min.value.trim() === '' ? NaN : Number(min.value);
+      // A blank letter or minimum puts the old value back instead of
+      // silently dropping the row. Remove is the way to delete one.
+      if (!letter.value.trim() || !Number.isFinite(minVal)) {
+        letter.value = r.letter;
+        min.value = String(r.min);
+        new Notice('A letter needs a name and a minimum percent. To delete a row, use Remove.');
+        return;
+      }
+      const next = current.map(x => ({ ...x }));
+      next[i] = { letter: letter.value, min: minVal };
+      // Rows re-sort by minimum on redraw. Re-key every field to the row's
+      // new position, so focus restore lands on the same row, not the same index.
+      const order = next.map((_, j) => j).sort((a, b) => next[b].min - next[a].min);
+      order.forEach((oldIdx, newIdx) => {
+        inputs[oldIdx][0].setAttribute('data-hc-focus', `sl:${newIdx}`);
+        inputs[oldIdx][1].setAttribute('data-hc-focus', `sm:${newIdx}`);
+      });
+      commit(next);
+    };
+    letter.addEventListener('change', update);
+    min.addEventListener('change', update);
+    if (current.length > 1) {
+      const del = row.createEl('button', { cls: 'hc-btn hc-btn--sm hc-scale-remove', text: 'Remove', attr: { 'aria-label': `Remove ${r.letter}` } });
+      del.addEventListener('click', () => commit(current.filter((_, j) => j !== i)));
+    }
+  });
+  const addBtn = box.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Add a letter' });
+  addBtn.addEventListener('click', () => {
+    const low = current[current.length - 1];
+    commit([...current, { letter: 'New', min: Math.max(0, low.min - 10) }]);
+  });
+}
+
+// ─── #72 Attendance ──────────────────────────────────────────────────────────
+// Meetings come from the schedule (classMeetsOnDate), start date through
+// today, worked out each time and never stored. Only marks are stored:
+// cls.attendance = { 'YYYY-MM-DD': 'absent' | 'excused' | 'cancelled' }.
+// Present is the absence of a key, so unmarked meetings count as present.
+// Keys: trackAttendance (presence, like online), attendanceMin (optional
+// percent). Excused and cancelled meetings are left out of the percent.
+// (2026-10-15)
+
+const ATTENDANCE_STATUSES = ['present', 'absent', 'excused', 'cancelled'];
+const ATTENDANCE_LABELS = { present: 'Present', absent: 'Absent', excused: 'Excused', cancelled: 'Cancelled' };
+const ATTENDANCE_NEAR_POINTS = 5;
+
+// A full schedule: meeting days, both times, and both dates.
+function hasMeetingSchedule(cls) {
+  return !!(cls && cls.meetingDays && cls.meetingDays.length &&
+    cls.meetingStartTime && cls.meetingEndTime && cls.startDate && cls.endDate);
+}
+
+// Whether attendance applies: turned on, a full schedule, not online.
+function isAttendanceTracked(cls) {
+  return !!(cls && cls.trackAttendance) && !isClassOnline(cls) && hasMeetingSchedule(cls);
+}
+
+function getAttendanceMin(cls) {
+  const raw = cls && cls.attendanceMin;
+  if (raw == null || String(raw).trim() === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 && n <= 100 ? n : null;
+}
+
+// Meeting dates from the start date through `untilISO` (inclusive), oldest first.
+function getMeetingDates(cls, untilISO) {
+  if (!hasMeetingSchedule(cls)) return [];
+  const out = [];
+  const last = cls.endDate < untilISO ? cls.endDate : untilISO;
+  let guard = 0;
+  for (let d = cls.startDate; d <= last && guard < 2000; d = addDaysISO(d, 1), guard++) {
+    const weekday = WEEKDAY_NAMES[new Date(d + 'T12:00:00').getDay()];
+    if (classMeetsOnDate(cls, d, weekday)) out.push(d);
+  }
+  return out;
+}
+
+// Whether a date is a scheduled meeting of the class.
+function isMeetingDate(cls, dateISO) {
+  if (!dateISO) return false;
+  return classMeetsOnDate(cls, dateISO, WEEKDAY_NAMES[new Date(dateISO + 'T12:00:00').getDay()]);
+}
+
+function getAttendanceMark(cls, dateISO) {
+  const v = cls && cls.attendance && cls.attendance[dateISO];
+  return ATTENDANCE_STATUSES.includes(v) && v !== 'present' ? v : 'present';
+}
+
+// Present removes the key; the map is removed when empty (absent = default).
+function setAttendanceMark(cls, dateISO, status) {
+  const map = { ...((cls && cls.attendance) || {}) };
+  if (status === 'present' || !ATTENDANCE_STATUSES.includes(status)) delete map[dateISO];
+  else map[dateISO] = status;
+  if (Object.keys(map).length) cls.attendance = map; else delete cls.attendance;
+}
+
+// The one attendance rule. Returns null when attendance doesn't apply.
+//   meetings  [{ date, status }] newest first
+//   present, absent, excused, cancelled  counts
+//   percent   present ÷ (present + absent), or null with nothing counted
+//   min       the class minimum, or null
+//   level     'below' | 'near' | 'ok' | null (null without a minimum)
+function getAttendanceState(cls, todayISO) {
+  if (!isAttendanceTracked(cls)) return null;
+  const dates = getMeetingDates(cls, todayISO || getTodayISO());
+  const res = { meetings: [], present: 0, absent: 0, excused: 0, cancelled: 0, percent: null, min: getAttendanceMin(cls), level: null };
+  for (const date of dates) {
+    const status = getAttendanceMark(cls, date);
+    res[status]++;
+    res.meetings.push({ date, status });
+  }
+  res.meetings.reverse();
+  const counted = res.present + res.absent;
+  if (counted) res.percent = (res.present / counted) * 100;
+  if (res.min !== null && res.percent !== null) {
+    res.level = res.percent < res.min ? 'below'
+      : res.percent <= res.min + ATTENDANCE_NEAR_POINTS ? 'near' : 'ok';
+  }
+  return res;
+}
+
+// "Attendance 92% · minimum 75%" (with absences in brackets), or a
+// no-meetings-yet line.
+function attendanceSummaryText(st) {
+  if (!st) return '';
+  if (st.percent === null) return st.meetings.length ? 'Attendance: no meetings counted yet' : 'Attendance: no meetings yet';
+  let t = `Attendance ${formatPercent(st.percent)}%`;
+  if (st.absent) t += ` (${st.absent} ${st.absent === 1 ? 'absence' : 'absences'})`;
+  if (st.min !== null) t += ` · minimum ${formatPercent(st.min)}%`;
+  return t;
 }
 
 function getColor(index) {
@@ -761,11 +1143,11 @@ function getAllAssignments(semester, activeOnly = false) {
 function getNextAssignmentDue(cls) {
   const pending = [];
   for (const a of (cls.assignments || [])) {
-    if (a.status !== 'done' && a.dueDate) pending.push(a);
+    if (!isDoneLike(a.status) && a.dueDate) pending.push(a);
   }
   for (const lec of (cls.lectures || [])) {
     for (const a of (lec.assignments || [])) {
-      if (a.status !== 'done' && a.dueDate) pending.push(a);
+      if (!isDoneLike(a.status) && a.dueDate) pending.push(a);
     }
   }
   if (!pending.length) return null;
@@ -819,8 +1201,8 @@ function getNextUp(cls) {
   const sorted = getLecturesSorted(cls);
   for (let i = 0; i < sorted.length; i++) {
     const lec = sorted[i];
-    if (lec.status === 'done') continue;
-    const reading = (lec.assignments || []).find(a => a.type === 'Reading' && a.status !== 'done') || null;
+    if (isDoneLike(lec.status)) continue;
+    const reading = (lec.assignments || []).find(a => a.type === 'Reading' && !isDoneLike(a.status)) || null;
     return { lecture: lec, lectureNumber: i + 1, reading };
   }
   return null;
@@ -1039,6 +1421,15 @@ function parseSemesterName(name) {
   if (found.length !== 1) return fail;
 
   return { term: found[0], year };
+}
+
+// F5 groundwork: whether a status counts as finished. Only 'done' today;
+// later states (submitted, graded, returned — 1.18.0) join here, so every
+// "is it finished?" check changes in one place. Labels, CSS state classes,
+// and the done/not-done toggles still name 'done' directly: they're about
+// that one state, not "finished". (2026-10-15)
+function isDoneLike(status) {
+  return status === 'done';
 }
 
 function statusLabel(status) {
@@ -1325,9 +1716,9 @@ function getCalItemStyle(item) {
 // Done-ness for any date item (lecture, assignment, exam). Was a Today view
 // method; #71 shares it with the daily note agenda.
 function isItemDone(item) {
-  if (item.kind === 'lecture')    return item.lec.status === 'done';
-  if (item.kind === 'assignment') return item.assignment.status === 'done';
-  if (item.kind === 'exam')       return item.exam.status === 'done';
+  if (item.kind === 'lecture')    return isDoneLike(item.lec.status);
+  if (item.kind === 'assignment') return isDoneLike(item.assignment.status);
+  if (item.kind === 'exam')       return isDoneLike(item.exam.status);
   return false;
 }
 
@@ -1418,16 +1809,12 @@ function getAgendaForDate(plugin, dateISO) {
 
   const overdue = [];
   const cur = plugin.getCurrentSemester();
-  for (const cls of ((cur && cur.classes) || [])) {
-    if (isClassInactive(cls)) continue;
-    const add = (a, lectureId) => {
-      if (a.dueDate && a.dueDate < dateISO && a.status !== 'done') {
-        overdue.push({ kind: 'assignment', title: a.title, cls, assignment: a, lectureId });
-      }
-    };
-    for (const a of (cls.assignments || [])) add(a, null);
-    for (const lec of (cls.lectures || [])) for (const a of (lec.assignments || [])) add(a, lec.id);
-  }
+  forEachAssignment(cur ? [cur] : [], (a, cls, lec) => {
+    if (isClassInactive(cls)) return;
+    if (a.dueDate && a.dueDate < dateISO && !isDoneLike(a.status)) {
+      overdue.push({ kind: 'assignment', title: a.title, cls, assignment: a, lectureId: lec ? lec.id : null });
+    }
+  });
   overdue.sort((a, b) => a.assignment.dueDate.localeCompare(b.assignment.dueDate));
 
   return { date: dateISO, overdue, items: [...untimed, ...timed] };
@@ -2361,15 +2748,9 @@ class HoldCoursePlugin extends Plugin {
   // status. Returns the new class, or null.
   // ─── #62 custom assignment types ─────────────────────────────────────────
 
+  // Every assignment in every semester (Principle 3: the one walker).
   _forEachAssignment(fn) {
-    for (const sem of (this.data.semesters || [])) {
-      for (const cls of (sem.classes || [])) {
-        for (const a of (cls.assignments || [])) fn(a);
-        for (const lec of (cls.lectures || [])) {
-          for (const a of (lec.assignments || [])) fn(a);
-        }
-      }
-    }
+    forEachAssignment(this.data.semesters, fn);
   }
 
   addCustomType(name) {
@@ -2394,6 +2775,7 @@ class HoldCoursePlugin extends Plugin {
     let n = 0;
     this._forEachAssignment(a => { if (a.type === oldName) { a.type = newName; n++; } });
     this._retargetTypeFilters(oldName, newName);
+    this._retargetGradeWeights(oldName, newName);
     return n;
   }
 
@@ -2403,7 +2785,39 @@ class HoldCoursePlugin extends Plugin {
     let n = 0;
     this._forEachAssignment(a => { if (a.type === name) { a.type = 'Other'; n++; } });
     this._retargetTypeFilters(name, null);
+    this._retargetGradeWeights(name, null);
     return n;
+  }
+
+  // #67: a class's weight follows its type through a rename. When the type
+  // is deleted its items become Other, so its weight is added to Other's and
+  // the total stays the same.
+  // Classes that give a type a weight (for the Delete type dialog).
+  countClassesWeightingType(type) {
+    let n = 0;
+    for (const sem of (this.data.semesters || [])) {
+      for (const cls of (sem.classes || [])) {
+        const w = cls.gradeWeights;
+        if (w && typeof w === 'object' && Number(w[type]) > 0) n++;
+      }
+    }
+    return n;
+  }
+
+  _retargetGradeWeights(oldName, newName) {
+    for (const sem of (this.data.semesters || [])) {
+      for (const cls of (sem.classes || [])) {
+        const w = cls.gradeWeights;
+        if (!w || typeof w !== 'object' || !(oldName in w)) continue;
+        if (newName) w[newName] = w[oldName];
+        else {
+          const add = Number(w[oldName]) > 0 ? Number(w[oldName]) : 0;
+          if (add) w.Other = (Number(w.Other) > 0 ? Number(w.Other) : 0) + add;
+        }
+        delete w[oldName];
+        if (!Object.keys(w).length) delete cls.gradeWeights;
+      }
+    }
   }
 
   // Open views keep a type filter in memory; point it at the new name, or
@@ -2440,6 +2854,11 @@ class HoldCoursePlugin extends Plugin {
     const cls = JSON.parse(JSON.stringify(orig));
     cls.id = generateId();
     delete cls.status; // completed/dropped → active ("Not set")
+    // #67: weights, scale, credits, and target are setup and come along; the
+    // final grade is a result, reset like item grades.
+    delete cls.finalGrade;
+    // #72: the setting and minimum come along; the marks are results.
+    delete cls.attendance;
     if (sourceSemesterId === targetSemesterId) cls.code = `${cls.code} (copy)`;
     if (!cls.colorPicked) cls.colorIndex = firstFreeColorIndex(target.classes);
 
@@ -2774,7 +3193,40 @@ class HoldCourseSettingTab extends PluginSettingTab {
         }));
 
     this._renderReadingPace(containerEl);
+    this._renderGrades(containerEl);
     this._renderAssignmentTypes(containerEl);
+  }
+
+  // #67: the grading scale every class uses unless it has its own. Absent
+  // means the built-in scale; Reset removes the key.
+  _renderGrades(containerEl) {
+    const settings = this.plugin.data.settings;
+    const custom = !!normalizeGradeScale(settings.gradeScale);
+    const head = new Setting(containerEl)
+      .setName('Grades')
+      .setDesc('The grading scale every class uses, unless a class has its own (set in its Grades tab). A letter typed as a grade counts as the middle of its range.')
+      .setHeading();
+    if (custom) {
+      head.addButton(b => b.setButtonText('Reset to default').onClick(async () => {
+        delete settings.gradeScale;
+        await this.plugin.save();
+        this.plugin.refreshMainView();
+        this.display();
+      }));
+    }
+    const box = containerEl.createDiv('hc-settings-scale');
+    renderGradeScaleEditor(box, getGradeScale(this.plugin, null), async rows => {
+      settings.gradeScale = rows;
+      await this.plugin.save();
+      this.plugin.refreshMainView();
+      // Redraw after focus settles, then put focus back on the same field.
+      setTimeout(() => {
+        const ae = document.activeElement;
+        const key = ae && ae.dataset ? ae.dataset.hcFocus : null;
+        this.display();
+        if (key) { const el = containerEl.querySelector(`[data-hc-focus="${key}"]`); if (el) el.focus(); }
+      }, 0);
+    });
   }
 
   // #63: words per minute turns word counts into minutes for readings
@@ -2897,6 +3349,16 @@ class DeleteAssignmentTypeModal extends Modal {
         ? `${n} assignment${n === 1 ? ' uses' : 's use'} ${this.type}. ${n === 1 ? 'It' : 'They'}'ll become Other.`
         : `No assignments use ${this.type}.`,
     });
+    // #67
+    const wc = this.plugin.countClassesWeightingType(this.type);
+    if (wc) {
+      contentEl.createEl('p', {
+        cls: 'hc-modal-body',
+        text: wc === 1
+          ? `One class gives ${this.type} a weight. It'll be added to that class's Other weight.`
+          : `${wc} classes give ${this.type} a weight. In each, it'll be added to the Other weight.`,
+      });
+    }
     const footer = contentEl.createDiv('hc-modal-footer');
     const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
     cancelBtn.addEventListener('click', () => this.close());
@@ -3458,16 +3920,16 @@ class HoldCourseView extends ItemView {
     const active = getAllAssignments(sem, true);
 
     const dueToday = active
-      .filter(a => a.status !== 'done' && a.dueDate === today)
+      .filter(a => !isDoneLike(a.status) && a.dueDate === today)
       .sort((a, b) => a.title.localeCompare(b.title));
 
     const comingUp = active
-      .filter(a => a.status !== 'done' && a.dueDate && a.dueDate > today)
+      .filter(a => !isDoneLike(a.status) && a.dueDate && a.dueDate > today)
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
       .slice(0, 5);
 
     const overdue = active
-      .filter(a => a.status !== 'done' && a.dueDate && a.dueDate < today)
+      .filter(a => !isDoneLike(a.status) && a.dueDate && a.dueDate < today)
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
 
     const strip = content.createDiv('hc-today-strip');
@@ -3646,6 +4108,14 @@ class HoldCourseView extends ItemView {
       }
     }
 
+    // #72: only when near or below the minimum (Principle 5).
+    if (!inactive) {
+      const att = getAttendanceState(cls);
+      if (att && (att.level === 'below' || att.level === 'near')) {
+        body.createDiv({ cls: `hc-class-attendance hc-attendance--${att.level}`, text: attendanceSummaryText(att) });
+      }
+    }
+
     body.createDiv('hc-class-divider');
 
     // Next assignment
@@ -3664,7 +4134,7 @@ class HoldCourseView extends ItemView {
       nextBlock.createDiv({ cls: 'hc-class-next-label', text: 'Next assignment due' });
       const nextTitleRow = nextBlock.createDiv('hc-title-flag-row');
       nextTitleRow.createDiv({ cls: 'hc-class-next-title', text: next.title });
-      renderTermWindowFlag(nextTitleRow, next.dueDate, cls, next.status === 'done');
+      renderTermWindowFlag(nextTitleRow, next.dueDate, cls, isDoneLike(next.status));
       if (info) {
         const dueEl = nextBlock.createDiv({ cls: 'hc-class-next-due', text: info.label });
         dueEl.style.color = info.color;
@@ -3702,7 +4172,7 @@ class HoldCourseView extends ItemView {
 
     // Lecture progress — only shown once at least one lecture is marked done
     const totalLectures = (cls.lectures || []).length;
-    const doneLectures  = (cls.lectures || []).filter(l => l.status === 'done').length;
+    const doneLectures  = (cls.lectures || []).filter(l => isDoneLike(l.status)).length;
     if (totalLectures > 0 && doneLectures > 0) {
       body.createDiv('hc-class-divider');
       const progRow = body.createDiv('hc-class-lec-progress');
@@ -3811,6 +4281,24 @@ class HoldCourseView extends ItemView {
       link.style.color = accentText(color);
     }
 
+    // #72: attendance, when on. Click for the meeting list.
+    const att = getAttendanceState(cls);
+    if (att) {
+      const item = meta.createDiv('hc-class-meta-item hc-attendance-meta' + (att.level ? ` hc-attendance--${att.level}` : ''));
+      const icon = item.createSpan({ cls: 'hc-inline-icon' });
+      setIcon(icon, 'user-check');
+      item.createSpan({ text: attendanceSummaryText(att) });
+      // A chevron, like lecture rows: reads as "tap to open" without hover.
+      const chev = item.createSpan({ cls: 'hc-attendance-chevron' });
+      setIcon(chev, 'chevron-right');
+      item.setAttribute('role', 'button');
+      item.setAttribute('tabindex', '0');
+      item.setAttribute('aria-label', 'Open attendance');
+      const open = () => new AttendanceModal(this.app, this.plugin, cls, () => this.render(true)).open();
+      item.addEventListener('click', open);
+      item.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+    }
+
     if (!meta.hasChildNodes()) meta.remove();
 
     // People row — professor and TA, equal weight
@@ -3822,6 +4310,9 @@ class HoldCourseView extends ItemView {
     // lecture, not graded work, and mixing the two made the Assignments tab
     // read like a to-do list instead of "what's due and graded."
     const tabs = ['Lectures', 'Assignments', 'Readings', 'Exams', 'Library'];
+    // #67: Grades only for graded classes (Principle 5: silent when absent).
+    if (isClassGraded(cls)) tabs.push('Grades');
+    else if (this.currentTab === 'Grades') this.currentTab = 'Lectures';
     for (const tab of tabs) {
       const btn = tabRow.createEl('button', { cls: 'hc-tab', text: tab });
       if (tab === this.currentTab) {
@@ -3842,6 +4333,8 @@ class HoldCourseView extends ItemView {
       this._renderExamList(content, sem, cls, color);
     } else if (this.currentTab === 'Library') {
       this._renderLibraryList(content, sem, cls, color);
+    } else if (this.currentTab === 'Grades') {
+      this._renderGradesTab(content, sem, cls, color);
     }
   }
 
@@ -3896,7 +4389,7 @@ class HoldCourseView extends ItemView {
     const sortDesc = cls.lectureSort === 'desc';
     const sorted = getLecturesSorted(cls);
     const displayed = (sortDesc ? [...sorted].reverse() : sorted)
-      .filter(lec => showDone || lec.status !== 'done');
+      .filter(lec => showDone || !isDoneLike(lec.status));
 
     const controlRow = content.createDiv('hc-lecture-controls');
 
@@ -3965,7 +4458,7 @@ class HoldCourseView extends ItemView {
 
   _renderLectureRow(list, lec, num, color, sem, cls) {
     const row = list.createDiv('hc-lecture-row');
-    if (lec.status === 'done') row.addClass('hc-lecture-row--done');
+    if (isDoneLike(lec.status)) row.addClass('hc-lecture-row--done');
 
     // Number badge
     const badge = row.createDiv('hc-lecture-badge');
@@ -3977,7 +4470,8 @@ class HoldCourseView extends ItemView {
     const info = row.createDiv('hc-lecture-info');
     info.createDiv({ cls: 'hc-lecture-title', text: lec.title });
     if (lec.date) {
-      info.createDiv({ cls: 'hc-lecture-date', text: formatDateWithDay(lec.date) });
+      const dateEl = info.createDiv({ cls: 'hc-lecture-date', text: formatDateWithDay(lec.date) });
+      this._renderLectureAttendance(dateEl, lec, cls);
     }
 
     // Status + chevron
@@ -4018,6 +4512,46 @@ class HoldCourseView extends ItemView {
     setIcon(chev, 'chevron-right');
 
     row.addEventListener('click', () => this.navigate('lecture', cls.id, lec.id));
+  }
+
+  // #72: the attendance mark on a lecture's date line, when its date is a
+  // scheduled meeting, today or earlier. The mark is stored by date, so it's
+  // the same mark the attendance list shows. Present is a faint check; the
+  // others are words. Tap for a menu (a bottom sheet on mobile).
+  _renderLectureAttendance(dateEl, lec, cls) {
+    if (!isAttendanceTracked(cls) || !isMeetingDate(cls, lec.date) || lec.date > getTodayISO()) return;
+    const status = getAttendanceMark(cls, lec.date);
+    const mark = dateEl.createSpan({ cls: `hc-lecture-att hc-lecture-att--${status}` });
+    if (status === 'present') {
+      setIcon(mark, 'check');
+    } else {
+      mark.createSpan({ cls: 'hc-lecture-att-sep', text: '·' });
+      mark.createSpan({ text: ATTENDANCE_LABELS[status] });
+    }
+    mark.setAttribute('role', 'button');
+    mark.setAttribute('tabindex', '0');
+    // Obsidian shows aria-label as the hover tooltip on desktop.
+    mark.setAttribute('aria-label', `Attendance: ${ATTENDANCE_LABELS[status]}. Click to change.`);
+    const openMenu = (e) => {
+      e.stopPropagation();
+      const menu = new Menu();
+      for (const s of ATTENDANCE_STATUSES) {
+        menu.addItem(item => {
+          item.setTitle(ATTENDANCE_LABELS[s]);
+          if (s === status) item.setIcon('check');
+          item.onClick(async () => {
+            if (s === status) return;
+            setAttendanceMark(cls, lec.date, s);
+            await this.plugin.save();
+            this.render(true);
+          });
+        });
+      }
+      if (e instanceof MouseEvent) menu.showAtMouseEvent(e);
+      else { const r = mark.getBoundingClientRect(); menu.showAtPosition({ x: r.left, y: r.bottom }); }
+    };
+    mark.addEventListener('click', openMenu);
+    mark.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMenu(e); } });
   }
 
   // ─── Lecture detail ───────────────────────────────────────────────────────
@@ -4245,14 +4779,14 @@ class HoldCourseView extends ItemView {
       const aInfo = aRow.createDiv('hc-lecture-assign-info');
       const aTitleRow = aInfo.createDiv('hc-title-flag-row');
       aTitleRow.createDiv({ cls: 'hc-lecture-assign-title', text: a.title });
-      renderTermWindowFlag(aTitleRow, a.dueDate, cls, a.status === 'done');
+      renderTermWindowFlag(aTitleRow, a.dueDate, cls, isDoneLike(a.status));
       if (a.status) aInfo.createDiv({ cls: 'hc-lecture-assign-status', text: a.status });
       if (a.dueDate) {
         const info = getDueInfo(a.dueDate);
         const dueEl = aRow.createDiv('hc-lecture-assign-due');
         dueEl.createDiv({ cls: 'hc-lecture-assign-due-label', text: 'Due' });
         const dueDate = dueEl.createDiv({ cls: 'hc-lecture-assign-due-date', text: formatDate(a.dueDate) });
-        if ((info?.urgency === 'overdue' || info?.urgency === 'today') && a.status !== 'done') {
+        if ((info?.urgency === 'overdue' || info?.urgency === 'today') && !isDoneLike(a.status)) {
           dueDate.style.color = dueRed(false);
           if (info.urgency === 'overdue') {
             dueEl.createDiv({ cls: 'hc-lecture-assign-overdue', text: 'Overdue' });
@@ -4297,7 +4831,7 @@ class HoldCourseView extends ItemView {
     const presentTypes = getAssignmentTypes(this.plugin).filter(t => t !== 'Reading');
 
     // Apply filters
-    let displayed = showDone ? items : items.filter(i => i.assignment.status !== 'done');
+    let displayed = showDone ? items : items.filter(i => !isDoneLike(i.assignment.status));
     if (this.classAssignFilterType) {
       displayed = displayed.filter(i => (i.assignment.type || 'Other') === this.classAssignFilterType);
     }
@@ -4384,7 +4918,7 @@ class HoldCourseView extends ItemView {
     const info = assignment.dueDate ? getDueInfo(assignment.dueDate) : null;
 
     const row = container.createDiv('hc-assign-row');
-    if (assignment.status === 'done') row.addClass('hc-assign-row--done');
+    if (isDoneLike(assignment.status)) row.addClass('hc-assign-row--done');
     if (assignment.type === 'Writing') row.addClass('hc-assign-row--writing');
 
     // Left: type pill
@@ -4396,12 +4930,12 @@ class HoldCourseView extends ItemView {
     const mid = row.createDiv('hc-assign-mid');
     const titleRow = mid.createDiv('hc-title-flag-row');
     titleRow.createDiv({ cls: 'hc-assign-title', text: assignment.title });
-    renderTermWindowFlag(titleRow, assignment.dueDate, cls, assignment.status === 'done');
+    renderTermWindowFlag(titleRow, assignment.dueDate, cls, isDoneLike(assignment.status));
     mid.createDiv({
       cls: 'hc-assign-lecture',
       text: lectureLabel ? lectureLabel : 'Class-level',
     });
-    if (assignment.status === 'done' && (assignment.grade || '').trim() && isClassGraded(cls)) {
+    if (isDoneLike(assignment.status) && (assignment.grade || '').trim() && isClassGraded(cls)) {
       mid.createSpan({ cls: 'hc-grade-chip', text: assignment.grade.trim() });
     }
 
@@ -4432,7 +4966,7 @@ class HoldCourseView extends ItemView {
 
     // Right: status (matches the lecture/exam position), then due date
     const right = row.createDiv('hc-assign-due');
-    const isDone = assignment.status === 'done';
+    const isDone = isDoneLike(assignment.status);
 
     const statusEl = right.createDiv({ cls: `hc-assign-status hc-assign-status--${assignment.status} hc-status-clickable` });
     statusEl.setText(statusLabel(assignment.status));
@@ -4495,7 +5029,7 @@ class HoldCourseView extends ItemView {
       return a.assignment.dueDate.localeCompare(b.assignment.dueDate);
     });
 
-    const displayed = showDone ? items : items.filter(i => i.assignment.status !== 'done');
+    const displayed = showDone ? items : items.filter(i => !isDoneLike(i.assignment.status));
 
     const controlRow = content.createDiv('hc-assign-controls');
 
@@ -4544,7 +5078,7 @@ class HoldCourseView extends ItemView {
       : null;
 
     const row = container.createDiv('hc-reading-row');
-    if (assignment.status === 'done') row.addClass('hc-reading-row--done');
+    if (isDoneLike(assignment.status)) row.addClass('hc-reading-row--done');
 
     const iconWrap = row.createDiv('hc-reading-icon');
     setIcon(iconWrap, 'book-open');
@@ -4552,7 +5086,7 @@ class HoldCourseView extends ItemView {
     const mid = row.createDiv('hc-reading-mid');
     const titleRow = mid.createDiv('hc-title-flag-row');
     titleRow.createDiv({ cls: 'hc-reading-title', text: assignment.title });
-    renderTermWindowFlag(titleRow, assignment.dueDate, cls, assignment.status === 'done');
+    renderTermWindowFlag(titleRow, assignment.dueDate, cls, isDoneLike(assignment.status));
     mid.createDiv({ cls: 'hc-reading-context', text: lectureLabel || 'Class-level' });
 
     // #19: both lines are "what this reading points to", so both get a label
@@ -4630,7 +5164,7 @@ class HoldCourseView extends ItemView {
     // Right: status + due date — identical pattern to the Assignments row,
     // just without the type pill or grade chip (neither applies to Reading).
     const right = row.createDiv('hc-assign-due');
-    const isDone = assignment.status === 'done';
+    const isDone = isDoneLike(assignment.status);
 
     const statusEl = right.createDiv({ cls: `hc-assign-status hc-assign-status--${assignment.status} hc-status-clickable` });
     statusEl.setText(statusLabel(assignment.status));
@@ -4735,7 +5269,7 @@ class HoldCourseView extends ItemView {
 
     const assignTitleFlagRow = content.createDiv('hc-title-flag-row');
     assignTitleFlagRow.createDiv({ cls: 'hc-lecture-detail-title', text: assignment.title });
-    renderTermWindowFlag(assignTitleFlagRow, assignment.dueDate, cls, assignment.status === 'done');
+    renderTermWindowFlag(assignTitleFlagRow, assignment.dueDate, cls, isDoneLike(assignment.status));
 
     // Lecture context
     let lecTitle = 'Class-level';
@@ -4754,7 +5288,7 @@ class HoldCourseView extends ItemView {
       const info = getDueInfo(assignment.dueDate);
       const dueRow = content.createDiv('hc-assign-detail-due');
       dueRow.createSpan({ text: `Due ${formatDateLong(assignment.dueDate)}` });
-      if (info && info.urgency !== 'upcoming' && assignment.status !== 'done') {
+      if (info && info.urgency !== 'upcoming' && !isDoneLike(assignment.status)) {
         const chip = dueRow.createSpan({ cls: 'hc-assign-detail-due-chip', text: info.note });
         chip.style.color = info.color;
       }
@@ -5070,6 +5604,137 @@ class HoldCourseView extends ItemView {
 
   // ─── Exam list ────────────────────────────────────────────────────────────
 
+  // ─── #67 Grades tab ────────────────────────────────────────────────────────
+  // Current grade, target ("what do I need?"), weights by type, the scale, and
+  // the graded work as read. Inputs save on change and redraw in place.
+  _renderGradesTab(content, sem, cls, color) {
+    // Redraw after focus settles, then put focus back on the same field, so
+    // Tab from one weight to the next keeps working.
+    const save = () => {
+      this.plugin.save();
+      setTimeout(() => {
+        const ae = document.activeElement;
+        const key = ae && ae.dataset ? ae.dataset.hcFocus : null;
+        this.render(true);
+        if (key) { const el = this.contentEl.querySelector(`[data-hc-focus="${key}"]`); if (el) el.focus(); }
+      }, 0);
+    };
+    const g = computeClassGrade(this.plugin, cls);
+    const wrap = content.createDiv('hc-grades');
+
+    // Summary
+    const summary = wrap.createDiv('hc-grades-summary');
+    if (g.current === null) {
+      summary.createDiv({ cls: 'hc-grades-current hc-grades-current--empty', text: 'No grades yet' });
+      summary.createDiv({ cls: 'hc-grades-sub', text: 'Enter grades on assignments and exams, and they’ll be counted here.' });
+    } else {
+      const cur = summary.createDiv('hc-grades-current');
+      cur.createSpan({ cls: 'hc-grades-letter', text: g.letter });
+      cur.createSpan({ cls: 'hc-grades-pct', text: `${formatPercent(g.current)}%` });
+      summary.createDiv({ cls: 'hc-grades-sub', text: 'Current grade, from graded work so far.' });
+    }
+    const facts = [];
+    const credits = getClassCredits(cls);
+    if (credits !== null) facts.push(`${credits} ${credits === 1 ? 'credit' : 'credits'}`);
+    const typedFinal = (cls.finalGrade || '').trim();
+    if (typedFinal) facts.push(`Final grade: ${typedFinal}`);
+    if (facts.length) summary.createDiv({ cls: 'hc-grades-sub', text: facts.join(' · ') });
+
+    // Target
+    const tSec = wrap.createDiv('hc-grades-section');
+    tSec.createDiv({ cls: 'hc-grades-heading', text: 'Target' });
+    const tRow = tSec.createDiv('hc-grades-row');
+    tRow.createSpan({ cls: 'hc-grades-label', text: 'Grade you’re aiming for' });
+    const tInput = tRow.createEl('input', { cls: 'hc-grades-input', attr: { type: 'text', placeholder: 'B or 85', 'data-hc-focus': 'target' } });
+    tInput.value = cls.targetGrade || '';
+    tInput.addEventListener('change', () => {
+      const v = tInput.value.trim();
+      if (v) cls.targetGrade = v; else delete cls.targetGrade;
+      save();
+    });
+    const tText = gradeTargetText(g, cls.targetGrade);
+    if (tText) tSec.createDiv({ cls: 'hc-grades-result' + (tText.warn ? ' hc-grades-result--warn' : ''), text: tText.text });
+
+    // Weights
+    const wSec = wrap.createDiv('hc-grades-section');
+    wSec.createDiv({ cls: 'hc-grades-heading', text: 'Weights' });
+    wSec.createDiv({ cls: 'hc-grades-desc', text: 'Percent of the final grade for each type, from your syllabus. Leave them all blank to count every graded item equally.' });
+    const counts = {};
+    for (const { category } of getGradedItems(cls)) counts[category] = (counts[category] || 0) + 1;
+    const types = [...getAssignmentTypes(this.plugin).filter(t => t !== 'Reading'), 'Exam'];
+    for (const k of Object.keys(cls.gradeWeights || {})) if (!types.includes(k)) types.push(k);
+    for (const k of Object.keys(counts)) if (!types.includes(k)) types.push(k);
+    for (const type of types) {
+      const row = wSec.createDiv('hc-grades-row');
+      const label = row.createSpan({ cls: 'hc-grades-label', text: type });
+      label.createSpan({ cls: 'hc-grades-count', text: counts[type] ? ` (${counts[type]})` : ' (none yet)' });
+      const input = row.createEl('input', { cls: 'hc-grades-input hc-grades-input--num', attr: { type: 'number', min: '0', step: 'any', placeholder: '—', 'data-hc-focus': `w:${type}` } });
+      const cur = cls.gradeWeights && cls.gradeWeights[type];
+      input.value = cur != null && cur !== '' ? String(cur) : '';
+      row.createSpan({ cls: 'hc-grades-unit', text: '%' });
+      input.addEventListener('change', () => {
+        const n = Number(input.value);
+        const w = { ...(cls.gradeWeights || {}) };
+        if (input.value.trim() !== '' && Number.isFinite(n) && n > 0) w[type] = n; else delete w[type];
+        if (Object.keys(w).length) cls.gradeWeights = w; else delete cls.gradeWeights;
+        save();
+      });
+    }
+    if (g.weightTotal !== null && Math.abs(g.weightTotal - 100) > 1e-9) {
+      wSec.createDiv({ cls: 'hc-grades-note', text: `Weights add up to ${formatPercent(g.weightTotal)}%. Hold Course scales them to 100%.` });
+    }
+
+    // Left out of the calculation
+    const notes = [];
+    if (g.unweighted.length) {
+      for (const [t, n] of Object.entries(g.unweightedCats)) notes.push(n === 1 ? `${t} has no weight, so its item isn’t counted.` : `${t} has no weight, so its ${n} items aren’t counted.`);
+    }
+    for (const it of g.unreadable) notes.push(`Couldn’t read the grade “${(it.grade || '').trim()}” on ${it.title || 'an item'}, so it isn’t counted.`);
+    for (const n of notes) wrap.createDiv({ cls: 'hc-grades-note', text: n });
+
+    // Scale
+    const sSec = wrap.createDiv('hc-grades-section');
+    sSec.createDiv({ cls: 'hc-grades-heading', text: 'Grading scale' });
+    const own = !!normalizeGradeScale(cls.gradeScale);
+    const tgl = sSec.createDiv('hc-grades-row');
+    const cb = tgl.createEl('input', { attr: { type: 'checkbox', id: `hc-own-scale-${cls.id}` } });
+    cb.checked = own;
+    tgl.createEl('label', { cls: 'hc-grades-label', text: 'Use a different scale for this class', attr: { for: `hc-own-scale-${cls.id}` } });
+    cb.addEventListener('change', () => {
+      if (cb.checked) cls.gradeScale = getGradeScale(this.plugin, null);
+      else delete cls.gradeScale;
+      save();
+    });
+    if (own) {
+      renderGradeScaleEditor(sSec, cls.gradeScale, rows => { cls.gradeScale = rows; save(); });
+    } else {
+      sSec.createDiv({ cls: 'hc-grades-desc', text: 'Using the scale from settings: ' + g.scale.map(r => `${r.letter} ${formatPercent(r.min)}`).join(' · ') });
+    }
+
+    // Graded work, as read
+    const items = getGradedItems(cls);
+    const iSec = wrap.createDiv('hc-grades-section');
+    iSec.createDiv({ cls: 'hc-grades-heading', text: 'Graded work' });
+    if (!items.length) {
+      iSec.createDiv({ cls: 'hc-empty-text', text: 'No assignments or exams yet.' });
+      return;
+    }
+    const table = iSec.createEl('table', { cls: 'hc-grades-table' });
+    const head = table.createEl('tr');
+    for (const h of ['Item', 'Type', 'Grade', 'Counts as']) head.createEl('th', { text: h });
+    for (const { item, category } of items) {
+      const tr = table.createEl('tr');
+      tr.createEl('td', { text: item.title || '(untitled)' });
+      tr.createEl('td', { text: category });
+      const text = (item.grade || '').trim();
+      tr.createEl('td', { text: text || '—' });
+      const pct = text ? parseGrade(text, g.scale) : null;
+      const left = g.weightTotal !== null && g.unweighted.includes(item);
+      const shown = left ? 'not counted' : !text ? 'remaining' : pct === null ? 'not counted' : `${formatPercent(pct)}%`;
+      tr.createEl('td', { cls: shown.startsWith('not') ? 'hc-grades-muted' : '', text: shown });
+    }
+  }
+
   _renderExamList(content, sem, cls, color) {
     if (cls.examShowDone === undefined) cls.examShowDone = true;
     const showDone = cls.examShowDone;
@@ -5081,7 +5746,7 @@ class HoldCourseView extends ItemView {
       return a.dueDate.localeCompare(b.dueDate);
     });
 
-    const displayed = showDone ? exams : exams.filter(e => e.status !== 'done');
+    const displayed = showDone ? exams : exams.filter(e => !isDoneLike(e.status));
 
     const controlRow = content.createDiv('hc-assign-controls');
     const doneToggle = controlRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
@@ -5140,9 +5805,9 @@ class HoldCourseView extends ItemView {
     const info = row.createDiv('hc-exam-info');
     const titleRow = info.createDiv('hc-title-flag-row');
     titleRow.createDiv({ cls: 'hc-exam-name', text: exam.title });
-    renderTermWindowFlag(titleRow, exam.dueDate, cls, exam.status === 'done');
+    renderTermWindowFlag(titleRow, exam.dueDate, cls, isDoneLike(exam.status));
 
-    if (exam.status === 'done') {
+    if (isDoneLike(exam.status)) {
       if ((exam.grade || '').trim() && isClassGraded(cls)) {
         info.createSpan({ cls: 'hc-grade-chip hc-grade-chip--exam', text: exam.grade.trim() });
       }
@@ -5222,7 +5887,7 @@ class HoldCourseView extends ItemView {
     // Title
     const titleRow = content.createDiv('hc-title-flag-row');
     titleRow.createDiv({ cls: 'hc-lecture-detail-title', text: exam.title });
-    renderTermWindowFlag(titleRow, exam.dueDate, cls, exam.status === 'done');
+    renderTermWindowFlag(titleRow, exam.dueDate, cls, isDoneLike(exam.status));
 
     // Due date
     if (exam.dueDate) {
@@ -5763,7 +6428,7 @@ class HoldCourseView extends ItemView {
       allAssigns = allAssigns.filter(a => a.type === this.globalAssignFilterType);
     }
     if (!showDone) {
-      allAssigns = allAssigns.filter(a => a.status !== 'done');
+      allAssigns = allAssigns.filter(a => !isDoneLike(a.status));
       // #55: completed/dropped classes sit behind "Show done" too, matching
       // Calendar and Today — unless that class is picked in the filter, which
       // is an explicit request to see it.
@@ -5890,7 +6555,7 @@ class HoldCourseView extends ItemView {
         row.addClass('hc-atable-row--seam');
       }
       prevClassId = a.classId;
-      if (a.status === 'done') row.addClass('hc-atable-row--done');
+      if (isDoneLike(a.status)) row.addClass('hc-atable-row--done');
       // #55: a completed/dropped class's row only appears with Show done or a
       // class filter, and is greyed like done rows with no urgency color, so
       // it reads as history rather than live work.
@@ -5913,7 +6578,7 @@ class HoldCourseView extends ItemView {
       const titleCell = row.createDiv('hc-atable-titlecell');
       const titleRow = titleCell.createDiv('hc-title-flag-row');
       titleRow.createDiv({ cls: 'hc-atable-title', text: a.title });
-      renderTermWindowFlag(titleRow, a.dueDate, cls, a.status === 'done' || a.classInactive);
+      renderTermWindowFlag(titleRow, a.dueDate, cls, isDoneLike(a.status) || a.classInactive);
 
       let lecLabel = 'Class-level';
       if (a.lectureId) {
@@ -5932,7 +6597,7 @@ class HoldCourseView extends ItemView {
       const dueCell = row.createDiv('hc-atable-duecell');
       if (info) {
         const dateEl = dueCell.createDiv({ cls: 'hc-atable-due', text: formatDate(a.dueDate) });
-        if (a.status !== 'done' && !a.classInactive) {
+        if (!isDoneLike(a.status) && !a.classInactive) {
           dateEl.style.color = info.color;
           if (info.urgency !== 'upcoming') {
             dueCell.createDiv({ cls: 'hc-atable-due-note', text: info.urgency === 'overdue' ? 'Overdue' : info.note })
@@ -6019,7 +6684,8 @@ class HoldCourseView extends ItemView {
       this.coursesSortDir = this.coursesSortDir === 'asc' ? 'desc' : 'asc';
     } else {
       this.coursesSortKey = key;
-      this.coursesSortDir = key === 'semester' ? 'desc' : 'asc';
+      // Newest semester, most credits, and highest grade come first.
+      this.coursesSortDir = (key === 'semester' || key === 'credits' || key === 'grade') ? 'desc' : 'asc';
     }
     this.render();
   }
@@ -6066,8 +6732,22 @@ class HoldCourseView extends ItemView {
     // Flatten to rows. An empty semester simply contributes none — no heading,
     // no placeholder line, nothing to accumulate as clutter.
     const rows = [];
+    // Credits and Grade (2026-10-17) are worked out once per row, so the cells
+    // and the Grade sort read the same values. A dropped class shows no grade
+    // and its credits don't count toward the total.
     for (const sem of visible) {
-      for (const cls of (sem.classes || [])) rows.push({ sem, cls });
+      for (const cls of (sem.classes || [])) {
+        const dropped = cls.status === 'dropped';
+        const credits = getClassCredits(cls);
+        const grade = dropped ? null : getClassFinalGrade(this.plugin, cls);
+        let gradePct = null;
+        if (grade) {
+          gradePct = grade.typed
+            ? parseGrade(grade.text, getGradeScale(this.plugin, cls))
+            : grade.percent;
+        }
+        rows.push({ sem, cls, credits, grade, gradePct, dropped });
+      }
     }
 
     // ── Header ────────────────────────────────────────────────────────────────
@@ -6075,10 +6755,15 @@ class HoldCourseView extends ItemView {
     const titleWrap = header.createDiv('hc-dash-title-wrap');
     titleWrap.createDiv({ cls: 'hc-courses-title', text: 'Courses' });
     // Counts describe what is on screen, so they never disagree with the table.
+    const creditTotal = rows.reduce((s, r) => s + (r.dropped || r.credits === null ? 0 : r.credits), 0);
+    const creditPart = creditTotal > 0
+      ? ` · ${formatPercent(creditTotal)} ${creditTotal === 1 ? 'credit' : 'credits'}`
+      : '';
     titleWrap.createDiv({
       cls: 'hc-dash-subtitle',
       text: `${rows.length} ${rows.length === 1 ? 'class' : 'classes'} · ` +
-            `${visible.length} ${visible.length === 1 ? 'semester' : 'semesters'}`,
+            `${visible.length} ${visible.length === 1 ? 'semester' : 'semesters'}` +
+            creditPart,
     });
 
     // ── Empty state — nothing exists at all ───────────────────────────────────
@@ -6160,6 +6845,14 @@ class HoldCourseView extends ItemView {
         primary = dir * txt(a.cls.name).localeCompare(txt(b.cls.name));
       } else if (this.coursesSortKey === 'status') {
         primary = dir * (this._statusRank(a.cls) - this._statusRank(b.cls));
+      } else if (this.coursesSortKey === 'credits' || this.coursesSortKey === 'grade') {
+        // Blanks ("—") always go last, whichever way the column is sorted.
+        const field = this.coursesSortKey === 'credits' ? 'credits' : 'gradePct';
+        const va = a[field], vb = b[field];
+        if (va === null && vb === null) primary = 0;
+        else if (va === null) primary = 1;
+        else if (vb === null) primary = -1;
+        else primary = dir * (va - vb);
       }
       return primary || tiebreak(a, b);
     });
@@ -6172,10 +6865,12 @@ class HoldCourseView extends ItemView {
       { key: 'semester', label: 'Semester' },
       { key: 'code',     label: 'Code' },
       { key: 'course',   label: 'Course' },
+      { key: 'credits',  label: 'Credits' },
+      { key: 'grade',    label: 'Grade' },
       { key: 'status',   label: 'Status' },
     ];
     for (const col of cols) {
-      const th = headRow.createDiv('hc-courses-th');
+      const th = headRow.createDiv(`hc-courses-th hc-courses-th--${col.key}`);
       th.createSpan({ text: col.label });
       if (this.coursesSortKey === col.key) {
         th.addClass('hc-courses-th--active');
@@ -6190,7 +6885,7 @@ class HoldCourseView extends ItemView {
     const seams = this.coursesSortKey === 'semester';
     let prevSemId = null;
 
-    for (const { sem, cls } of rows) {
+    for (const { sem, cls, credits, grade } of rows) {
       const status = cls.status || null;
       const row = table.createDiv('hc-courses-row');
       if (seams && prevSemId !== null && sem.id !== prevSemId) {
@@ -6211,6 +6906,33 @@ class HoldCourseView extends ItemView {
       codeEl.style.color = accentText(getColor(cls.colorIndex));
 
       row.createDiv({ cls: 'hc-courses-name', text: cls.name });
+
+      row.createDiv({
+        cls: 'hc-courses-credits',
+        text: credits === null ? '' : formatPercent(credits),
+      });
+
+      // Typed final grade reads plainly. A computed one is the letter and
+      // percent, muted, marked "so far". Clicking a grade opens the class
+      // on its Grades tab.
+      const gradeEl = row.createDiv('hc-courses-grade');
+      if (!grade) {
+        gradeEl.addClass('hc-courses-grade--none');
+        gradeEl.setText('—');
+      } else {
+        if (grade.typed) {
+          gradeEl.setText(grade.text);
+        } else {
+          gradeEl.addClass('hc-courses-grade--progress');
+          gradeEl.createSpan({ text: `${grade.text} · ${formatPercent(grade.percent)}%` });
+          gradeEl.createSpan({ cls: 'hc-courses-grade-tag', text: 'so far' });
+        }
+        gradeEl.setAttribute('aria-label', 'Open grades');
+        gradeEl.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.navigate('class', cls.id, null, null, null, null, sem.id, 'Grades');
+        });
+      }
 
       const statusEl = row.createDiv({
         cls: `hc-courses-status hc-courses-status--${status || 'unset'}`,
@@ -6647,20 +7369,20 @@ class HoldCourseView extends ItemView {
     if (item.kind === 'assignment') {
       return item.assignment.dueDate
         && getDaysUntil(item.assignment.dueDate) < 0
-        && item.assignment.status !== 'done';
+        && !isDoneLike(item.assignment.status);
     }
     if (item.kind === 'exam') {
       return item.exam.dueDate
         && getDaysUntil(item.exam.dueDate) < 0
-        && item.exam.status !== 'done';
+        && !isDoneLike(item.exam.status);
     }
     return false;
   }
 
   _isCalItemDone(item) {
-    if (item.kind === 'lecture')    return item.lec.status === 'done';
-    if (item.kind === 'assignment') return item.assignment.status === 'done';
-    if (item.kind === 'exam')       return item.exam.status === 'done';
+    if (item.kind === 'lecture')    return isDoneLike(item.lec.status);
+    if (item.kind === 'assignment') return isDoneLike(item.assignment.status);
+    if (item.kind === 'exam')       return isDoneLike(item.exam.status);
     return false;
   }
 
@@ -7100,6 +7822,90 @@ function validateClassSchedule(formData) {
 
 const CLASS_MODAL_TABS = ['Details', 'People', 'Schedule'];
 
+// #67/#72: class record fields shared by Add class and Edit class, so the two
+// dialogs can't drift. formData keys: trackGrades, credits, finalGrade,
+// trackAttendance, attendanceMin. (2026-10-16)
+
+// Track grades, then Credits and Final grade (hidden, but kept, while off).
+// #12: off hides Grade everywhere for the class.
+function renderClassGradeFields(contentEl, formData) {
+  const gradeFields = createDiv();
+  new Setting(contentEl).setName('Track grades').addToggle(toggle => {
+    toggle.setValue(formData.trackGrades).onChange(v => {
+      formData.trackGrades = v;
+      gradeFields.toggleClass('hc-hidden', !v);
+    });
+  });
+  contentEl.appendChild(gradeFields);
+  gradeFields.toggleClass('hc-hidden', !formData.trackGrades);
+  new Setting(gradeFields).setName('Credits').addText(text => {
+    text.inputEl.type = 'number';
+    text.inputEl.min = '0';
+    text.inputEl.step = 'any';
+    text.setValue(formData.credits).onChange(v => formData.credits = v);
+  });
+  new Setting(gradeFields)
+    .setName('Final grade')
+    .setDesc('The grade on your transcript. Leave it blank to use the grade worked out in the Grades tab.')
+    .addText(text => {
+      text.setPlaceholder('e.g. A-');
+      text.setValue(formData.finalGrade).onChange(v => formData.finalGrade = v);
+    });
+}
+
+// Track attendance and its minimum, below the meeting schedule. `rerender`
+// redraws the Schedule tab so the minimum appears or goes.
+function renderClassAttendanceFields(contentEl, formData, rerender) {
+  new Setting(contentEl)
+    .setClass('hc-setting-wide-desc')
+    .setName('Track attendance')
+    .setDesc('Counts meetings from this schedule. Needs meeting days, times, and start and end dates. Meetings you don’t mark count as present. Mark absences from the attendance line in the class header, or tap the check beside a lecture’s date.')
+    .addToggle(toggle => {
+      toggle.setValue(formData.trackAttendance).onChange(v => {
+        formData.trackAttendance = v;
+        rerender();
+      });
+    });
+  if (formData.trackAttendance) {
+    new Setting(contentEl)
+      .setClass('hc-setting-wide-desc')
+      .setName('Minimum attendance (%)')
+      .setDesc('Optional. Hold Course warns you when you’re near or below it.')
+      .addText(text => {
+        text.inputEl.type = 'number';
+        text.inputEl.min = '1';
+        text.inputEl.max = '100';
+        text.setPlaceholder('e.g. 75');
+        text.setValue(formData.attendanceMin).onChange(v => formData.attendanceMin = v);
+      });
+  }
+}
+
+// Returns an error message for bad credits or minimum, or null.
+function validateClassRecord(formData) {
+  const credits = String(formData.credits || '').trim();
+  const c = Number(credits);
+  if (credits && !(Number.isFinite(c) && c >= 0)) return 'Credits must be a number, 0 or more.';
+  const min = String(formData.attendanceMin || '').trim();
+  const m = Number(min);
+  if (formData.trackAttendance && min && !(Number.isFinite(m) && m > 0 && m <= 100)) return 'Minimum attendance must be a percent from 1 to 100.';
+  return null;
+}
+
+// Writes credits, final grade, and attendance onto a class. Additive keys:
+// blank removes them. Turning attendance off keeps the marks and the minimum.
+function applyClassRecord(cls, formData) {
+  const credits = String(formData.credits || '').trim();
+  if (credits) cls.credits = Number(credits); else delete cls.credits;
+  const finalGrade = String(formData.finalGrade || '').trim();
+  if (finalGrade) cls.finalGrade = finalGrade; else delete cls.finalGrade;
+  if (formData.trackAttendance) {
+    cls.trackAttendance = true;
+    const min = String(formData.attendanceMin || '').trim();
+    if (min) cls.attendanceMin = Number(min); else delete cls.attendanceMin;
+  } else delete cls.trackAttendance;
+}
+
 class AddClassModal extends Modal {
   constructor(app, plugin, semesterId, onSave) {
     super(app);
@@ -7114,6 +7920,8 @@ class AddClassModal extends Modal {
       meetingDays: [],
       location: '', startDate: '', endDate: '', meetingStartTime: '', meetingEndTime: '',
       trackGrades: true,
+      credits: '', finalGrade: '',               // #67
+      trackAttendance: false, attendanceMin: '', // #72
       online: false,
     };
     // #53 / Discussion #18: preselect the color addClass() would choose, so
@@ -7183,10 +7991,9 @@ class AddClassModal extends Modal {
 
     // #12: on by default — matches current behavior for every class no one
     // touches this for. Off hides Grade everywhere for this class (Grade
-    // fields, grade chips, assignments and exams alike).
-    new Setting(contentEl).setName('Track grades').addToggle(toggle => {
-      toggle.setValue(this.formData.trackGrades).onChange(v => this.formData.trackGrades = v);
-    });
+    // fields, grade chips, assignments and exams alike). #67: plus credits
+    // and the final grade.
+    renderClassGradeFields(contentEl, this.formData);
 
     renderColorPicker(contentEl, this.semClasses, null, this.formData.colorIndex, i => {
       this.formData.colorIndex = i;
@@ -7261,6 +8068,9 @@ class AddClassModal extends Modal {
       text.setPlaceholder('https://zoom.us/j/...').setValue(this.formData.meetingLink).onChange(v => this.formData.meetingLink = v);
       text.inputEl.type = 'url';
     });
+
+    // #72
+    renderClassAttendanceFields(contentEl, this.formData, () => { contentEl.empty(); this._renderScheduleFields(contentEl); });
   }
 
   _renderDaysPicker(contentEl) {
@@ -7281,9 +8091,67 @@ class AddClassModal extends Modal {
     if (!this.formData.name.trim()) { new Notice('Class name is required.'); return; }
     const scheduleError = validateClassSchedule(this.formData);
     if (scheduleError) { new Notice(scheduleError); return; }
-    this.plugin.addClass(this.semesterId, this.formData);
+    const recordError = validateClassRecord(this.formData);
+    if (recordError) { new Notice(recordError); return; }
+    const cls = this.plugin.addClass(this.semesterId, this.formData);
+    if (cls) applyClassRecord(cls, this.formData);
     this.onSave();
     this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// #72: past meetings, newest first, with a status for each. Changes save
+// right away; onChange redraws the view behind.
+class AttendanceModal extends Modal {
+  constructor(app, plugin, cls, onChange) {
+    super(app);
+    this.plugin = plugin;
+    this.cls = cls;
+    this.onChange = onChange;
+  }
+
+  onOpen() { this._render(); }
+
+  _render() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.addClass('hc-attendance-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: `Attendance — ${this.cls.code || this.cls.name || 'Class'}` });
+    const st = getAttendanceState(this.cls);
+    if (!st) { contentEl.createDiv({ cls: 'hc-empty-text', text: 'Attendance isn’t on for this class.' }); return; }
+    const sum = contentEl.createDiv({ cls: 'hc-attendance-summary' + (st.level ? ` hc-attendance--${st.level}` : ''), text: attendanceSummaryText(st) });
+    sum.setAttribute('aria-live', 'polite');
+    contentEl.createDiv({ cls: 'hc-grades-desc', text: 'Meetings you haven’t marked count as present. Excused and cancelled meetings don’t count either way.' });
+    contentEl.createDiv({ cls: 'hc-grades-desc', text: 'You can also mark attendance from the date on each lecture.' });
+    if (!st.meetings.length) {
+      contentEl.createDiv({ cls: 'hc-empty-text', text: 'No meetings yet. They’ll appear here from the class’s start date.' });
+      return;
+    }
+    const list = contentEl.createDiv('hc-attendance-list');
+    for (const m of st.meetings) {
+      const row = list.createDiv('hc-attendance-row');
+      const d = new Date(m.date + 'T12:00:00');
+      row.createSpan({ cls: 'hc-attendance-date', text: d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) });
+      const pills = row.createDiv('hc-attendance-pills');
+      for (const s of ATTENDANCE_STATUSES) {
+        const b = pills.createEl('button', { cls: `hc-attendance-pill hc-attendance-pill--${s}`, text: ATTENDANCE_LABELS[s] });
+        if (m.status === s) b.addClass('hc-attendance-pill--on');
+        b.setAttribute('aria-pressed', m.status === s ? 'true' : 'false');
+        b.addEventListener('click', async () => {
+          if (m.status === s) return;
+          setAttendanceMark(this.cls, m.date, s);
+          await this.plugin.save();
+          if (this.onChange) this.onChange();
+          const top = list.scrollTop;
+          this._render();
+          const nl = this.contentEl.querySelector('.hc-attendance-list');
+          if (nl) nl.scrollTop = top;
+        });
+      }
+    }
   }
 
   onClose() { this.contentEl.empty(); }
@@ -7315,6 +8183,12 @@ class EditClassModal extends Modal {
       meetingStartTime: cls.meetingStartTime || '',
       meetingEndTime: cls.meetingEndTime || '',
       trackGrades: isClassGraded(cls),
+      // #67: kept while Track grades is off, like #25's hidden schedule fields.
+      credits: cls.credits != null ? String(cls.credits) : '',
+      finalGrade: cls.finalGrade || '',
+      // #72
+      trackAttendance: !!cls.trackAttendance,
+      attendanceMin: cls.attendanceMin != null ? String(cls.attendanceMin) : '',
       online: isClassOnline(cls),
       colorIndex: typeof cls.colorIndex === 'number' ? cls.colorIndex % COLOR_PALETTE.length : 0,
     };
@@ -7377,10 +8251,8 @@ class EditClassModal extends Modal {
       text.inputEl.type = 'url';
     });
 
-    // #12
-    new Setting(contentEl).setName('Track grades').addToggle(toggle => {
-      toggle.setValue(this.formData.trackGrades).onChange(v => this.formData.trackGrades = v);
-    });
+    // #12, #67
+    renderClassGradeFields(contentEl, this.formData);
 
     renderColorPicker(contentEl, this.semClasses, this.cls, this.formData.colorIndex, i => {
       this.formData.colorIndex = i;
@@ -7455,6 +8327,9 @@ class EditClassModal extends Modal {
       text.setValue(this.formData.meetingLink).onChange(v => this.formData.meetingLink = v);
       text.inputEl.type = 'url';
     });
+
+    // #72: attendance, from the meeting schedule above.
+    renderClassAttendanceFields(contentEl, this.formData, () => { contentEl.empty(); this._renderScheduleFields(contentEl); });
   }
 
   _renderDaysPicker(contentEl) {
@@ -7475,6 +8350,8 @@ class EditClassModal extends Modal {
     if (!this.formData.name.trim()) { new Notice('Class name is required.'); return; }
     const scheduleError = validateClassSchedule(this.formData);
     if (scheduleError) { new Notice(scheduleError); return; }
+    const recordError = validateClassRecord(this.formData);
+    if (recordError) { new Notice(recordError); return; }
     this.plugin.updateClass(this.semesterId, this.cls.id, {
       name: this.formData.name.trim(),
       code: this.formData.code.trim(),
@@ -7497,6 +8374,8 @@ class EditClassModal extends Modal {
     // can't delete a key, so handled directly on the live class object.
     if (this.formData.trackGrades) delete this.cls.notGraded;
     else this.cls.notGraded = true;
+    // #67, #72
+    applyClassRecord(this.cls, this.formData);
     // #25: presence-based, same as notGraded.
     if (this.formData.online) this.cls.online = true;
     else delete this.cls.online;
