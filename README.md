@@ -17,47 +17,79 @@ Hold Course runs on desktop and mobile.
 
 **Overview**
 
-<img src="screenshots/1.9.0-dashboard.jpg" width="700" alt="Overview">
+<img src="screenshots/1.13.0-dashboard.jpg" width="700" alt="Overview">
 
-**Editing a semester**
+**Adding a class**
 
-<img src="screenshots/1.9.0-edit-term.jpg" width="700" alt="Editing a semester">
+<img src="screenshots/1.13.0-add-a-class.jpg" width="700" alt="Adding a class">
 
-**Lectures**
+**Adding a class: schedule**
 
-<img src="screenshots/1.9.0-lectures.jpg" width="700" alt="Lectures">
+<img src="screenshots/1.13.0-add-a-class-schedule.jpg" width="700" alt="Adding a class: schedule">
 
-**Lecture detail**
+**Moving a class**
 
-<img src="screenshots/1.9.0-lecture%20detail.jpg" width="700" alt="Lecture detail">
+<img src="screenshots/1.13.0-move-a-class.jpg" width="700" alt="Moving a class">
 
-**Assignments**
+**Bulk-adding lectures**
 
-<img src="screenshots/1.9.0-assignments.jpg" width="700" alt="Assignments">
+<img src="screenshots/1.13.0-lectures-bulk-add.jpg" width="700" alt="Bulk-adding lectures">
+
+**Class page: assignments**
+
+<img src="screenshots/1.13.0-assignments-class.jpg" width="700" alt="Class page: assignments">
 
 **Readings**
 
-<img src="screenshots/1.9.0-readings.jpg" width="700" alt="Readings">
+<img src="screenshots/1.13.0-readings.jpg" width="700" alt="Readings">
+
+**Editing a reading**
+
+<img src="screenshots/1.13.0-edit-reading.jpg" width="700" alt="Editing a reading">
+
+**Exams**
+
+<img src="screenshots/1.13.0-exams.jpg" width="700" alt="Exams">
+
+**Grades**
+
+<img src="screenshots/1.13.0-grades.jpg" width="700" alt="Grades">
+
+**Attendance**
+
+<img src="screenshots/1.13.0-attendance-chart.jpg" width="700" alt="Attendance">
 
 **Library**
 
-<img src="screenshots/1.9.0-library.jpg" width="700" alt="Library">
+<img src="screenshots/1.13.0-library.jpg" width="700" alt="Library">
+
+**Editing a library resource**
+
+<img src="screenshots/1.13.0-edit-library-resource.jpg" width="700" alt="Editing a library resource">
 
 **Calendar (month)**
 
-<img src="screenshots/1.9.0-calendar.jpg" width="700" alt="Calendar (month)">
+<img src="screenshots/1.13.0-calendar-monthly.jpg" width="700" alt="Calendar (month)">
+
+**Calendar (week)**
+
+<img src="screenshots/1.13.0-calendar-weekly.jpg" width="700" alt="Calendar (week)">
 
 **Assignments view**
 
-<img src="screenshots/1.9.0-global-assignments.jpg" width="700" alt="Assignments view">
+<img src="screenshots/1.13.0-assignments.jpg" width="700" alt="Assignments view">
 
 **Courses**
 
-<img src="screenshots/1.9.0-courses.jpg" width="700" alt="Courses">
+<img src="screenshots/1.13.0-courses.jpg" width="700" alt="Courses">
 
-**Settings**
+**Syllabus note**
 
-<img src="screenshots/1.9.0-settings.jpg" width="700" alt="Settings">
+<img src="screenshots/1.13.0-syllabus-creation-note.jpg" width="700" alt="Syllabus note">
+
+**Exported syllabus**
+
+<img src="screenshots/1.13.0-syllabus-exported.jpg" width="700" alt="Exported syllabus">
 
 </details>
 
@@ -80,6 +112,7 @@ Hold Course runs on desktop and mobile.
 - [Grades](#grades)
 - [Attendance](#attendance)
 - [Library](#library)
+- [Syllabus](#syllabus)
 - [Calendar View](#calendar-view)
 - [Assignments View](#assignments-view)
 - [Courses](#courses)
@@ -260,7 +293,7 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Assignment types:** Each assignment has a type — Reading, Writing, Project, Discussion, or Other — color-coded throughout the plugin so you can scan quickly.
 
-**Your own types:** Choose **New type…** in the Type menu when adding or editing an assignment (or in Bulk add) and give it a name, such as Lab, Quiz, or Presentation. Your types are shared by all your classes and semesters, appear in every type filter, and use the same gray as Other. Rename or delete them under *Settings > Assignment types*: renaming updates every assignment that uses the type, and deleting one changes those assignments to Other.
+**Your own types:** Choose **New type…** in the Type menu when adding or editing an assignment (or in Bulk add) and give it a name, such as Lab, Homework, or Presentation. Your types are shared by all your classes and semesters, appear in every type filter, and use the same gray as Other. Rename or delete them under *Settings > Assignment types*: renaming updates every assignment that uses the type, and deleting one changes those assignments to Other.
 
 **Grade:** Assignments have an optional grade field. Fill it in after graded work is returned. Once an assignment is marked done, a recorded grade appears as a quiet pill next to its title in every list view. Grade doesn't apply to Readings, so the field is never shown there. You can also turn grading off entirely for a class — see the Track grades toggle under Classes — which hides the Grade field and chip everywhere for that class, useful for self-study or audited classes with no assigned grades.
 
@@ -366,6 +399,8 @@ Inside a class, the **Exams** tab lists scheduled exams with their dates and a l
 
 **Adding an exam:** Click **+ Add Exam** and fill in the name and date.
 
+**Exam types:** Each exam has a type: **Exam**, **Midterm**, **Final**, or **Quiz**. Choose **New type…** in the Type menu to add your own, such as Oral exam or Practical. The type shows under the exam's name (except plain Exam), on the Calendar, and in an exported syllabus. Each type gets its own weight on the Grades tab. Rename or delete your own types under *Settings > Exam types*: deleting one changes those exams to Exam, and its weight is added to Exam's.
+
 **Countdowns:** Each exam shows how many days away it is, updated automatically.
 
 **Status:** Exams are a simple done / not done toggle — click the status control on the exam row, or open the detail screen and use the Mark done button. A recorded grade appears as a quiet pill on done exams. Done exams can be hidden using the **Show done/Hide done** toggle on the Exams tab.
@@ -380,7 +415,7 @@ A class with **Track grades** on has a **Grades** tab. It works out your grade f
 
 **What counts:** a grade is read as a percent. "92", "92%", and "18/20" (90%) all work, and a letter such as "A-" counts as the middle of its band on the grading scale. Scores over 100% are allowed. Anything else, such as "pass", is left out, and the Graded work table at the bottom of the tab shows which items were and weren't counted. Readings aren't graded work.
 
-**Weights:** enter the percent of the final grade for each assignment type and for exams, from your syllabus. Leave them all blank to count every graded item equally. If the weights don't add up to 100, Hold Course scales them and says so.
+**Weights:** enter the percent of the final grade for each assignment type and each exam type (a midterm at 25% and a final at 40%, for example), from your syllabus. Leave them all blank to count every graded item equally. If the weights don't add up to 100, Hold Course scales them and says so.
 
 **Target:** enter the grade you're aiming for, a letter or a percent. Hold Course tells you the average you need on the remaining work to reach it. Remaining work is anything not graded yet.
 
@@ -421,9 +456,48 @@ The **Library** tab collects every resource associated with a class — books, a
 
 **Status:** Each resource has a status pill — **Unread**, **In Progress**, or **Done** — that you can advance as you read.
 
+**Required or recommended:** Mark a resource **Required** or **Recommended** when adding or editing it. An [exported syllabus](#syllabus) groups its reading list that way.
+
 **Linked Book:** Reading assignments can be linked directly to a resource in the Library. For all other assignment types, a Linked Note field is available instead. Both are set from the assignment's detail screen.
 
 **Resource detail:** Click any resource to see everything associated with it: the classes it belongs to, its type, and every lecture and assignment that references it — each one clickable through to the item itself.
+
+**Arrows:** The resource detail has previous/next arrows. They step through the Library list in its current order and class filter.
+
+---
+
+## Syllabus
+
+Hold Course can write a syllabus for any class as a regular note: the course details, reading list, grade weights, and a week-by-week schedule built from your lectures, assignments, and exams. Statuses, grades, and progress are never included.
+
+**Exporting:** Open a class and select **Syllabus** in its header. Choose what else to include (Key Concepts & Lesson Goal under each lecture, links to linked notes, assignment and exam notes) and select **Export**. The syllabus is saved as `<code> Syllabus.md` in the folder set under **Settings → Syllabus folder** (the top of the vault if blank). If an earlier export is already there, you can **Replace** it or **Keep both**. Nothing is overwritten without asking.
+
+### Your syllabus note
+
+The export covers what Hold Course knows. For the rest — description, objectives, requirements, policies — write a **syllabus note**. In **Edit class → Syllabus note**, select **Create** for a ready-made note (`<code> Syllabus notes.md`), or **Browse** to link one you already have.
+
+The two files stay separate. The **syllabus note** is yours; the export reads it but never changes it. The **exported syllabus** is written by Hold Course and is replaced the next time you export, so make lasting edits in the note.
+
+The quickest way to see how it works: create the note, type a line under Description, export, and compare the two.
+
+**How the note becomes the syllabus:**
+
+- Each `## ` section is copied in the note's order. Empty sections are left out.
+- Text above the first `## ` heading becomes an introduction, right after the course details. Frontmatter, comments, and a `# ` title line aren't copied.
+- Three headings are filled in from the class, followed by anything you write under them:
+  - **Readings:** the class's Library resources, grouped into Required and Recommended when you've marked them.
+  - **Grading:** the grade weights and grading scale (graded classes with weights only).
+  - **Schedule:** lectures, assignments, and exams by week.
+- Move one of these headings to change where it goes. Delete it to leave that section out. The export dialog warns you when a section has content but no heading.
+- Other common names work too:
+
+| Section | Also accepted |
+|---|---|
+| Readings | Reading, Required Reading(s), Texts, Course Texts, Required Texts, Textbooks, Required Textbooks, Books, Materials, Course Materials, Required Materials, Bibliography |
+| Grading | Grades, Grade Breakdown, Grading Policy, Assessment, Assessments, Evaluation |
+| Schedule | Course Schedule, Class Schedule, Weekly Schedule, Tentative Schedule, Calendar, Course Calendar, Course Outline |
+
+Without a syllabus note, the export has the course details plus Readings, Grading, and Schedule.
 
 ---
 
@@ -568,6 +642,10 @@ This works on desktop and Android. It has no effect on iOS, which doesn't suppor
 
 **Assignment types** — your own assignment types, each with how many assignments use it, and buttons to rename or delete it. New types are added from the Type menu when adding or editing an assignment.
 
+**Exam types** — your own exam types, each with how many exams use it, and buttons to rename or delete it. Exam, Midterm, Final, and Quiz are built in. New types are added from the Type menu when adding or editing an exam.
+
+**Syllabus folder** — where exported syllabi and new syllabus notes are saved. Leave it blank for the top of the vault. See [Syllabus](#syllabus).
+
 ---
 
 ## For Teachers
@@ -576,7 +654,8 @@ Hold Course is built around one person's own coursework, but several features su
 
 - **[Copy a class](#copying-a-class)** for each section or term. Dates move to the new start date in whole weeks, and statuses start over.
 - **[Online classes](#classes)** drop the meeting fields when there's no live session.
-- **[Your own assignment types](#assignments)** — Lab, Quiz, Homework, Peer review — are set up once and shared by every class and section, and each one can be filtered on Assignments and Calendar.
+- **[Your own assignment types](#assignments)** — Lab, Homework, Presentation, Peer review — are set up once and shared by every class and section, and each one can be filtered on Assignments and Calendar.
+- **[Syllabus export](#syllabus)** turns a class into a syllabus note — your description and policies, the reading list, grade weights, and a week-by-week schedule.
 
 What it doesn't do: grade weights and attendance are for your own grade, not a class roster, and each assignment has a single status — yours. Hold Course is a planning tool, not a gradebook, and doesn't track individual students.
 

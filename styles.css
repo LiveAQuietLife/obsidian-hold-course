@@ -865,6 +865,15 @@ body.is-phone .hc-drag-bar {
   line-height: 1.6;
 }
 
+/* #44: export dialog, "Not included" sections */
+.hc-modal-body.hc-modal-warning {
+  color: var(--text-error);
+  background: rgba(var(--color-red-rgb), 0.1);
+  border-left: 3px solid var(--text-error);
+  border-radius: var(--radius-s);
+  padding: 6px 10px;
+}
+
 .hc-modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -1030,6 +1039,20 @@ body.is-mobile .hc-class-modal .setting-item-info {
   width: auto;
   flex: 0 0 auto;
   align-self: flex-start;
+}
+
+/* #44: the Syllabus note row has a long description, so its label column
+   shares the row instead of taking its natural (one-line) width. */
+.hc-syllabus-note-setting .setting-item-info {
+  flex: 1 1 auto;
+}
+
+/* Desktop: flex-basis auto lets the long description claim the row and
+   squeeze the filename to a sliver. Split the row evenly instead; the
+   mobile rule above is left as is (it renders correctly there). */
+body:not(.is-mobile) .hc-syllabus-note-setting .setting-item-info,
+body:not(.is-mobile) .hc-syllabus-note-setting .setting-item-control {
+  flex: 1 1 0;
 }
 
 /* Custom time picker — hour/minute dropdowns + AM/PM toggle, styled like
@@ -2046,6 +2069,12 @@ body.is-mobile .hc-assign-note-input-wrap {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+
+/* Exam type (Midterm, Final, ...) under the name; plain Exam shows none. */
+.hc-exam-type {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .hc-exam-countdown {
@@ -3305,6 +3334,16 @@ body.is-mobile .hc-bulk-textarea {
   gap: 12px;
 }
 
+/* When the table scrolls sideways, each row box is still only as wide as
+   the visible area, so its divider line and hover color stopped partway.
+   A floor equal to the full column width (columns + 5 gaps + padding)
+   makes every row span the scrolled width. */
+.hc-courses-head,
+.hc-courses-row {
+  box-sizing: border-box;
+  min-width: 720px;
+}
+
 .hc-courses-head {
   padding: 0 14px 6px;
   border-bottom: 1px solid var(--background-modifier-border);
@@ -3485,6 +3524,7 @@ body.is-phone .hc-courses-code { display: none; }
 body.is-phone .hc-courses-head,
 body.is-phone .hc-courses-row {
   grid-template-columns: 96px minmax(140px, 1fr) 48px 96px 120px;
+  min-width: 576px; /* 500 columns + 4 gaps + 28 padding */
 }
 
 /* ─── Assignments table (#15) ──────────────────────────────────────────────
@@ -3510,6 +3550,10 @@ body.is-phone .hc-courses-row {
   grid-template-columns: 88px 92px minmax(160px, 1fr) 96px 104px 64px 104px;
   align-items: center;
   gap: 12px;
+  /* Full width when scrolled sideways (see .hc-courses-row):
+     708 columns + 6 gaps + 28 padding. */
+  box-sizing: border-box;
+  min-width: 808px;
 }
 
 .hc-atable-head {
@@ -3792,9 +3836,6 @@ body.is-mobile.hc-scaled .hc-content {
 .hc-scale-editor > .hc-btn { align-self: flex-start; margin-top: 4px; }
 
 .hc-settings-scale { padding: 4px 0 16px; }
-
-/* #67: hidden but kept (Edit class grade fields while Track grades is off) */
-.hc-hidden { display: none !important; }
 
 /* ─── #72 Attendance ─────────────────────────────────────────────────────── */
 .hc-attendance-meta { cursor: pointer; }

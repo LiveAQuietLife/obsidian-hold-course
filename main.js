@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.12.0 */
+/* --- Hold Course --- v1.13.0 */
 'use strict';
 
 const {
@@ -56,6 +56,53 @@ const CAL_KIND_OPTIONS = [
 ];
 
 const ASSIGNMENT_TYPES = ['Reading', 'Writing', 'Project', 'Discussion', 'Other'];
+
+// Exam types (2026-10-23): built-ins, then the user's own
+// (settings.customExamTypes), A–Z. "Exam" is the default; an exam with no
+// stored type is an Exam, so older data needs no migration. Each type is
+// its own grading category, so a midterm and a final can carry different
+// weights. Exam and assignment type names never overlap.
+const EXAM_TYPES = ['Exam', 'Midterm', 'Final', 'Quiz'];
+
+// #44 C: a resource's role, used to group a syllabus reading list. Stored as
+// resource.role; absent means none (the plain list). One role per resource,
+// shared by every class it's tagged to. A per-class override can be added
+// later as a new key without reshaping this one. (2026-10-21)
+const RESOURCE_ROLES = { required: 'Required', recommended: 'Recommended' };
+
+// The Library list's order (Principle 4): the class filter, then
+// sem.librarySort (A–Z, Z–A, or by status). The resource detail's prev/next
+// arrows walk the same list. (2026-10-21)
+function getLibraryOrder(sem, filterClassId) {
+  let resources = [...((sem && sem.resources) || [])];
+  if (filterClassId) resources = resources.filter(r => (r.classIds || []).includes(filterClassId));
+  const sortKey = (sem && sem.librarySort && sem.librarySort !== 'class') ? sem.librarySort : 'alpha-asc';
+  const statusOrder = { 'in-progress': 0, 'unread': 1, 'done': 2 };
+  if (sortKey === 'alpha-asc') {
+    resources.sort((a, b) => a.title.localeCompare(b.title));
+  } else if (sortKey === 'alpha-desc') {
+    resources.sort((a, b) => b.title.localeCompare(a.title));
+  } else if (sortKey === 'status') {
+    resources.sort((a, b) => {
+      const sa = statusOrder[a.status] ?? 1;
+      const sb = statusOrder[b.status] ?? 1;
+      return sa !== sb ? sa - sb : a.title.localeCompare(b.title);
+    });
+  }
+  return resources;
+}
+
+function addResourceRoleSetting(contentEl, formData) {
+  new Setting(contentEl)
+    .setName('Required or recommended')
+    .setDesc('Groups the reading list in an exported syllabus.')
+    .addDropdown(drop => {
+      drop.addOption('', '—');
+      for (const [k, label] of Object.entries(RESOURCE_ROLES)) drop.addOption(k, label);
+      drop.setValue(formData.role || '');
+      drop.onChange(v => { formData.role = v; });
+    });
+}
 
 const TERMS = ['Winter', 'Spring', 'Summer', 'Fall'];
 
@@ -233,12 +280,390 @@ function forEachAssignment(semesters, fn) {
   }
 }
 
+// ─── F2 Export layer (#44) ───────────────────────────────────────────────────
+// One walk over everything in a class that can carry a date, kept apart from
+// any output format (syllabus first; ICS, CSV, course packs later). Each entry:
+//   { kind: 'lecture' | 'assignment' | 'exam', item, lecture, number, date }
+// lecture: the owning lecture for a nested assignment, else null.
+// number: lectures only, 1-based in sortLecturesByRule order.
+// date: lec.date or item.dueDate, '' when undated.
+// Status, grades, and notes stay on `item`; each format decides what to show.
+// (2026-10-21)
+function collectClassEntries(cls) {
+  const out = [];
+  sortLecturesByRule((cls && cls.lectures) || []).forEach((lec, i) => {
+    out.push({ kind: 'lecture', item: lec, lecture: null, number: i + 1, date: lec.date || '' });
+  });
+  forEachClassAssignment(cls, (a, lec) => {
+    out.push({ kind: 'assignment', item: a, lecture: lec, number: null, date: a.dueDate || '' });
+  });
+  for (const ex of ((cls && cls.exams) || [])) {
+    out.push({ kind: 'exam', item: ex, lecture: null, number: null, date: ex.dueDate || '' });
+  }
+  return out;
+}
+
+// Monday of the week holding an ISO date.
+function weekMondayISO(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  return addDaysISO(iso, -((d.getDay() + 6) % 7));
+}
+
+// #44 syllabus schedule, format-neutral. Two shapes:
+//   { mode: 'weeks', weeks: [{ number, start, end, days: [{ date, lectures, items }] }], undated }
+//   { mode: 'list', undated }   (nothing in the class has a date)
+// undated: { lectures: [{ entry, items }], loose: [entries] }.
+// Week 1 is the Monday-to-Sunday week holding the class start date, or the
+// earliest dated entry if that comes first. An undated assignment under a
+// dated lecture shows with that lecture (withLecture: true). Within a day:
+// lectures, then exams, then assignments in walker order.
+function buildSyllabusSchedule(cls) {
+  const entries = collectClassEntries(cls);
+  const items = entries.filter(e => e.kind !== 'lecture');
+  const lectures = entries.filter(e => e.kind === 'lecture');
+  const shown = items.map(e => (!e.date && e.lecture && e.lecture.date)
+    ? { ...e, date: e.lecture.date, withLecture: true } : e);
+
+  const undated = { lectures: [], loose: [] };
+  for (const lec of lectures) {
+    if (lec.date) continue;
+    undated.lectures.push({ entry: lec, items: shown.filter(e => !e.date && e.lecture === lec.item) });
+  }
+  undated.loose = shown.filter(e => !e.date && !e.lecture);
+
+  const dated = [...lectures, ...shown].filter(e => e.date);
+  if (!dated.length) return { mode: 'list', undated };
+
+  const earliest = dated.reduce((m, e) => (e.date < m ? e.date : m), dated[0].date);
+  const anchor = (cls.startDate && cls.startDate < earliest) ? cls.startDate : earliest;
+  const week1 = weekMondayISO(anchor);
+  const order = { lecture: 0, exam: 1, assignment: 2 };
+  const byWeek = new Map();
+  for (const e of dated) {
+    const n = Math.floor(daysBetweenISO(week1, e.date) / 7) + 1;
+    if (!byWeek.has(n)) byWeek.set(n, new Map());
+    const days = byWeek.get(n);
+    if (!days.has(e.date)) days.set(e.date, []);
+    days.get(e.date).push(e);
+  }
+  const weeks = [...byWeek.keys()].sort((a, b) => a - b).map(n => {
+    const start = addDaysISO(week1, (n - 1) * 7);
+    const days = [...byWeek.get(n).keys()].sort().map(date => {
+      const list = byWeek.get(n).get(date).map((e, i) => ({ e, i }))
+        .sort((x, y) => (order[x.e.kind] - order[y.e.kind]) || (x.i - y.i)).map(x => x.e);
+      return { date, lectures: list.filter(e => e.kind === 'lecture'), items: list.filter(e => e.kind !== 'lecture') };
+    });
+    return { number: n, start, end: addDaysISO(start, 6), days };
+  });
+  return { mode: 'weeks', weeks, undated };
+}
+
+function formatDateYear(iso) {
+  if (!iso) return '';
+  return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+// #44 syllabus, Markdown format. The course header always comes first; the
+// sections after it follow the syllabus note (opts.noteText, see
+// syllabusBlocks). Readings, Grading, and Schedule are generated here.
+// Never shows status, grades, or progress. Possibly private fields only when
+// opts asks: keyConcepts (lec.notes), noteTitles (lec.vaultLink,
+// assignment.linkedNote, as [[path|title]]), itemNotes (assignment and exam
+// notes). Lines end in two spaces where a break is wanted (a hard break that
+// works with or without strict line breaks).
+function syllabusMarkdown(cls, sem, opts) {
+  opts = opts || {};
+  let L = [];
+  // Runs fn with L pointed at a fresh array and returns what it pushed, so
+  // each generated section can be built first and placed later.
+  const capture = fn => { const saved = L; L = []; fn(); const out = L; L = saved; return out; };
+  const br = s => L.push(s + '  ');
+  L.push(`# ${[cls.code, cls.name].filter(Boolean).join(' — ') || 'Syllabus'}`, '');
+
+  const term = [];
+  if (sem && sem.name) term.push(sem.name);
+  if (cls.startDate && cls.endDate) term.push(`${formatDate(cls.startDate)} – ${formatDateYear(cls.endDate)}`);
+  else if (cls.startDate) term.push(`Begins ${formatDateYear(cls.startDate)}`);
+  else if (cls.endDate) term.push(`Ends ${formatDateYear(cls.endDate)}`);
+  if (term.length) br(term.join(' · '));
+
+  const credits = getClassCredits(cls);
+  if (credits != null) br(`**Credits:** ${credits}`);
+  const person = (name, email) => [name, email].filter(Boolean).join(' · ');
+  if (cls.professorName || cls.professorEmail) br(`**Professor:** ${person(cls.professorName, cls.professorEmail)}`);
+  if (cls.officeHours) br(`**Office hours:** ${cls.officeHours}`);
+  if (cls.taName || cls.taEmail) br(`**TA:** ${person(cls.taName, cls.taEmail)}`);
+  if (cls.taOfficeHours) br(`**TA office hours:** ${cls.taOfficeHours}`);
+  if (isClassOnline(cls)) {
+    br(`**Format:** Online${cls.location ? ' · ' + cls.location : ''}`);
+  } else if ((cls.meetingDays || []).length) {
+    const bits = [cls.meetingDays.join(', ')];
+    if (cls.meetingStartTime && cls.meetingEndTime) bits.push(formatTimeRange(cls.meetingStartTime, cls.meetingEndTime));
+    else if (cls.meetingStartTime) bits.push(formatTimeShort(cls.meetingStartTime));
+    if (cls.location) bits.push(cls.location);
+    br(`**Meets:** ${bits.join(' · ')}`);
+  } else if (cls.location) {
+    br(`**Location:** ${cls.location}`);
+  }
+  if (L[L.length - 1] !== '') L.push('');
+
+  const lecLine = e => `Lecture ${e.number}${e.item.title ? ': ' + e.item.title : ''}`;
+  const titleOf = item => item.title || 'Untitled';
+  // Free text from notes: blank lines dropped, a leading # escaped so a note
+  // can't start a heading inside the syllabus.
+  const textLines = (text, indent) => String(text || '').split(/\r?\n/)
+    .map(x => x.trimEnd()).filter(x => x.trim())
+    .map(x => indent + x.replace(/^(\s*)#/, '$1\\#') + '  ');
+  const noteLink = path => {
+    const p = String(path || '').trim().replace(/\.md$/i, '');
+    return p ? `[[${p}|${p.split('/').pop()}]]` : '';
+  };
+  const lectureBlock = (e, day) => {
+    L.push(`**${day ? day + ' — ' : ''}${lecLine(e)}**  `);
+    if (opts.noteTitles && noteLink(e.item.vaultLink)) L.push(`Notes: ${noteLink(e.item.vaultLink)}  `);
+    if (opts.keyConcepts) L.push(...textLines(e.item.notes, ''));
+  };
+  const itemLines = e => {
+    let head = e.kind === 'exam' ? `- **${getExamType(e.item)}:** ${titleOf(e.item)}` : `- ${e.item.type || 'Other'}: ${titleOf(e.item)}`;
+    if (opts.noteTitles && noteLink(e.item.linkedNote)) head += ` · ${noteLink(e.item.linkedNote)}`;
+    const body = opts.itemNotes ? textLines(e.item.notes, '  ') : [];
+    return body.length ? [head + '  ', ...body] : [head];
+  };
+  // #44 C: Library resources tagged to this class, grouped by role. With no
+  // roles set it's one plain list; with roles, unmarked ones go under "Other".
+  const reading = syllabusReadingGroups(cls, sem);
+  const readingsBody = capture(() => {
+    const bookLine = r => `- ${r.author ? r.author + ', ' : ''}*${titleOf(r)}*`;
+    for (const g of reading) {
+      if (g.label) L.push(`**${g.label}**  `);
+      for (const r of g.items) L.push(bookLine(r));
+      L.push('');
+    }
+  });
+
+  // #44 B: weights by type (F7) and the grading scale. Only for a graded
+  // class with weights set; nothing otherwise. opts.scale is the scale the
+  // plugin resolved (class → settings → default); without it, class → default.
+  const grading = syllabusGrading(cls, opts.scale);
+  const gradingBody = capture(() => {
+    if (!grading) return;
+    L.push('| Category | Weight |', '|---|---|');
+    const cell = t => String(t).replace(/\|/g, '\\|');
+    for (const w of grading.weights) L.push(`| ${cell(w.category)} | ${formatPercent(w.weight)}% |`);
+    L.push(`| **Total** | **${formatPercent(grading.total)}%** |`, '');
+    L.push('| Grade | Percent |', '|---|---|');
+    for (const r of grading.scale) L.push(`| ${cell(r.letter)} | ${r.label} |`);
+    L.push('');
+  });
+
+  const s = buildSyllabusSchedule(cls);
+  const hasUndated = s.undated.lectures.length || s.undated.loose.length;
+  const scheduleBody = capture(() => {
+    if (s.mode === 'weeks') {
+      for (const w of s.weeks) {
+        L.push(`### Week ${w.number} · ${formatDate(w.start)} – ${formatDate(w.end)}`, '');
+        for (const d of w.days) {
+          const day = formatDateWithDay(d.date);
+          if (d.lectures.length) for (const lec of d.lectures) lectureBlock(lec, day);
+          else L.push(`**${day}**  `);
+          for (const it of d.items) L.push(...itemLines(it));
+          L.push('');
+        }
+      }
+      if (hasUndated) L.push('### Not yet scheduled', '');
+    }
+    if (hasUndated) {
+      for (const u of s.undated.lectures) {
+        lectureBlock(u.entry, '');
+        for (const it of u.items) L.push(...itemLines(it));
+        L.push('');
+      }
+      if (s.undated.loose.length) {
+        if (s.undated.lectures.length) L.push('**Other work**  ');
+        for (const it of s.undated.loose) L.push(...itemLines(it));
+        L.push('');
+      }
+    }
+  });
+
+  // #44 A: place sections in the note's order. A generated section shows its
+  // content, then any text written under its heading in the note; a plain
+  // note section shows only when it has text (an untouched template heading
+  // stays out).
+  // Text above the note's first "## " is an introduction, right after the
+  // course header (syllabusIntro).
+  const intro = syllabusIntro(opts.noteText);
+  if (intro.length) L.push(...intro, '');
+
+  const generated = { readings: readingsBody, grading: gradingBody, schedule: scheduleBody };
+  const hasText = lines => lines.some(x => x.trim());
+  for (const b of syllabusBlocks(opts.noteText)) {
+    const gen = b.key ? generated[b.key] : [];
+    if (!hasText(gen) && !hasText(b.body)) continue;
+    L.push(`## ${b.heading}`, '');
+    if (hasText(gen)) L.push(...gen, '');
+    if (hasText(b.body)) L.push(...b.body, '');
+  }
+  return L.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
+}
+
+// #44 A, format-neutral: the syllabus note split at its "## " headings.
+// Returns [{ heading, key, body: [lines] }] in note order. key is
+// 'readings' | 'grading' | 'schedule' for the generated sections (first
+// match only; a repeat is a plain section), else null. Text above the first
+// "## " isn't a block (see syllabusIntro), and fenced code blocks are never
+// split. With a note (any string, even empty), a generated section appears
+// only where the note has its heading: deleting the heading leaves it out
+// (the export dialog says so, syllabusOmitted). No note (null/undefined)
+// means just those three, in that order.
+const SYLLABUS_KEYS = ['readings', 'grading', 'schedule'];
+const SYLLABUS_HEADINGS = { readings: 'Readings', grading: 'Grading', schedule: 'Schedule' };
+// Common syllabus wordings, so a renamed heading still gets its content.
+// Matched lowercased, with * _ : stripped.
+const SYLLABUS_ALIASES = {};
+for (const [key, names] of Object.entries({
+  readings: ['readings', 'reading', 'required reading', 'required readings', 'texts', 'course texts',
+    'required texts', 'textbooks', 'required textbooks', 'books', 'course materials', 'required materials',
+    'materials', 'bibliography'],
+  grading: ['grading', 'grades', 'grade breakdown', 'grading policy', 'assessment', 'assessments', 'evaluation'],
+  schedule: ['schedule', 'course schedule', 'class schedule', 'weekly schedule', 'tentative schedule',
+    'calendar', 'course calendar', 'course outline'],
+})) for (const n of names) SYLLABUS_ALIASES[n] = key;
+// #44 A: the note's text above its first "## " (outside code fences), as
+// lines. Left out: frontmatter, %% %% and <!-- --> comments (hidden in
+// Obsidian too), and "# " title lines (a note's own title isn't the
+// syllabus's). [] when there's nothing else, or no note.
+function syllabusIntro(noteText) {
+  if (noteText == null) return [];
+  const lines = [];
+  let fence = null;
+  for (const raw of String(noteText).split(/\r?\n/)) {
+    const line = raw.replace(/\s+$/, '');
+    const f = line.match(/^\s*(```|~~~)/);
+    if (f) fence = fence ? (line.trim().startsWith(fence) ? null : fence) : f[1];
+    if (!fence && !f && /^##\s+\S/.test(line)) break;
+    lines.push(line);
+  }
+  const text = lines.join('\n')
+    .replace(/^---\n[\s\S]*?\n---(\n|$)/, '')
+    .replace(/%%[\s\S]*?%%/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+  const out = text.split('\n').map(x => x.replace(/\s+$/, '')).filter(x => !/^#\s/.test(x));
+  while (out.length && !out[0].trim()) out.shift();
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  return out;
+}
+
+// Other names the export dialog's "Not included" warning suggests.
+const SYLLABUS_EXAMPLES = {
+  Readings: ['Texts', 'Course Materials'],
+  Grading: ['Assessment', 'Grade Breakdown'],
+  Schedule: ['Calendar', 'Course Outline'],
+};
+
+function syllabusBlocks(noteText) {
+  if (noteText == null) return SYLLABUS_KEYS.map(key => ({ heading: SYLLABUS_HEADINGS[key], key, body: [] }));
+  const blocks = [];
+  let cur = null;
+  let fence = null;
+  for (const raw of String(noteText || '').split(/\r?\n/)) {
+    const line = raw.replace(/\s+$/, '');
+    const f = line.match(/^\s*(```|~~~)/);
+    if (f) fence = fence ? (line.trim().startsWith(fence) ? null : fence) : f[1];
+    const h = !fence && !f && line.match(/^##\s+(.+?)\s*#*\s*$/);
+    if (h) {
+      const heading = h[1].trim();
+      const norm = heading.toLowerCase().replace(/[*_:]/g, '').trim();
+      let key = SYLLABUS_ALIASES[norm] || null;
+      if (key && blocks.some(b => b.key === key)) key = null;
+      cur = { heading, key, body: [] };
+      blocks.push(cur);
+    } else if (cur) {
+      cur.body.push(line);
+    }
+  }
+  for (const b of blocks) {
+    while (b.body.length && !b.body[0].trim()) b.body.shift();
+    while (b.body.length && !b.body[b.body.length - 1].trim()) b.body.pop();
+  }
+  return blocks;
+}
+
+// #44 A: generated sections that have content but no heading in the note, so
+// the export leaves them out. Headings in SYLLABUS_KEYS order; [] with no note.
+function syllabusOmitted(cls, sem, noteText, scale) {
+  if (noteText == null) return [];
+  const present = new Set(syllabusBlocks(noteText).map(b => b.key).filter(Boolean));
+  const s = buildSyllabusSchedule(cls);
+  const has = {
+    readings: syllabusReadingGroups(cls, sem).length > 0,
+    grading: !!syllabusGrading(cls, scale),
+    schedule: (s.mode === 'weeks' && s.weeks.length > 0) || s.undated.lectures.length > 0 || s.undated.loose.length > 0,
+  };
+  return SYLLABUS_KEYS.filter(k => has[k] && !present.has(k)).map(k => SYLLABUS_HEADINGS[k]);
+}
+
+// #44 A: what "Create syllabus note" writes. The comment at the top is above
+// the first heading, so it never reaches the export (and Obsidian hides it in
+// Reading view).
+const SYLLABUS_NOTE_TEMPLATE = [
+  '%% Hold Course syllabus note. Export syllabus reads this note but never changes it; it writes a separate "Syllabus" note. Text above the first heading becomes an introduction. Each "## " section below is copied in this order; empty ones are left out. Readings, Grading, and Schedule are filled in from the class (Library books, grade weights, dates), followed by anything you write under them. Delete one of those three headings to leave that section out; move it to change where it goes. %%',
+  '',
+  '## Description', '', '',
+  '## Objectives', '', '',
+  '## Readings', '', '',
+  '## Requirements', '', '',
+  '## Grading', '', '',
+  '## Policies', '', '',
+  '## Schedule', '',
+].join('\n');
+
+// #44 C, format-neutral: [{ label, items }] in order Required, Recommended,
+// then unmarked. label is null when no resource has a role (one plain list).
+// Stored order is kept within each group. Empty groups are left out.
+function syllabusReadingGroups(cls, sem) {
+  const mine = ((sem && sem.resources) || []).filter(r => (r.classIds || []).includes(cls.id));
+  if (!mine.length) return [];
+  const roleOf = r => (RESOURCE_ROLES[r.role] ? r.role : '');
+  if (!mine.some(roleOf)) return [{ label: null, items: mine }];
+  return [
+    { label: RESOURCE_ROLES.required, items: mine.filter(r => roleOf(r) === 'required') },
+    { label: RESOURCE_ROLES.recommended, items: mine.filter(r => roleOf(r) === 'recommended') },
+    { label: 'Other', items: mine.filter(r => !roleOf(r)) },
+  ].filter(g => g.items.length);
+}
+
+// #44 B, format-neutral: { weights: [{ category, weight }], total, scale:
+// [{ letter, label }] } or null (ungraded class, or no weights). Weights keep
+// the order they were entered in. Scale labels: "93 and above" for the top
+// band, "90–92.9" style below it, "Below 60" for a 0 minimum.
+function syllabusGrading(cls, scale) {
+  if (!isClassGraded(cls)) return null;
+  const w = getGradeWeights(cls);
+  if (!w) return null;
+  const weights = Object.entries(w).map(([category, weight]) => ({ category, weight }));
+  const total = weights.reduce((sum, x) => sum + x.weight, 0);
+  const rows = normalizeGradeScale(scale) || getGradeScale(null, cls);
+  const labeled = rows.map((r, i) => {
+    if (i === 0) return { letter: r.letter, label: `${formatPercent(r.min)} and above` };
+    const below = rows[i - 1].min;
+    if (r.min <= 0) return { letter: r.letter, label: `Below ${formatPercent(below)}` };
+    return { letter: r.letter, label: `${formatPercent(r.min)}–${formatPercent(below - 0.1)}` };
+  });
+  return { weights, total, scale: labeled };
+}
+
+// A file name Obsidian accepts: drops \ / : * ? " < > | # ^ [ ] and trims.
+function safeFileName(name) {
+  return String(name || '').replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim() || 'Untitled';
+}
+
 // Every graded item in a class: assignments (class-level and per lecture)
-// except Readings, plus exams under the category "Exam".
+// except Readings, plus exams under their exam type ("Exam" by default).
 function getGradedItems(cls) {
   const out = [];
   forEachClassAssignment(cls, a => { if (a.type !== 'Reading') out.push({ item: a, category: a.type || 'Other' }); });
-  for (const ex of (cls.exams || [])) out.push({ item: ex, category: 'Exam' });
+  for (const ex of (cls.exams || [])) out.push({ item: ex, category: getExamType(ex) });
   return out;
 }
 
@@ -556,22 +981,75 @@ function checkTypeName(plugin, raw, except = null) {
   if (!name) return { error: 'Type name is required.' };
   if (name.length > MAX_TYPE_NAME) return { error: `Keep type names to ${MAX_TYPE_NAME} characters or fewer.` };
   const lower = name.toLowerCase();
-  if (lower === 'exam') return { error: 'Exams have their own tab. Choose another name.' };
+  const examMatch = getExamTypes(plugin).find(t => t.toLowerCase() === lower);
+  if (examMatch) return { error: `${examMatch} is an exam type, and exams have their own tab. Choose another name.` };
   const match = getAssignmentTypes(plugin).find(t => t.toLowerCase() === lower && t !== except);
   if (match) return { existing: match };
   return { name };
 }
 
+// ─── Exam types ──────────────────────────────────────────────────────────────
+
+function getExamType(exam) {
+  return (exam && typeof exam.type === 'string' && exam.type.trim()) || 'Exam';
+}
+
+function getCustomExamTypes(plugin) {
+  const list = plugin && plugin.data && plugin.data.settings && plugin.data.settings.customExamTypes;
+  return Array.isArray(list) ? list.filter(t => typeof t === 'string' && t.trim()) : [];
+}
+
+// Built-ins in their usual order, then custom types A–Z.
+function getExamTypes(plugin) {
+  const custom = [...getCustomExamTypes(plugin)].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  return [...EXAM_TYPES, ...custom];
+}
+
+// The one-time notice for _migrateTypeClashes.
+function typeClashNotice(renames) {
+  const list = renames.map(([a, b]) => a + ' → ' + b).join(', ');
+  return renames.length === 1
+    ? 'Hold Course: ' + renames[0][0] + ' is now a built-in exam type, so your assignment type was renamed ' + renames[0][1] + '. Rename it under Settings → Assignment types.'
+    : 'Hold Course: these are now built-in exam types, so your assignment types were renamed: ' + list + '. Rename them under Settings → Assignment types.';
+}
+
+// Same contract as checkTypeName, for exam types. A name already used by an
+// assignment type is refused: the two would share one weight.
+function checkExamTypeName(plugin, raw, except = null) {
+  const name = String(raw || '').trim().replace(/\s+/g, ' ');
+  if (!name) return { error: 'Type name is required.' };
+  if (name.length > MAX_TYPE_NAME) return { error: `Keep type names to ${MAX_TYPE_NAME} characters or fewer.` };
+  const lower = name.toLowerCase();
+  const assignMatch = getAssignmentTypes(plugin).find(t => t.toLowerCase() === lower);
+  if (assignMatch) return { error: `${assignMatch} is an assignment type. Choose another name.` };
+  const match = getExamTypes(plugin).find(t => t.toLowerCase() === lower && t !== except);
+  if (match) return { existing: match };
+  return { name };
+}
+
+// What addTypeDropdown and the settings lists need for each kind of type.
+const TYPE_KINDS = {
+  assignment: {
+    list: p => getAssignmentTypes(p), custom: p => getCustomTypes(p), check: checkTypeName,
+    add: (p, n) => p.addCustomType(n), title: 'New assignment type', placeholder: 'Lab, Presentation, Field trip',
+  },
+  exam: {
+    list: p => getExamTypes(p), custom: p => getCustomExamTypes(p), check: checkExamTypeName,
+    add: (p, n) => p.addCustomExamType(n), title: 'New exam type', placeholder: 'Oral exam, Practical, Lab exam',
+  },
+};
+
 // Type dropdown shared by Add, Edit, and Bulk add assignment. "New type…"
 // asks for a name and selects it. A current value that's no longer in the
 // list is still offered, so opening and saving never changes it. `exclude`
 // drops types (#9 tab locks).
-function addTypeDropdown(setting, plugin, { value, exclude = [], onChange }) {
+function addTypeDropdown(setting, plugin, { value, exclude = [], onChange, kind = 'assignment' }) {
+  const K = TYPE_KINDS[kind];
   setting.addDropdown(drop => {
     let current = value;
     const fill = () => {
       drop.selectEl.empty();
-      const types = getAssignmentTypes(plugin).filter(t => !exclude.includes(t));
+      const types = K.list(plugin).filter(t => !exclude.includes(t));
       if (current && !types.includes(current)) types.push(current);
       for (const t of types) drop.addOption(t, t);
       drop.addOption(NEW_TYPE_OPTION, 'New type…');
@@ -582,14 +1060,15 @@ function addTypeDropdown(setting, plugin, { value, exclude = [], onChange }) {
       if (v !== NEW_TYPE_OPTION) { current = v; onChange(v); return; }
       drop.setValue(current); // stays put until a name is given
       new AssignmentTypeNameModal(plugin.app, {
-        title: 'New assignment type',
+        title: K.title,
         value: '',
         button: 'Add type',
+        placeholder: K.placeholder,
         onSubmit: (raw) => {
-          const r = checkTypeName(plugin, raw);
+          const r = K.check(plugin, raw);
           if (r.error) { new Notice(r.error); return false; }
           const name = r.existing || r.name;
-          if (r.name) { plugin.addCustomType(name); plugin.save(); }
+          if (r.name) { K.add(plugin, name); plugin.save(); }
           if (exclude.includes(name)) { new Notice(`${name} can't be chosen here.`); return true; }
           current = name;
           fill();
@@ -1783,7 +2262,7 @@ function itemMetaText(item) {
     if (item.meetingStartTime) t += ' · ' + formatTimeRange(item.meetingStartTime, item.meetingEndTime);
     return t;
   }
-  if (item.kind === 'exam') return item.cls.code + ' · Exam';
+  if (item.kind === 'exam') return item.cls.code + ' · ' + getExamType(item.exam);
   return item.cls.code + ' · ' + item.assignment.type;
 }
 
@@ -2184,6 +2663,11 @@ class HoldCoursePlugin extends Plugin {
     // Additive migrations: only ever write keys that were absent.
     let changed = this._migrateSemesters();
     if (this._migrateDataVersion()) changed = true;
+    const renames = this._migrateTypeClashes();
+    if (renames.length) {
+      changed = true;
+      new Notice(typeClashNotice(renames), 20000);
+    }
     return changed;
   }
 
@@ -2379,11 +2863,14 @@ class HoldCoursePlugin extends Plugin {
     };
     for (const sem of (this.data.semesters || [])) {
       for (const cls of (sem.classes || [])) {
+        fix(cls, 'syllabusNote'); // #44
         for (const lec of (cls.lectures || [])) fix(lec, 'vaultLink');
         for (const a of this._allClassAssignments(cls)) fix(a, 'linkedNote');
       }
       for (const r of (sem.resources || [])) fix(r, 'vaultLink');
     }
+    // #44: the syllabus folder setting follows a renamed folder too.
+    if (this.data.settings) fix(this.data.settings, 'syllabusFolder');
     if (count) {
       await this.save();
       this.refreshMainView();
@@ -2430,6 +2917,28 @@ class HoldCoursePlugin extends Plugin {
     if ('dataVersion' in this.data) return false;
     this.data.dataVersion = CURRENT_DATA_VERSION;
     return true;
+  }
+
+  // 1.13.0: Midterm, Final, and Quiz became built-in exam types. A custom
+  // assignment type with one of those names (any case), made in 1.12.0 or
+  // earlier, would share a grade category and weight with the exam type.
+  // Rename it "<name> (assign.)" (" 2", " 3"… if taken), with its
+  // assignments, weights, and filters (renameCustomType). Runs on every load,
+  // so a device still on 1.12.0 that adds one later is caught too. Returns
+  // [[old, new], …]. (2026-10-24)
+  _migrateTypeClashes() {
+    const renames = [];
+    for (const old of [...getCustomTypes(this)]) {
+      const lower = old.toLowerCase();
+      if (!getExamTypes(this).some(t => t.toLowerCase() === lower)) continue;
+      const taken = new Set([...getAssignmentTypes(this), ...getExamTypes(this)].map(t => t.toLowerCase()));
+      const base = old + ' (assign.)';
+      let name = base;
+      for (let n = 2; taken.has(name.toLowerCase()); n++) name = base + ' ' + n;
+      this.renameCustomType(old, name);
+      renames.push([old, name]);
+    }
+    return renames;
   }
 
   getCurrentSemester() {
@@ -2748,6 +3257,91 @@ class HoldCoursePlugin extends Plugin {
   // status. Returns the new class, or null.
   // ─── #62 custom assignment types ─────────────────────────────────────────
 
+  // ─── #44 Syllabus export ───────────────────────────────────────────────────
+
+  // Folder setting; absent or blank means the vault root.
+  syllabusFolder() {
+    return String(this.data.settings.syllabusFolder || '').trim()
+      .replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  }
+
+  // "<folder>/<code> Syllabus.md"
+  syllabusPath(cls) {
+    const folder = this.syllabusFolder();
+    const name = `${safeFileName(`${cls.code || cls.name} Syllabus`)}.md`;
+    return folder ? `${folder}/${name}` : name;
+  }
+
+  exportSyllabus(cls, sem) {
+    new SyllabusExportModal(this.app, this, cls, sem).open();
+  }
+
+  // #44 A: the linked syllabus note's path, or '' when unset or missing.
+  syllabusNotePath(cls) {
+    const p = String((cls && cls.syllabusNote) || '').trim();
+    const f = p ? this.app.vault.getAbstractFileByPath(p) : null;
+    return f && f.extension && f.extension.toLowerCase() === 'md' ? f.path : '';
+  }
+
+  // Its text, or null (no note, or the note is missing: silent, Principle 5).
+  // null, not '': an empty note still means "only the headings I wrote".
+  async readSyllabusNote(cls) {
+    const p = this.syllabusNotePath(cls);
+    if (!p) return null;
+    return this.app.vault.read(this.app.vault.getAbstractFileByPath(p));
+  }
+
+  // The default syllabus note path: "<folder>/<code> Syllabus notes.md".
+  syllabusNoteDefaultPath(cls) {
+    const folder = this.syllabusFolder();
+    const name = `${safeFileName(`${cls.code || cls.name} Syllabus notes`)}.md`;
+    return folder ? `${folder}/${name}` : name;
+  }
+
+  // "Create syllabus note" from the template. When the default path is
+  // taken, the caller asks first (SyllabusNoteChoiceModal): mode 'existing'
+  // links that note as is; 'new' writes "… Syllabus notes 2.md", " 3"…
+  // Never overwrites. Returns the path.
+  async createSyllabusNote(cls, mode) {
+    const folder = this.syllabusFolder();
+    let path = this.syllabusNoteDefaultPath(cls);
+    if (this.app.vault.getAbstractFileByPath(path)) {
+      if (mode !== 'new') return path;
+      const base = path.replace(/\.md$/, '');
+      for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++) path = `${base} ${n}.md`;
+    }
+    if (folder && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+    await this.app.vault.create(path, SYLLABUS_NOTE_TEMPLATE);
+    new Notice(`Syllabus note created: ${path}`);
+    return path;
+  }
+
+  // mode 'overwrite' replaces an existing file; otherwise an existing name
+  // gets " 2", " 3"… (Save as new copy). Opens the note afterwards.
+  async writeSyllabus(cls, sem, opts, mode) {
+    try {
+      const folder = this.syllabusFolder();
+      if (folder && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+      const noteText = await this.readSyllabusNote(cls);
+      const content = syllabusMarkdown(cls, sem, { ...opts, scale: getGradeScale(this, cls), noteText });
+      let path = this.syllabusPath(cls);
+      let file = this.app.vault.getAbstractFileByPath(path);
+      // Never overwrite the syllabus note itself.
+      if (file && mode === 'overwrite' && path !== this.syllabusNotePath(cls)) {
+        await this.app.vault.modify(file, content);
+      } else {
+        const base = path.replace(/\.md$/, '');
+        for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++) path = `${base} ${n}.md`;
+        file = await this.app.vault.create(path, content);
+      }
+      await this.app.workspace.getLeaf('tab').openFile(file);
+      new Notice(`Syllabus saved: ${file.path}`);
+    } catch (e) {
+      console.error('Hold Course: syllabus export failed', e);
+      new Notice(`Syllabus export failed: ${e.message || e}`);
+    }
+  }
+
   // Every assignment in every semester (Principle 3: the one walker).
   _forEachAssignment(fn) {
     forEachAssignment(this.data.semesters, fn);
@@ -2757,6 +3351,49 @@ class HoldCoursePlugin extends Plugin {
     const settings = this.data.settings;
     if (!Array.isArray(settings.customTypes)) settings.customTypes = [];
     if (!settings.customTypes.includes(name)) settings.customTypes.push(name);
+  }
+
+  addCustomExamType(name) {
+    const settings = this.data.settings;
+    if (!Array.isArray(settings.customExamTypes)) settings.customExamTypes = [];
+    if (!settings.customExamTypes.includes(name)) settings.customExamTypes.push(name);
+  }
+
+  _forEachExam(fn) {
+    for (const sem of (this.data.semesters || [])) {
+      for (const cls of (sem.classes || [])) {
+        for (const ex of (cls.exams || [])) fn(ex);
+      }
+    }
+  }
+
+  countExamsOfType(type) {
+    let n = 0;
+    this._forEachExam(ex => { if (getExamType(ex) === type) n++; });
+    return n;
+  }
+
+  // Renames the exam type and every exam using it. Returns the count changed.
+  renameCustomExamType(oldName, newName) {
+    const list = getCustomExamTypes(this);
+    const i = list.indexOf(oldName);
+    if (i === -1) return 0;
+    list[i] = newName;
+    this.data.settings.customExamTypes = list;
+    let n = 0;
+    this._forEachExam(ex => { if (getExamType(ex) === oldName) { ex.type = newName; n++; } });
+    this._retargetGradeWeights(oldName, newName);
+    return n;
+  }
+
+  // Removes the exam type; exams using it become Exam, and its weight is
+  // added to Exam's. Returns the count.
+  deleteCustomExamType(name) {
+    this.data.settings.customExamTypes = getCustomExamTypes(this).filter(t => t !== name);
+    let n = 0;
+    this._forEachExam(ex => { if (getExamType(ex) === name) { delete ex.type; n++; } });
+    this._retargetGradeWeights(name, null, 'Exam');
+    return n;
   }
 
   countAssignmentsOfType(type) {
@@ -2804,7 +3441,7 @@ class HoldCoursePlugin extends Plugin {
     return n;
   }
 
-  _retargetGradeWeights(oldName, newName) {
+  _retargetGradeWeights(oldName, newName, mergeInto = 'Other') {
     for (const sem of (this.data.semesters || [])) {
       for (const cls of (sem.classes || [])) {
         const w = cls.gradeWeights;
@@ -2812,7 +3449,7 @@ class HoldCoursePlugin extends Plugin {
         if (newName) w[newName] = w[oldName];
         else {
           const add = Number(w[oldName]) > 0 ? Number(w[oldName]) : 0;
-          if (add) w.Other = (Number(w.Other) > 0 ? Number(w.Other) : 0) + add;
+          if (add) w[mergeInto] = (Number(w[mergeInto]) > 0 ? Number(w[mergeInto]) : 0) + add;
         }
         delete w[oldName];
         if (!Object.keys(w).length) delete cls.gradeWeights;
@@ -3069,13 +3706,16 @@ class HoldCoursePlugin extends Plugin {
       grade: '',
       status: 'not-started',
     };
+    if (data.type && data.type !== 'Exam') exam.type = data.type;
     cls.exams.push(exam);
     return exam;
   }
 
   updateExam(semesterId, classId, examId, updates) {
     const exam = this.findExam(semesterId, classId, examId);
-    if (exam) Object.assign(exam, updates);
+    if (!exam) return;
+    Object.assign(exam, updates);
+    if ('type' in updates && (!updates.type || updates.type === 'Exam')) delete exam.type;
   }
 
   deleteExam(semesterId, classId, examId) {
@@ -3105,13 +3745,17 @@ class HoldCoursePlugin extends Plugin {
       url: (data.url || '').trim(),
       notes: '',
     };
+    if (RESOURCE_ROLES[data.role]) resource.role = data.role; // #44 C
     sem.resources.push(resource);
     return resource;
   }
 
   updateResource(semesterId, resourceId, updates) {
     const resource = this.findResource(semesterId, resourceId);
-    if (resource) Object.assign(resource, updates);
+    if (!resource) return;
+    Object.assign(resource, updates);
+    // #44 C: presence-based — a blank role removes the key.
+    if ('role' in updates && !RESOURCE_ROLES[updates.role]) delete resource.role;
   }
 
   // #51: every assignment in the semester that links this resource as its
@@ -3195,6 +3839,25 @@ class HoldCourseSettingTab extends PluginSettingTab {
     this._renderReadingPace(containerEl);
     this._renderGrades(containerEl);
     this._renderAssignmentTypes(containerEl);
+    this._renderExamTypes(containerEl);
+    this._renderSyllabus(containerEl);
+  }
+
+  // #44: where exported syllabi go. Absent means the vault root.
+  _renderSyllabus(containerEl) {
+    new Setting(containerEl).setName('Syllabus').setHeading();
+    new Setting(containerEl)
+      .setName('Syllabus folder')
+      .setDesc('Where exported syllabi are saved. Leave blank for the top of the vault. The folder is created if it doesn\'t exist.')
+      .addText(text => {
+        text.setPlaceholder('Vault root');
+        text.setValue(this.plugin.data.settings.syllabusFolder || '');
+        text.onChange(async v => {
+          if (v.trim()) this.plugin.data.settings.syllabusFolder = v.trim();
+          else delete this.plugin.data.settings.syllabusFolder;
+          await this.plugin.save();
+        });
+      });
   }
 
   // #67: the grading scale every class uses unless it has its own. Absent
@@ -3296,14 +3959,61 @@ class HoldCourseSettingTab extends PluginSettingTab {
         }));
     }
   }
+
+  // Exam types: built-ins are named in the description; custom ones can be
+  // renamed or deleted, like assignment types. New ones come from the Type
+  // menu in Add/Edit exam.
+  _renderExamTypes(containerEl) {
+    const plugin = this.plugin;
+    const custom = getExamTypes(plugin).filter(t => getCustomExamTypes(plugin).includes(t));
+    new Setting(containerEl)
+      .setName('Exam types')
+      .setDesc('Built in: ' + EXAM_TYPES.join(', ') + ". Each type gets its own weight in a class's Grades tab. " + (custom.length
+        ? 'Your own types are below. Renaming one updates every exam that uses it.'
+        : 'Add your own with New type… in the Type menu when adding or editing an exam.'))
+      .setHeading();
+
+    for (const type of custom) {
+      const n = plugin.countExamsOfType(type);
+      new Setting(containerEl)
+        .setName(type)
+        .setDesc(`${n} exam${n === 1 ? '' : 's'}`)
+        .addExtraButton(b => b.setIcon('pencil').setTooltip('Rename').onClick(() => {
+          new AssignmentTypeNameModal(this.app, {
+            title: 'Rename type',
+            value: type,
+            button: 'Rename',
+            placeholder: TYPE_KINDS.exam.placeholder,
+            onSubmit: (raw) => {
+              const r = checkExamTypeName(plugin, raw, type);
+              if (r.error) { new Notice(r.error); return false; }
+              if (r.existing) { new Notice(`There's already a type called ${r.existing}.`); return false; }
+              if (r.name !== type) {
+                plugin.renameCustomExamType(type, r.name);
+                plugin.save();
+                plugin.refreshMainView();
+              }
+              this.display();
+              return true;
+            },
+          }).open();
+        }))
+        .addExtraButton(b => b.setIcon('trash').setTooltip('Delete').onClick(() => {
+          new DeleteAssignmentTypeModal(this.app, plugin, type, () => {
+            plugin.refreshMainView();
+            this.display();
+          }, 'exam').open();
+        }));
+    }
+  }
 }
 
 // #62: one small modal for naming a type, used by New type… and Rename.
 // onSubmit(raw) returns true to close.
 class AssignmentTypeNameModal extends Modal {
-  constructor(app, { title, value, button, onSubmit }) {
+  constructor(app, { title, value, button, onSubmit, placeholder }) {
     super(app);
-    this.opts = { title, value, button, onSubmit };
+    this.opts = { title, value, button, onSubmit, placeholder: placeholder || TYPE_KINDS.assignment.placeholder };
     this.value = value || '';
   }
 
@@ -3314,7 +4024,7 @@ class AssignmentTypeNameModal extends Modal {
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: this.opts.title });
     const submit = () => { if (this.opts.onSubmit(this.value)) this.close(); };
     new Setting(contentEl).setName('Name').addText(text => {
-      text.setPlaceholder('Lab, Presentation, Quiz').setValue(this.value).onChange(v => this.value = v);
+      text.setPlaceholder(this.opts.placeholder).setValue(this.value).onChange(v => this.value = v);
       text.inputEl.maxLength = MAX_TYPE_NAME;
       text.inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
       setTimeout(() => { text.inputEl.focus(); text.inputEl.select(); }, 0);
@@ -3330,11 +4040,13 @@ class AssignmentTypeNameModal extends Modal {
 }
 
 class DeleteAssignmentTypeModal extends Modal {
-  constructor(app, plugin, type, onDelete) {
+  // kind 'exam': exams fall back to Exam and its weight goes to Exam's.
+  constructor(app, plugin, type, onDelete, kind = 'assignment') {
     super(app);
     this.plugin = plugin;
     this.type = type;
     this.onDelete = onDelete;
+    this.kind = kind;
   }
 
   onOpen() {
@@ -3342,12 +4054,15 @@ class DeleteAssignmentTypeModal extends Modal {
     contentEl.empty();
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Delete type' });
-    const n = this.plugin.countAssignmentsOfType(this.type);
+    const exam = this.kind === 'exam';
+    const noun = exam ? 'exam' : 'assignment';
+    const fallback = exam ? 'Exam' : 'Other';
+    const n = exam ? this.plugin.countExamsOfType(this.type) : this.plugin.countAssignmentsOfType(this.type);
     contentEl.createEl('p', {
       cls: 'hc-modal-body',
       text: n
-        ? `${n} assignment${n === 1 ? ' uses' : 's use'} ${this.type}. ${n === 1 ? 'It' : 'They'}'ll become Other.`
-        : `No assignments use ${this.type}.`,
+        ? `${n} ${noun}${n === 1 ? ' uses' : 's use'} ${this.type}. ${n === 1 ? 'It' : 'They'}'ll become ${fallback}.`
+        : `No ${noun}s use ${this.type}.`,
     });
     // #67
     const wc = this.plugin.countClassesWeightingType(this.type);
@@ -3355,8 +4070,8 @@ class DeleteAssignmentTypeModal extends Modal {
       contentEl.createEl('p', {
         cls: 'hc-modal-body',
         text: wc === 1
-          ? `One class gives ${this.type} a weight. It'll be added to that class's Other weight.`
-          : `${wc} classes give ${this.type} a weight. In each, it'll be added to the Other weight.`,
+          ? `One class gives ${this.type} a weight. It'll be added to that class's ${fallback} weight.`
+          : `${wc} classes give ${this.type} a weight. In each, it'll be added to the ${fallback} weight.`,
       });
     }
     const footer = contentEl.createDiv('hc-modal-footer');
@@ -3364,7 +4079,8 @@ class DeleteAssignmentTypeModal extends Modal {
     cancelBtn.addEventListener('click', () => this.close());
     const deleteBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Delete type' });
     deleteBtn.addEventListener('click', async () => {
-      this.plugin.deleteCustomType(this.type);
+      if (exam) this.plugin.deleteCustomExamType(this.type);
+      else this.plugin.deleteCustomType(this.type);
       await this.plugin.save();
       this.onDelete();
       this.close();
@@ -4214,6 +4930,13 @@ class HoldCourseView extends ItemView {
         this.render();
       }).open();
     });
+
+    // #44: syllabus export (step 1: header and schedule).
+    const sylBtn = codeRow.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    const sylIcon = sylBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(sylIcon, 'file-output');
+    sylBtn.createSpan({ text: 'Syllabus' });
+    sylBtn.addEventListener('click', () => this.plugin.exportSyllabus(cls, sem));
 
     const nameRow = header.createDiv('hc-class-header-name');
     nameRow.createSpan({ cls: 'hc-class-header-name-text', text: cls.name });
@@ -5661,7 +6384,7 @@ class HoldCourseView extends ItemView {
     wSec.createDiv({ cls: 'hc-grades-desc', text: 'Percent of the final grade for each type, from your syllabus. Leave them all blank to count every graded item equally.' });
     const counts = {};
     for (const { category } of getGradedItems(cls)) counts[category] = (counts[category] || 0) + 1;
-    const types = [...getAssignmentTypes(this.plugin).filter(t => t !== 'Reading'), 'Exam'];
+    const types = [...getAssignmentTypes(this.plugin).filter(t => t !== 'Reading'), ...getExamTypes(this.plugin)];
     for (const k of Object.keys(cls.gradeWeights || {})) if (!types.includes(k)) types.push(k);
     for (const k of Object.keys(counts)) if (!types.includes(k)) types.push(k);
     for (const type of types) {
@@ -5806,6 +6529,7 @@ class HoldCourseView extends ItemView {
     const titleRow = info.createDiv('hc-title-flag-row');
     titleRow.createDiv({ cls: 'hc-exam-name', text: exam.title });
     renderTermWindowFlag(titleRow, exam.dueDate, cls, isDoneLike(exam.status));
+    if (getExamType(exam) !== 'Exam') info.createDiv({ cls: 'hc-exam-type', text: getExamType(exam) });
 
     if (isDoneLike(exam.status)) {
       if ((exam.grade || '').trim() && isClassGraded(cls)) {
@@ -5889,10 +6613,9 @@ class HoldCourseView extends ItemView {
     titleRow.createDiv({ cls: 'hc-lecture-detail-title', text: exam.title });
     renderTermWindowFlag(titleRow, exam.dueDate, cls, isDoneLike(exam.status));
 
-    // Due date
-    if (exam.dueDate) {
-      content.createDiv({ cls: 'hc-lecture-detail-date', text: formatDateLong(exam.dueDate) });
-    }
+    // Type and due date
+    const examMeta = [getExamType(exam), exam.dueDate ? formatDateLong(exam.dueDate) : ''].filter(Boolean).join(' · ');
+    content.createDiv({ cls: 'hc-lecture-detail-date', text: examMeta });
 
     // Actions row
     const actionsRow = content.createDiv('hc-lecture-detail-actions');
@@ -5956,29 +6679,10 @@ class HoldCourseView extends ItemView {
   // ─── Library list ─────────────────────────────────────────────────────────
 
   _renderLibraryList(content, sem, cls, color) {
-    let resources = [...(sem.resources || [])];
-
     // Migrate stale 'class' sort key
     if (sem.librarySort === 'class') sem.librarySort = 'alpha-asc';
     const sortKey = sem.librarySort || 'alpha-asc';
-
-    // Apply class filter
-    if (this.libraryFilterClassId) {
-      resources = resources.filter(r => (r.classIds || []).includes(this.libraryFilterClassId));
-    }
-
-    const statusOrder = { 'in-progress': 0, 'unread': 1, 'done': 2 };
-    if (sortKey === 'alpha-asc') {
-      resources.sort((a, b) => a.title.localeCompare(b.title));
-    } else if (sortKey === 'alpha-desc') {
-      resources.sort((a, b) => b.title.localeCompare(a.title));
-    } else if (sortKey === 'status') {
-      resources.sort((a, b) => {
-        const sa = statusOrder[a.status] ?? 1;
-        const sb = statusOrder[b.status] ?? 1;
-        return sa !== sb ? sa - sb : a.title.localeCompare(b.title);
-      });
-    }
+    const resources = getLibraryOrder(sem, this.libraryFilterClassId);
 
     const sortLabels = { 'alpha-asc': 'A–Z', 'alpha-desc': 'Z–A', 'status': 'By status' };
     const sortCycle  = { 'alpha-asc': 'alpha-desc', 'alpha-desc': 'status', 'status': 'alpha-asc' };
@@ -6113,8 +6817,9 @@ class HoldCourseView extends ItemView {
 
     const color = getColor(cls.colorIndex);
 
-    // Back button
-    const backBtn = content.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
+    // Top bar: back button + prev/next nav (same layout as Lecture detail)
+    const topbar = content.createDiv('hc-detail-topbar');
+    const backBtn = topbar.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
     backBtn.createSpan({ text: cls.code });
@@ -6122,6 +6827,31 @@ class HoldCourseView extends ItemView {
       this.currentTab = 'Library';
       this.navigate('class', cls.id);
     });
+
+    // Steps through the Library list as it was showing: same class filter and
+    // sort. Opened from somewhere the filter hides it (an assignment's book
+    // link), the arrows walk the whole Library instead. Hidden for one item.
+    let order = getLibraryOrder(sem, this.libraryFilterClassId);
+    if (!order.includes(resource)) order = getLibraryOrder(sem, null);
+    const ri = order.indexOf(resource);
+    if (order.length > 1 && ri !== -1) {
+      const navEl = topbar.createDiv('hc-detail-nav');
+      const prevRes = order[ri - 1] || null;
+      const nextRes = order[ri + 1] || null;
+      const prevBtn = navEl.createEl('button', { cls: 'hc-detail-nav-btn' });
+      setIcon(prevBtn, 'chevron-left');
+      prevBtn.disabled = !prevRes;
+      prevBtn.addEventListener('click', () => {
+        if (prevRes) this.navigate('resource', cls.id, null, null, null, prevRes.id);
+      });
+      navEl.createSpan({ cls: 'hc-detail-nav-pos', text: `${ri + 1} / ${order.length}` });
+      const nextBtn = navEl.createEl('button', { cls: 'hc-detail-nav-btn' });
+      setIcon(nextBtn, 'chevron-right');
+      nextBtn.disabled = !nextRes;
+      nextBtn.addEventListener('click', () => {
+        if (nextRes) this.navigate('resource', cls.id, null, null, null, nextRes.id);
+      });
+    }
 
     // Title
     content.createDiv({ cls: 'hc-lecture-detail-title', text: resource.title });
@@ -6183,6 +6913,11 @@ class HoldCourseView extends ItemView {
     if (resource.type) {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Type' });
       content.createDiv({ cls: 'hc-resource-detail-type', text: resource.type });
+    }
+    // #44 C: silent when absent.
+    if (RESOURCE_ROLES[resource.role]) {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'Use' });
+      content.createDiv({ cls: 'hc-resource-detail-type', text: RESOURCE_ROLES[resource.role] });
     }
 
     // Sources
@@ -7430,7 +8165,7 @@ class HoldCourseView extends ItemView {
 
       const info = row.createDiv('hc-cal-popover-info');
       const kindText = item.kind === 'lecture' ? 'Lecture'
-        : item.kind === 'exam' ? 'Exam'
+        : item.kind === 'exam' ? getExamType(item.exam)
         : (item.assignment.type || 'Assignment');
       info.createSpan({ cls: 'hc-cal-popover-kind',  text: kindText });
       info.createDiv({  cls: 'hc-cal-popover-title', text: item.title });
@@ -7833,11 +8568,11 @@ function renderClassGradeFields(contentEl, formData) {
   new Setting(contentEl).setName('Track grades').addToggle(toggle => {
     toggle.setValue(formData.trackGrades).onChange(v => {
       formData.trackGrades = v;
-      gradeFields.toggleClass('hc-hidden', !v);
+      gradeFields.toggle(v);
     });
   });
   contentEl.appendChild(gradeFields);
-  gradeFields.toggleClass('hc-hidden', !formData.trackGrades);
+  gradeFields.toggle(!!formData.trackGrades);
   new Setting(gradeFields).setName('Credits').addText(text => {
     text.inputEl.type = 'number';
     text.inputEl.min = '0';
@@ -8191,6 +8926,7 @@ class EditClassModal extends Modal {
       attendanceMin: cls.attendanceMin != null ? String(cls.attendanceMin) : '',
       online: isClassOnline(cls),
       colorIndex: typeof cls.colorIndex === 'number' ? cls.colorIndex % COLOR_PALETTE.length : 0,
+      syllabusNote: cls.syllabusNote || '', // #44 A
     };
     this.origColorIndex = this.formData.colorIndex;
     this.colorTouched = false; // #69
@@ -8251,6 +8987,8 @@ class EditClassModal extends Modal {
       text.inputEl.type = 'url';
     });
 
+    this._renderSyllabusNoteField(contentEl); // #44 A
+
     // #12, #67
     renderClassGradeFields(contentEl, this.formData);
 
@@ -8258,6 +8996,73 @@ class EditClassModal extends Modal {
       this.formData.colorIndex = i;
       this.colorTouched = true; // #69
     });
+  }
+
+  // #44 A: the note whose "## " sections go into the exported syllabus.
+  // Same read-only display + Browse / Open / Remove as the other note links;
+  // Create makes one from the template. Open and Create save the form, close
+  // the dialog, and open the note in a new tab (user, 2026-10-21: the dialog
+  // staying open over the note was awkward). If the form doesn't validate,
+  // the dialog stays open with the usual notice; a note Create just made is
+  // linked in the form, ready for the next Save.
+  _saveAndOpenNote(path) {
+    if (this._save()) this.app.workspace.openLinkText(path, '', 'tab');
+  }
+
+  _renderSyllabusNoteField(contentEl) {
+    const setting = new Setting(contentEl)
+      .setName('Syllabus note')
+      .setDesc('Your text for the syllabus: description, objectives, policies, and so on. Export syllabus reads this note but never changes it. Delete the Readings, Grading, or Schedule heading to leave that section out.');
+    // Same sizing as the Linked note field: the filename takes the room,
+    // buttons stay their natural width (on phones they otherwise stretch).
+    setting.settingEl.addClass('hc-linked-note-setting', 'hc-syllabus-note-setting');
+    const draw = () => {
+      setting.controlEl.empty();
+      const path = (this.formData.syllabusNote || '').trim();
+      if (path) {
+        const exists = !!this.app.vault.getAbstractFileByPath(path);
+        setting.controlEl.createDiv({
+          cls: 'hc-assign-link-display',
+          text: exists ? path.split('/').pop() : `${path.split('/').pop()} (not found)`,
+        });
+        if (exists) {
+          setting.controlEl.createEl('button', { text: 'Open' }).addEventListener('click', () => this._saveAndOpenNote(path));
+        }
+        setting.controlEl.createEl('button', { text: 'Remove' }).addEventListener('click', () => {
+          this.formData.syllabusNote = '';
+          draw();
+        });
+      } else {
+        setting.controlEl.createEl('button', { text: 'Browse' }).addEventListener('click', () => {
+          new VaultLinkSuggestModal(this.app, selected => {
+            this.formData.syllabusNote = selected;
+            draw();
+          }).open();
+        });
+        setting.controlEl.createEl('button', { text: 'Create' }).addEventListener('click', () => {
+          const target = { ...this.cls, code: this.formData.code.trim() || this.cls.code };
+          const create = async (mode) => {
+            try {
+              this.formData.syllabusNote = await this.plugin.createSyllabusNote(target, mode);
+            } catch (e) {
+              console.error('Hold Course: syllabus note', e);
+              new Notice(`Couldn't create the syllabus note: ${e.message || e}`);
+              return;
+            }
+            draw();
+            this._saveAndOpenNote(this.formData.syllabusNote);
+          };
+          // A note from before (e.g. after Remove) is still there: ask.
+          const existing = this.plugin.syllabusNoteDefaultPath(target);
+          if (this.app.vault.getAbstractFileByPath(existing)) {
+            new SyllabusNoteChoiceModal(this.app, existing, create).open();
+          } else {
+            create('new');
+          }
+        });
+      }
+    };
+    draw();
   }
 
   _renderPeopleFields(contentEl) {
@@ -8379,6 +9184,9 @@ class EditClassModal extends Modal {
     // #25: presence-based, same as notGraded.
     if (this.formData.online) this.cls.online = true;
     else delete this.cls.online;
+    // #44 A: presence-based.
+    if ((this.formData.syllabusNote || '').trim()) this.cls.syllabusNote = this.formData.syllabusNote.trim();
+    else delete this.cls.syllabusNote;
     // #53 / Discussion #18: only a swatch tap marks the color as picked, so
     // opening and saving Edit class never pins an automatic color.
     // #69: a tap, not a change. Comparing to the opening index meant tapping
@@ -8391,6 +9199,7 @@ class EditClassModal extends Modal {
     }
     this.onSave();
     this.close();
+    return true; // #44 A: lets Open / Create know the save went through
   }
 
   onClose() { this.contentEl.empty(); }
@@ -8470,6 +9279,153 @@ class MoveClassModal extends Modal {
 // clear (keep only offered when the class has no start date to shift from);
 // one "Keep notes and note links" toggle, on by default; progress always
 // resets; the rest of the class setup comes along unchanged.
+// #44 A: Create, when "<code> Syllabus notes.md" already exists (it was
+// removed from the class, or made for another class with the same code).
+// onChoose('existing' | 'new'); Cancel does nothing. (user, 2026-10-21)
+class SyllabusNoteChoiceModal extends Modal {
+  constructor(app, path, onChoose) {
+    super(app);
+    this.path = path;
+    this.onChoose = onChoose;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'A syllabus note already exists' });
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: `${this.path} is already in your vault. Use it, or start a new note from the template? Starting a new one leaves the old note where it is.`,
+    });
+    const footer = contentEl.createDiv('hc-modal-footer');
+    footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' }).addEventListener('click', () => this.close());
+    footer.createEl('button', { cls: 'hc-btn', text: 'Start a new one' }).addEventListener('click', () => this._pick('new'));
+    footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: 'Use existing note' }).addEventListener('click', () => this._pick('existing'));
+  }
+
+  _pick(mode) {
+    this.close();
+    this.onChoose(mode);
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// #44: export dialog. The possibly private fields are remembered per class in
+// cls.syllabusExport ({ keyConcepts, noteTitles, itemNotes }: only true keys
+// stored; the key is removed when all are off). If an earlier export exists,
+// the dialog asks: Replace, or Keep both. Never overwrites silently, and never
+// writes to the syllabus note.
+class SyllabusExportModal extends Modal {
+  constructor(app, plugin, cls, sem) {
+    super(app);
+    this.plugin = plugin;
+    this.cls = cls;
+    this.sem = sem;
+    const o = cls.syllabusExport || {};
+    this.opts = { keyConcepts: !!o.keyConcepts, noteTitles: !!o.noteTitles, itemNotes: !!o.itemNotes };
+  }
+
+  // The note is read first so the dialog can say which generated sections
+  // its headings leave out.
+  async onOpen() {
+    try { this.noteText = await this.plugin.readSyllabusNote(this.cls); } catch (e) { this.noteText = null; }
+    this._renderOptions();
+  }
+
+  onClose() { this.contentEl.empty(); }
+
+  _renderOptions() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Export syllabus' });
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: `Makes a note with the course details and schedule for ${this.cls.code}. Statuses, grades, and progress are never included.`,
+    });
+    contentEl.createEl('p', { cls: 'hc-modal-body', text: 'Also include:' });
+    const toggle = (key, name, desc) => new Setting(contentEl).setName(name).setDesc(desc)
+      .addToggle(t => t.setValue(this.opts[key]).onChange(v => { this.opts[key] = v; }));
+    toggle('keyConcepts', 'Key Concepts & Lesson Goal', 'Shown under each lecture.');
+    toggle('noteTitles', 'Linked notes', 'Links to the notes attached to lectures and assignments.');
+    toggle('itemNotes', 'Assignment and exam notes', 'Shown under each assignment and exam.');
+    // #44 A: say plainly which note is read and which is written.
+    const notePath = this.plugin.syllabusNotePath(this.cls);
+    const fileLine = (label, text, warn) => {
+      const p = contentEl.createEl('p', { cls: warn ? 'hc-modal-body hc-modal-warning' : 'hc-modal-body' });
+      p.createEl('strong', { text: label + ' ' });
+      p.appendText(text);
+    };
+    fileLine('Reads from:', notePath
+      ? `${notePath} (your syllabus note; not changed)`
+      : (this.cls.syllabusNote
+        ? `class details only. The syllabus note (${this.cls.syllabusNote}) wasn't found.`
+        : 'class details only. To add a description, objectives, or policies, link a syllabus note in Edit class → Details.'));
+    fileLine('Writes to:', `${this.plugin.syllabusPath(this.cls)}. You can change the folder in Hold Course settings.`);
+    const omitted = syllabusOmitted(this.cls, this.sem, this.noteText, getGradeScale(this.plugin, this.cls));
+    if (omitted.length) {
+      const head = h => `"## ${h}" (or ${SYLLABUS_EXAMPLES[h].join(', ')})`;
+      fileLine('Not included:', omitted.length === 1
+        ? `${omitted[0]}. Add a ${head(omitted[0])} heading to the syllabus note to include it.`
+        : `${omitted.join(', ')}. Add a heading to the syllabus note for each one you want: ${omitted.map(head).join('; ')}.`, true);
+    }
+
+    const footer = contentEl.createDiv('hc-modal-footer');
+    footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' }).addEventListener('click', () => this.close());
+    footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: 'Export' })
+      .addEventListener('click', () => this._export());
+  }
+
+  async _export() {
+    const on = Object.keys(this.opts).filter(k => this.opts[k]);
+    if (on.length) this.cls.syllabusExport = Object.fromEntries(on.map(k => [k, true]));
+    else delete this.cls.syllabusExport;
+    await this.plugin.save();
+    if (this.app.vault.getAbstractFileByPath(this.plugin.syllabusPath(this.cls))) this._renderConflict();
+    else this._write('new');
+  }
+
+  _renderConflict() {
+    const { contentEl } = this;
+    contentEl.empty();
+    const path = this.plugin.syllabusPath(this.cls);
+    // #44 A: the export's name is the syllabus note's own — never offer to
+    // overwrite the note.
+    const isNote = path === this.plugin.syllabusNotePath(this.cls);
+    const name = path.split('/').pop();
+    const notePath = this.plugin.syllabusNotePath(this.cls);
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: isNote ? 'Name already used' : `${name} is from an earlier export` });
+    if (isNote) {
+      contentEl.createEl('p', {
+        cls: 'hc-modal-body',
+        text: `${name} is this class's syllabus note, so the export can't use that name. Keep both saves the export as a separate copy.`,
+      });
+    } else {
+      contentEl.createEl('p', { cls: 'hc-modal-body', text: 'Replace it with a new export?' });
+      contentEl.createEl('p', {
+        cls: 'hc-modal-body',
+        text: (notePath ? `Your syllabus note (${notePath.split('/').pop()}) isn't changed. ` : '')
+          + 'Only edits made directly in the old export are lost.',
+      });
+    }
+    const footer = contentEl.createDiv('hc-modal-footer');
+    footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' }).addEventListener('click', () => this.close());
+    footer.createEl('button', { cls: isNote ? 'hc-btn hc-btn--primary' : 'hc-btn', text: 'Keep both' })
+      .addEventListener('click', () => this._write('copy'));
+    if (!isNote) {
+      footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: 'Replace' })
+        .addEventListener('click', () => this._write('overwrite'));
+    }
+  }
+
+  _write(mode) {
+    this.close();
+    this.plugin.writeSyllabus(this.cls, this.sem, this.opts, mode);
+  }
+}
+
 class CopyClassModal extends Modal {
   constructor(app, plugin, sourceSemesterId, cls, onCopy) {
     super(app);
@@ -9860,7 +10816,7 @@ class AddExamModal extends Modal {
     this.semesterId = semesterId;
     this.cls = cls;
     this.onSave = onSave;
-    this.formData = { title: '', dueDate: '' };
+    this.formData = { title: '', dueDate: '', type: 'Exam' };
   }
 
   onOpen() {
@@ -9873,6 +10829,10 @@ class AddExamModal extends Modal {
     new Setting(contentEl).setName('Title').addText(text => {
       text.setPlaceholder('e.g. Midterm Exam').onChange(v => this.formData.title = v);
       text.inputEl.focus();
+    });
+
+    addTypeDropdown(new Setting(contentEl).setName('Type'), this.plugin, {
+      kind: 'exam', value: this.formData.type, onChange: v => this.formData.type = v,
     });
 
     new Setting(contentEl).setName('Due date').addText(text => {
@@ -9905,6 +10865,7 @@ class EditExamModal extends Modal {
     this.formData = {
       title: exam.title || '',
       dueDate: exam.dueDate || '',
+      type: getExamType(exam),
     };
   }
 
@@ -9918,6 +10879,10 @@ class EditExamModal extends Modal {
     new Setting(contentEl).setName('Title').addText(text => {
       text.setValue(this.formData.title).onChange(v => this.formData.title = v);
       text.inputEl.focus();
+    });
+
+    addTypeDropdown(new Setting(contentEl).setName('Type'), this.plugin, {
+      kind: 'exam', value: this.formData.type, onChange: v => this.formData.type = v,
     });
 
     new Setting(contentEl).setName('Due date').addText(text => {
@@ -9934,6 +10899,7 @@ class EditExamModal extends Modal {
     this.plugin.updateExam(this.semesterId, this.classId, this.exam.id, {
       title: this.formData.title.trim(),
       dueDate: this.formData.dueDate,
+      type: this.formData.type,
     });
     this.onSave();
     this.close();
@@ -10092,7 +11058,7 @@ class AddResourceModal extends Modal {
     this.semesterId = semesterId;
     this.classes = classes;
     this.onSave = onSave;
-    this.formData = { title: '', author: '', type: '', classIds: [], status: 'unread', vaultLink: '', url: '' };
+    this.formData = { title: '', author: '', type: '', role: '', classIds: [], status: 'unread', vaultLink: '', url: '' };
   }
 
   onOpen() {
@@ -10124,6 +11090,7 @@ class AddResourceModal extends Modal {
       drop.setValue(this.formData.type);
       drop.onChange(v => this.formData.type = v);
     });
+    addResourceRoleSetting(contentEl, this.formData); // #44 C
 
     new Setting(contentEl).setName('Status').addDropdown(drop => {
       drop.addOption('unread', 'Unread');
@@ -10212,6 +11179,7 @@ class EditResourceModal extends Modal {
       title: resource.title || '',
       author: resource.author || '',
       type: resource.type || '',
+      role: resource.role || '',
       classIds: [...(resource.classIds || [])],
       status: resource.status || 'unread',
       vaultLink: resource.vaultLink || '',
@@ -10248,6 +11216,7 @@ class EditResourceModal extends Modal {
       drop.setValue(this.formData.type);
       drop.onChange(v => this.formData.type = v);
     });
+    addResourceRoleSetting(contentEl, this.formData); // #44 C
 
     new Setting(contentEl).setName('Status').addDropdown(drop => {
       drop.addOption('unread', 'Unread');
@@ -10321,6 +11290,7 @@ class EditResourceModal extends Modal {
       title: this.formData.title.trim(),
       author: this.formData.author.trim(),
       type: this.formData.type.trim(),
+      role: this.formData.role,
       classIds: this.formData.classIds,
       status: this.formData.status,
       vaultLink: this.formData.vaultLink.trim(),
