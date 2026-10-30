@@ -69,6 +69,12 @@
   font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
+  /* 2026-10-30: when the breadcrumb doesn't fit, the semester is the part
+     that gives way ("Fall 20…"), so the class and the page you're on stay
+     readable. The other segments keep their full width. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Nav */
@@ -131,6 +137,23 @@ body.is-phone .hc-nav-btn {
   flex: 1;
   justify-content: center;
   padding: 5px 8px;
+}
+
+/* 2026-10-30: on a phone the "HoldCourse" logo took about 40% of the
+   breadcrumb's line, and Obsidian's view header right above it already says
+   "Hold Course". Hide it there so the breadcrumb gets the whole line. On the
+   top-level screens the breadcrumb is empty, so drop that line too and the
+   toolbar is just the nav row (its height is measured, see #39). */
+body.is-phone .hc-logo {
+  display: none;
+}
+
+body.is-phone .hc-breadcrumb {
+  margin: 0;
+}
+
+body.is-phone .hc-breadcrumb:empty {
+  display: none;
 }
 
 /* --- Content area ---------------------------------------------------------- */
@@ -459,6 +482,9 @@ body.is-mobile .hc-card-more-btn { opacity: 1; }
   margin-left: 4px;
 }
 
+/* 1.14.0: Audit / Self-paced chips after a meeting time get the same space. */
+.hc-class-days-time + .hc-class-mode-chip { margin-left: 4px; }
+
 .hc-class-schedule-row {
   display: flex;
   gap: 14px;
@@ -690,11 +716,19 @@ body.is-phone .hc-class-person + .hc-class-person {
    Edit class together rather than duplicating per modal. Do not remove the
    overflow-x above to "fix" this — it is load-bearing for #13.
     */
+/* 2026-10-30: the stray gray bar at the right end of this row was a
+   vertical scrollbar. Tabs used margin-bottom:-1px to sit on the row's
+   border-bottom, which made them 1px taller than the row's inside; with
+   overflow-y forced to auto (see #45), that 1px got a scrollbar. The line is
+   now an inset shadow inside the row, so tabs cover it without overhanging,
+   and overflow-y is hidden. Same look: the active tab's border still covers
+   the line. */
 .hc-tab-row {
   display: flex;
-  border-bottom: 1px solid var(--background-modifier-border);
+  box-shadow: inset 0 -1px 0 var(--background-modifier-border);
   margin-bottom: 24px;
   overflow-x: auto;
+  overflow-y: hidden;
   flex-shrink: 0;
 }
 
@@ -706,7 +740,6 @@ body.is-phone .hc-class-person + .hc-class-person {
   border-bottom: 2px solid transparent;
   cursor: pointer;
   color: var(--text-muted);
-  margin-bottom: -1px;
   font-family: inherit;
   transition: color 0.1s;
 }
@@ -2161,6 +2194,92 @@ body.is-mobile .hc-assign-note-input-wrap {
   flex-shrink: 0;
 }
 
+/* "Required · Kindle" under the author: smaller, fainter, italic.
+   2026-10-30: moved from under the chips on the right, which crowded the
+   row on a phone. */
+.hc-resource-meta {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-faint);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 2026-10-30: on a phone, Add resource ran off the right edge. The row can
+   scroll sideways, but the swipe is taken by Obsidian's sidebar gesture, so
+   it read as clipped. Wrap instead (the #32 precedent: nothing hidden, no
+   scroll to discover). A row that fits doesn't change. The right-hand group
+   keeps to the right on its own line, and wraps too if it has to. */
+body.is-phone .hc-resource-controls,
+body.is-phone .hc-lecture-controls,
+body.is-phone .hc-assign-controls {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+body.is-phone .hc-resource-controls .hc-global-right-controls,
+body.is-phone .hc-assign-controls .hc-global-right-controls,
+body.is-phone .hc-lecture-controls .hc-lecture-controls-right {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+/* The reminder line under the author: small, muted, with a note icon. */
+.hc-resource-reminder {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-top: 3px;
+  min-width: 0;
+}
+
+.hc-resource-reminder > span:last-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-resource-reminder-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.hc-resource-reminder-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Resource page: the one-line Reminder field above Notes. */
+.hc-resource-reminder-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 4px;
+}
+
+/* Add resource: "Already in your Library" warning under Author. */
+.hc-resource-dup {
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 4px 0 8px;
+  line-height: 1.5;
+}
+
+.hc-resource-dup:empty { display: none; }
+
+.hc-resource-dup button {
+  margin-left: 4px;
+}
+
 .hc-resource-class-chips {
   display: flex;
   gap: 4px;
@@ -3302,6 +3421,63 @@ body.is-mobile .hc-bulk-textarea {
   color: var(--color-orange, #BA7517);
 }
 
+/* Bulk add resources (2026-10-29): checkbox, title over author, and a note
+   on the right ("New", "In Library: tag to …", "Check: like …"). */
+.hc-bulk-resource-modal { width: auto; }
+
+.hc-bulk-res-row {
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+.hc-bulk-res-check {
+  flex: 0 0 auto;
+  width: 14px;
+  margin: 0;
+}
+
+.hc-bulk-res-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.hc-bulk-res-text .hc-bulk-row-title { display: block; }
+
+.hc-bulk-res-author {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-bulk-res-author--none { color: var(--text-faint); font-style: italic; }
+
+.hc-bulk-res-note {
+  flex: 0 1 auto;
+  max-width: 45%;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+.hc-bulk-res-note--tag { color: var(--text-accent); }
+.hc-bulk-res-note--check { color: var(--color-orange, #BA7517); }
+
+/* Keyboard focus on dropdowns in HC dialogs (2026-10-29). Some themes
+   (Lumen) draw a dropdown as bare text and mark focus only by tinting it,
+   which is close to invisible, so Tab seemed to vanish on Type, Status, and
+   Required or recommended. An outline, because Lumen forces box-shadow off;
+   box-shadow is cleared here so themes that use it don't show two rings.
+   Obsidian's own Settings pages are left alone. */
+.hc-modal select.dropdown:focus-visible {
+  outline: 2px solid var(--background-modifier-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-s, 4px);
+  box-shadow: none;
+}
+
 /* --- Courses view ---------------------------------------------------------- */
 
 .hc-courses-title {
@@ -3514,6 +3690,9 @@ body.is-mobile .hc-bulk-textarea {
 }
 
 .hc-courses-grade--none:hover { background: none; }
+
+/* 1.14.0: "Audit" in place of the dash. Muted, not faint: it's an answer. */
+.hc-courses-grade--audit { color: var(--text-muted); }
 
 /* Phone: Code is hidden (the course name identifies the class), which
    keeps Grade closer to the visible area. Each row is its own grid, so the
@@ -3836,6 +4015,13 @@ body.is-mobile.hc-scaled .hc-content {
 .hc-scale-editor > .hc-btn { align-self: flex-start; margin-top: 4px; }
 
 .hc-settings-scale { padding: 4px 0 16px; }
+
+/* 1.14.0: Settings tabs. Wrap instead of scrolling sideways on a phone. */
+.hc-settings-tabs { flex-wrap: wrap; overflow: visible; margin-bottom: 16px; }
+.hc-settings-tabs .hc-tab--active {
+  color: var(--text-accent);
+  border-bottom-color: var(--interactive-accent);
+}
 
 /* ─── #72 Attendance ─────────────────────────────────────────────────────── */
 .hc-attendance-meta { cursor: pointer; }

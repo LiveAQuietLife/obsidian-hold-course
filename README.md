@@ -21,11 +21,11 @@ Hold Course runs on desktop and mobile.
 
 **Adding a class**
 
-<img src="screenshots/1.13.0-add-a-class.jpg" width="700" alt="Adding a class">
+<img src="screenshots/1.14.0-add-a-class-details.jpg" width="700" alt="Adding a class">
 
 **Adding a class: schedule**
 
-<img src="screenshots/1.13.0-add-a-class-schedule.jpg" width="700" alt="Adding a class: schedule">
+<img src="screenshots/1.14.0-add-a-class-schedule.jpg" width="700" alt="Adding a class: schedule">
 
 **Moving a class**
 
@@ -34,6 +34,10 @@ Hold Course runs on desktop and mobile.
 **Bulk-adding lectures**
 
 <img src="screenshots/1.13.0-lectures-bulk-add.jpg" width="700" alt="Bulk-adding lectures">
+
+**Lecture page: Create a note**
+
+<img src="screenshots/1.14.0-lecture-notes-create-button.jpg" width="700" alt="Lecture page: Create a note">
 
 **Class page: assignments**
 
@@ -61,11 +65,15 @@ Hold Course runs on desktop and mobile.
 
 **Library**
 
-<img src="screenshots/1.13.0-library.jpg" width="700" alt="Library">
+<img src="screenshots/1.14.0-library.jpg" width="700" alt="Library">
 
-**Editing a library resource**
+**Adding a library resource**
 
-<img src="screenshots/1.13.0-edit-library-resource.jpg" width="700" alt="Editing a library resource">
+<img src="screenshots/1.14.0-library-add-resource.jpg" width="700" alt="Adding a library resource">
+
+**Bulk-adding resources**
+
+<img src="screenshots/1.14.0-library-bulk-add.jpg" width="700" alt="Bulk-adding resources">
 
 **Calendar (month)**
 
@@ -90,6 +98,10 @@ Hold Course runs on desktop and mobile.
 **Exported syllabus**
 
 <img src="screenshots/1.13.0-syllabus-exported.jpg" width="700" alt="Exported syllabus">
+
+**Settings: Export**
+
+<img src="screenshots/1.14.0-settings-export-tab.jpg" width="700" alt="Settings: Export">
 
 </details>
 
@@ -118,6 +130,7 @@ Hold Course runs on desktop and mobile.
 - [Courses](#courses)
 - [HC Today Sidebar](#hc-today-sidebar)
 - [Daily Note Agenda](#daily-note-agenda)
+- [Export](#export)
 - [Command Palette Shortcuts](#command-palette-shortcuts)
 - [Linked Notes](#linked-notes)
 - [Settings](#settings)
@@ -139,7 +152,7 @@ Classes are organized into **semesters**. Each class holds its own **lectures**,
 
 ## Installation
 
-Search for **Hold Course** in Obsidian's community plugin browser (*Settings > Community plugins > Browse*), install, and enable it. The plugin adds a **Hold Course** icon to your left ribbon.
+Search for **Hold Course** in Obsidian's community plugin browser (*Settings > Community plugins > Browse*), install, and enable it. The plugin adds two icons to your left ribbon: **Hold Course** (the graduation cap) opens the main tab, and **Hold Course — Today** (the calendar clock) opens the [Today sidebar](#hc-today-sidebar).
 
 ---
 
@@ -197,11 +210,11 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 
 **Adding a class:** Click **+ Add Class** to open the Add Class dialog, organized into three tabs so the form never requires scrolling to find Save:
 
-- **Details** — class name, class code, course page URL, track grades, and (when grades are tracked) credits and final grade
+- **Details** — class name, class code, course page URL, Audit, Track grades, and (when grades are tracked) credits and final grade
 - **People** — professor name and email, office hours, TA name and email and office hours
-- **Schedule** — an Online (no meeting time) toggle, meeting days, location, start/end date, start/end time, a meeting link, and Track attendance with an optional minimum
+- **Schedule** — Self-paced and Online (no meeting time) toggles, meeting days, location, start/end date, start/end time, a meeting link, and Track attendance with an optional minimum
 
-Only the class name is required; fill in the rest as you have it.
+Only the class name is required; fill in the rest as you have it. A class without a code is shown by its name wherever the code would appear.
 
 **Opening a class:** Click the class card. Each class has five tabs: **Lectures**, **Assignments**, **Readings**, **Exams**, and **Library**, plus a sixth, **[Grades](#grades)**, when the class tracks grades.
 
@@ -210,6 +223,15 @@ Only the class name is required; fill in the rest as you have it.
 **Class schedule:** When a class has meeting days, a start and end time, and a start and end date all set, Hold Course knows exactly when that class meets. Log a lecture on a day that matches, and its meeting time is shown automatically — no need to re-enter it per lecture. Leave any one of those fields blank and nothing changes: this is entirely opt-in, and existing classes are unaffected until you fill them in. Times are entered with a custom picker — hour and minute dropdowns with an AM/PM toggle — to match the rest of the plugin.
 
 **Online classes:** For a class with no live meetings, turn on **Online (no meeting time)** at the top of the Schedule tab. Meeting days, times, location, and meeting link are hidden, and the class shows an **Online** tag on its card and in its header instead. Start and end dates still apply, and the course page URL stays on the Details tab. Anything you'd already entered in the hidden fields is kept, not deleted — turn the toggle off and it comes back.
+
+**Audit and self-paced classes:** Turn on **Audit** (Details tab) for a class you're taking without credit, and **Self-paced** (Schedule tab) for one with no set meetings that you work through on your own schedule. A class can be both. Each shows a badge, **Audit** or **Self-paced**, in the class header and on its card.
+
+Each one also changes a related setting for you, which you can change back:
+
+- Turning on **Audit** turns off **Track grades**, so the class has no grades or credits. Credits and final grade are kept, hidden, in case you turn grades back on.
+- Turning on **Self-paced** turns on **Online**, so the meeting fields are hidden.
+
+Turning either one off changes nothing else.
 
 **Lecture progress:** Once you've marked at least one lecture done, the class card shows a progress fraction — lectures completed out of total logged.
 
@@ -277,7 +299,7 @@ A live preview shows every parsed lecture and the date it will land on before an
 
 **Sort order:** Use the sort toggle to switch between oldest-first and newest-first. Dated lectures sort by date. A lecture without a date stays where you added it, so an undated Lecture 1 still comes before a dated Lecture 2. Lecture numbers follow the same order.
 
-**Lecture detail:** Click a lecture to open its detail screen, where you can edit its fields, jot key concepts and lesson goals, link the lecture to a note in your vault, and see every assignment attached to it. Assignments can be added here one at a time or in bulk.
+**Lecture detail:** Click a lecture to open its detail screen, where you can edit its fields, jot key concepts and lesson goals, link the lecture to a note in your vault or [create a new one](#linked-notes), and see every assignment attached to it. Assignments can be added here one at a time or in bulk.
 
 ---
 
@@ -289,13 +311,15 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Adding an assignment:** Click **+ Add Assignment** and fill in the title, due date, type, and any other details.
 
+**Due time:** An assignment can also have a **Due time**, for work due at 11:59 PM or before class. The time shows on the assignment's page, in the [HC Today sidebar](#hc-today-sidebar) and the [daily note agenda](#daily-note-agenda), and on the [Calendar](#calendar-view), and a timed assignment sorts by its time in Today. Leave it blank and the assignment is due that day, as before.
+
 **Bulk adding assignments:** Open a lecture and click **Bulk add** in its Assignments section. One assignment per line — each becomes an assignment attached to that lecture and inherits the lecture's date as its due date. One type applies to the whole batch, so paste one kind at a time. A live preview shows every assignment before anything is added, and the same caution applies: check the rows, because a bulk add can't be undone in a single step.
 
 **Assignment types:** Each assignment has a type — Reading, Writing, Project, Discussion, or Other — color-coded throughout the plugin so you can scan quickly.
 
 **Your own types:** Choose **New type…** in the Type menu when adding or editing an assignment (or in Bulk add) and give it a name, such as Lab, Homework, or Presentation. Your types are shared by all your classes and semesters, appear in every type filter, and use the same gray as Other. Rename or delete them under *Settings > Assignment types*: renaming updates every assignment that uses the type, and deleting one changes those assignments to Other.
 
-**Grade:** Assignments have an optional grade field. Fill it in after graded work is returned. Once an assignment is marked done, a recorded grade appears as a quiet pill next to its title in every list view. Grade doesn't apply to Readings, so the field is never shown there. You can also turn grading off entirely for a class — see the Track grades toggle under Classes — which hides the Grade field and chip everywhere for that class, useful for self-study or audited classes with no assigned grades.
+**Grade:** Assignments have an optional grade field. Fill it in after graded work is returned. Once an assignment is marked done, a recorded grade appears as a quiet pill next to its title in every list view. Grade doesn't apply to Readings, so the field is never shown there. You can also turn grading off entirely for a class — see the Track grades toggle under Classes — which hides the Grade field and chip everywhere for that class, useful for self-study. Marking a class [Audit](#classes) turns Track grades off for you.
 
 **Filtering:** Use the **All types** dropdown to show only one kind of assignment. The **Show done/Hide Done** toggle works alongside the filter — they stack.
 
@@ -305,7 +329,7 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Word goal (Writing):** Link a Writing assignment to its draft note, then turn on **Track a word goal** in the assignment's Word Goal section and enter a target word count and a date (defaults to the due date). Hold Course counts what's in the draft and shows what's left, for example `1,800 words to go, 4 days — ~450/day`, on the assignment and as a **Goal:** line in the class's Assignments tab. There's nothing to log: keep writing in the draft and the count updates the next time you look. The info tooltip shows words written so far. Click the line to change the target or date. Like reading pace, the per-day figure is recalculated from what's left: writing more lowers it, and a day passing raises it.
 
-**Assignment detail:** Click an assignment to open its detail screen, where you can edit all fields, link the assignment to a note in your vault, or quick-add a resource to the Library.
+**Assignment detail:** Click an assignment to open its detail screen, where you can edit all fields, link the assignment to a note in your vault or [create a new one](#linked-notes), or quick-add a resource to the Library.
 
 ---
 
@@ -399,6 +423,8 @@ Inside a class, the **Exams** tab lists scheduled exams with their dates and a l
 
 **Adding an exam:** Click **+ Add Exam** and fill in the name and date.
 
+**Start and end time:** Give an exam a **Start time**, and an **End time** if you know it (an end time needs a start time). The times show on the exam's page, in Today and the daily note agenda, and on the Calendar. Leave them blank for an all-day entry.
+
 **Exam types:** Each exam has a type: **Exam**, **Midterm**, **Final**, or **Quiz**. Choose **New type…** in the Type menu to add your own, such as Oral exam or Practical. The type shows under the exam's name (except plain Exam), on the Calendar, and in an exported syllabus. Each type gets its own weight on the Grades tab. Rename or delete your own types under *Settings > Exam types*: deleting one changes those exams to Exam, and its weight is added to Exam's.
 
 **Countdowns:** Each exam shows how many days away it is, updated automatically.
@@ -450,13 +476,25 @@ For a school with an attendance requirement, turn on **Track attendance** in Add
 
 The **Library** tab collects every resource associated with a class — books, articles, reference works — into a single list. Resources accumulate here as you add them, and each one tracks which lectures and assignments reference it.
 
-**Adding a resource:** Click **+ Add Resource** to add a resource directly to the Library. Resource types include Book, PDF, Handout, Article, Online resource, and Other.
+**Adding a resource:** Click **+ Add Resource** to add a resource directly to the Library. Resource types include Book, PDF, Handout, Article, Online resource, and Other. If the title (and author) match a book already in the Library, a note under Author says so, with **Use that one** to add the book to this class instead of making a second copy. A title that's only similar gets a note to check, and nothing else changes.
+
+**Bulk add:** To enter a whole reading list at once, click **Bulk add** and paste it, one resource per line as `Title by Author`. Two columns copied from a spreadsheet (title, then author) work too. Choose the classes, Required or Recommended, and the type (Book unless you change it), then check the preview before adding:
+
+- a book already in the Library is added to the class instead of added twice (**In Library: tag to…**);
+- a similar title is marked **Check** so you can untick it if it's the same book;
+- untick any row to leave it out.
+
+As with the other bulk dialogs, a pasted line break splits one entry into two, so read the preview.
 
 **Filter by class:** The Library has an *All classes* filter, so you can view resources from a single class or across all your classes at once.
 
 **Status:** Each resource has a status pill — **Unread**, **In Progress**, or **Done** — that you can advance as you read.
 
-**Required or recommended:** Mark a resource **Required** or **Recommended** when adding or editing it. An [exported syllabus](#syllabus) groups its reading list that way.
+**Required or recommended:** Mark a resource **Required** or **Recommended** when adding or editing it. It shows in small italics under the author in the Library list, and an [exported syllabus](#syllabus) groups its reading list that way.
+
+**My copy:** Where your copy is: Print, Kindle, Logos, PDF, Borrowed, Library, or anything you type. As you type, Hold Course suggests places you've used before. It shows on the resource's page and next to Required or Recommended in the Library list.
+
+**Reminder:** A one-line note to yourself, such as "Can't find a copy, try the library," shown in italics under the author in the Library list. Set it in Add or Edit resource, or on the resource's page. It's separate from the resource's Notes, which are for reading notes.
 
 **Linked Book:** Reading assignments can be linked directly to a resource in the Library. For all other assignment types, a Linked Note field is available instead. Both are set from the assignment's detail screen.
 
@@ -515,7 +553,9 @@ The **Calendar** shows all your lectures, assignments, and exams across all clas
 
 **Type filter:** Appears once the Show filter is narrowed to Assignments, letting you further narrow to a single assignment type (Reading, Writing, Project, Discussion, Other).
 
-**Meeting time on lecture entries:** When a class's schedule fields are filled in (meeting days, start/end time, start/end date) and a lecture falls on a matching day, the calendar shows that meeting time directly on the lecture entry in both week and month view.
+**Meeting time on lecture entries:** When a class's schedule fields are filled in (meeting days, start/end time, start/end date) and a lecture falls on a matching day, the calendar shows that meeting time directly on the lecture entry in both week and month view. Assignments with a [due time](#assignments) and exams with a [start time](#exams) show their times the same way.
+
+**In your own calendar app:** see [Export](#export) to put Hold Course's schedule into Google Calendar, Apple Calendar, or Outlook.
 
 **Day detail:** Click any day to open a popover listing every item scheduled for that date, each labeled with its type and class. Click any item in the popover to view its full detail screen.
 
@@ -545,7 +585,7 @@ The **Courses** button in the toolbar opens a cross-semester view of every class
 
 Columns are semester, course code, course name, credits, grade, and status. On a phone, the course code is hidden to make room.
 
-**Grade:** a final grade you typed in shows as entered. Otherwise the [calculated grade](#grades) shows in gray with its percent, marked "so far". A dash means there's no grade to show: the class isn't graded, has no graded work yet, or was dropped. Click a grade to open that class's Grades tab.
+**Grade:** a final grade you typed in shows as entered. Otherwise the [calculated grade](#grades) shows in gray with its percent, marked "so far". A dash means there's no grade to show: the class isn't graded, has no graded work yet, or was dropped. An [audited](#classes) class shows **Audit** instead of the dash. Click a grade to open that class's Grades tab.
 
 **Filtering:** The **All years** and **All terms** dropdowns narrow the list. Both stack.
 
@@ -563,7 +603,9 @@ Hold Course adds an **HC Today** panel to Obsidian's right sidebar. It shows eve
 
 Each item shows its title and a subtitle line with the class name and item type. Lectures are color-coded by class; assignments are color-coded by type — the same system used throughout the plugin. Items you've marked done appear with strikethrough and muted gray styling so finished work recedes and what's still ahead stays visible.
 
-**Opening:** The sidebar opens automatically when the plugin loads. Use the command palette to reopen the sidebar if necessary. 
+**Opening:** The sidebar opens when Obsidian starts. To keep it closed until you want it, turn off **Settings → Display → Open Today when Obsidian starts**. Either way, open it from the **Hold Course — Today** ribbon icon or the **Open Hold Course — Today** command. Hold Course keeps one Today tab; if a reload or a late start (with a plugin such as Lazy Loader) left extra copies, they're closed.
+
+**Times:** Assignments with a due time and exams with a start time show it, and sort by it alongside lectures.
 
 **Navigating:** Click any item to open the main Hold Course tab and navigate directly to that item's detail screen.
 
@@ -582,7 +624,7 @@ Hold Course can show a day's agenda inside a note, which makes it a natural fit 
 
 The command **Insert live agenda block** types it for you.
 
-**What it shows:** overdue assignments first, each with its due date, then that day's lectures (with meeting times), assignments, and exams, styled like the HC Today sidebar. Readings with pace tracking and writing with a word goal show their pace line underneath. Done items are struck through. A day with nothing on it says **Nothing scheduled**.
+**What it shows:** overdue assignments first, each with its due date, then that day's lectures (with meeting times), assignments (with due times), and exams (with start times), styled like the HC Today sidebar. Readings with pace tracking and writing with a word goal show their pace line underneath. Done items are struck through. A day with nothing on it says **Nothing scheduled**.
 
 **Which day:** in a daily note, the block reads the date from the note's name using your Daily Notes format, so last Tuesday's note shows last Tuesday. In any other note it shows today. To pick a date yourself, add a line inside the block:
 
@@ -595,6 +637,40 @@ date: 2026-10-20
 **Live:** the block isn't text written into your note — it's drawn from your Hold Course data each time, so it stays current as you mark things done. Overdue items in an older note are as of that note's date; anything you've finished since drops off. Click any item to open it in Hold Course.
 
 **A fixed copy:** to keep a plain list that won't change, use **Insert agenda as text**. It writes the same agenda as ordinary Markdown bullets at the cursor (plain bullets rather than checkboxes, so task plugins don't pick them up).
+
+---
+
+## Export
+
+**Settings → Export** writes Hold Course's data to files in your vault: a calendar file for your calendar app, a CSV for a spreadsheet, and a backup. The files go in the **Export folder**, or the top of the vault if it's blank.
+
+> **Note:** Obsidian doesn't list .ics, .csv, or .json files in the file explorer unless **Settings → Files and links → Detect all file extensions** is on. The files are there either way.
+
+### Calendar file
+
+**Export calendar** writes `Hold Course.ics` for the current semester. Import it into Google Calendar, Apple Calendar, or Outlook.
+
+- **What's in it:** lectures, assignments, and exams. Turn off **Include lectures**, **Include assignments**, or **Include exams** to leave any of them out.
+- **Times:** a lecture gets its class's meeting time when the class has meeting days and times, an assignment its due time, and an exam its start and end time. Anything without a time is an all-day event. Times are written without a time zone, so 9:00 AM in Hold Course is 9:00 AM in your calendar.
+- **Done items** stay in, with ✓ at the start of the title.
+
+**Importing is a one-time copy.** Your calendar app doesn't see later changes in Hold Course. To catch up, export again and import the new file: events you'd already imported are updated rather than added a second time, and new ones are added. Something you deleted in Hold Course isn't deleted from your calendar app, so delete it there too.
+
+**Keep the calendar file up to date** rewrites `Hold Course.ics` after every change in Hold Course. That keeps the file current, but your calendar app still needs a new import to see it, unless you **subscribe** instead. To subscribe, the file needs a web address: put the export folder in a cloud drive that can give the file a public link, then subscribe to that link in your calendar app. Calendar apps check subscriptions on their own schedule, which can be hours apart, and anyone with the link can see the calendar.
+
+The file name never changes, so a subscription keeps working.
+
+### CSV
+
+**Export CSV** writes `Hold Course items <date>.csv`: every lecture, assignment, and exam in every semester on your list, one row each, with its semester, class, lecture, title, type, date, times, status, and grade. It opens in Excel, Google Sheets, or Numbers.
+
+### Backup
+
+**Export backup** writes `Hold Course backup <date>.json`, all of Hold Course's data in one file. Keep a copy somewhere other than this vault. Hold Course doesn't have a way to import it yet; it's there so your data is never only in one place. See also [Data Storage](#data-storage).
+
+If a CSV or backup with today's date already exists, the new one gets " 2" (then " 3", and so on) instead of replacing it.
+
+The same three exports are in the [command palette](#command-palette-shortcuts).
 
 ---
 
@@ -613,6 +689,9 @@ Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P
 - Export Hold Course data snapshot — copies `data.json` to a timestamped backup file in the plugin folder
 - Insert live agenda block — adds a `hold-course-agenda` block at the cursor (see [Daily Note Agenda](#daily-note-agenda))
 - Insert agenda as text — writes the note's day's agenda as a plain Markdown list at the cursor
+- Export calendar (.ics) — writes `Hold Course.ics` for the current semester (see [Export](#export))
+- Export items as CSV — writes every lecture, assignment, and exam to a CSV file
+- Export backup (JSON) — writes all of Hold Course's data to one JSON file
 
 All commands are hotkey-bindable via Settings > Hotkeys.
 
@@ -622,19 +701,34 @@ All commands are hotkey-bindable via Settings > Hotkeys.
 
 Any lecture, assignment, or exam can be linked to an existing note in your vault. Set the link from the item's detail screen. Linked notes open directly from the detail screen.
 
+**Creating a note:** When a lecture's **Lecture Notes** or an assignment's **Linked Note** is empty, a **Create** button makes a new note, links it, and opens it in a new tab.
+
+- **Where:** in a folder for each class (named by its code, or its name if it has no code) inside the **Notes folder** from [Settings → Notes](#settings), or the top of the vault if that's blank.
+- **Name:** from a pattern you can change. Lecture notes default to `{code} L{n} {title}`, for example "OT 5200 L02 Primeval History", and assignment notes to `{code} {title}`. The fill-ins are `{code}`, `{class}`, `{n}` (the lecture number, two digits), `{title}`, and `{date}`; for an assignment, `{n}` is its lecture's number.
+- **Template:** pick a template note for lectures and one for assignments. Hold Course fills in `{{title}}`, `{{code}}`, `{{class}}`, `{{n}}`, `{{date}}`, and `{{professor}}`, and leaves everything else as written, including Templater code. Without a template, the note gets `course`, `lecture`, `date`, and `type` properties (for use in Bases) and a title heading.
+- **Name already taken:** Hold Course asks whether to **Use existing note** (link the one that's there) or **Start a new one**, which leaves the old note where it is.
+
+If you rename or move the Notes folder or a template in Obsidian, the setting follows it.
+
 A linked Markdown note can also be measured: a reading's note for [reading pace in words](#measuring-in-words), and a Writing assignment's draft for its word goal.
 
 ---
 
 ## Settings
 
-Hold Course's settings are under *Settings > Community plugins > Hold Course*.
+Hold Course's settings are under *Settings > Community plugins > Hold Course*, on four tabs: **Display**, **Coursework**, **Notes**, and **Export**. Settings reopens on the tab you used last, until Obsidian restarts.
 
-**Interface scale** — a slider from 90% to 150%, in 10% steps. It scales the whole interface together — text, icons, and spacing — rather than just enlarging the type, which is what makes it useful on an e-ink tablet or in a narrow pane. Above 100% some control rows scroll sideways rather than shrink; a phone screen only fits so much, and scrolling keeps everything reachable instead of clipping it.
+### Display
+
+**Grayscale display mode** — increases text contrast and size for e-ink displays (such as Boox tablets) or a phone or tablet set to grayscale, both of which wash out low-contrast text. Colored text — overdue dates, class names, assignment type labels — switches to darker shades of the same colors. Off by default; it isn't detected automatically, since the CSS feature meant to detect e-ink displays isn't implemented in the browser engine Obsidian uses.
+
+**Interface scale** — a slider from 90% to 150%, in 10% steps. It scales the whole interface together — text, icons, and spacing — rather than just enlarging the type, which is what makes it useful on an e-ink tablet or in a narrow pane. Above 100% some control rows scroll sideways rather than shrink, so everything stays reachable instead of clipped. On a phone, rows of buttons wrap onto a second line instead.
 
 This works on desktop and Android. It has no effect on iOS, which doesn't support the underlying CSS property — the setting is simply inert there rather than broken.
 
-**Grayscale display mode** — increases text contrast and size for e-ink displays (such as Boox tablets) or a phone or tablet set to grayscale, both of which wash out low-contrast text. Colored text — overdue dates, class names, assignment type labels — switches to darker shades of the same colors. Off by default; it isn't detected automatically, since the CSS feature meant to detect e-ink displays isn't implemented in the browser engine Obsidian uses.
+**Open Today when Obsidian starts** — on by default. Turn it off to open the [Today sidebar](#hc-today-sidebar) only when you ask for it.
+
+### Coursework
 
 **Reading pace > Words per minute** — your reading speed, used to turn word counts into minutes for readings measured in words. 225 by default; leave the box empty to use the default.
 
@@ -644,7 +738,15 @@ This works on desktop and Android. It has no effect on iOS, which doesn't suppor
 
 **Exam types** — your own exam types, each with how many exams use it, and buttons to rename or delete it. Exam, Midterm, Final, and Quiz are built in. New types are added from the Type menu when adding or editing an exam.
 
+### Notes
+
+**Notes folder**, **Lecture note name**, **Assignment note name**, **Lecture template**, and **Assignment template** — where **Create** puts new lecture and assignment notes, what it names them, and what goes in them. See [Linked Notes](#linked-notes).
+
 **Syllabus folder** — where exported syllabi and new syllabus notes are saved. Leave it blank for the top of the vault. See [Syllabus](#syllabus).
+
+### Export
+
+**Export folder**, the calendar file and its **Include** and **Keep the calendar file up to date** toggles, **CSV**, and **Backup**. See [Export](#export).
 
 ---
 
@@ -656,6 +758,9 @@ Hold Course is built around one person's own coursework, but several features su
 - **[Online classes](#classes)** drop the meeting fields when there's no live session.
 - **[Your own assignment types](#assignments)** — Lab, Homework, Presentation, Peer review — are set up once and shared by every class and section, and each one can be filtered on Assignments and Calendar.
 - **[Syllabus export](#syllabus)** turns a class into a syllabus note — your description and policies, the reading list, grade weights, and a week-by-week schedule.
+- **[Bulk add resources](#library)** takes a whole reading list at once, pasted from your syllabus or a spreadsheet.
+- **[Calendar export](#export)** puts a term's lectures, assignments, and exams into Google Calendar, Apple Calendar, or Outlook.
+- **[Note templates](#linked-notes)** give every lecture a prep note in the same shape, named and filed for you.
 
 What it doesn't do: grade weights and attendance are for your own grade, not a class roster, and each assignment has a single status — yours. Hold Course is a planning tool, not a gradebook, and doesn't track individual students.
 
@@ -669,6 +774,8 @@ A few things work differently by necessity:
 
 - **Card menus are always visible.** On desktop, the Edit/Move/Delete menu on a class card appears on hover. A finger can't hover, so on mobile the menu is simply always shown.
 - **Modals can't be dragged on a phone.** The drag bar is hidden there, since a phone modal is effectively full-screen and has nowhere to move to. Tablets keep it.
+- **No logo on a phone.** The Hold Course name above the breadcrumb is hidden there, since Obsidian's header already shows it, so the breadcrumb gets the whole line. If it still doesn't fit, the semester name is shortened.
+- **Button rows wrap.** When the buttons above a list (such as **Bulk add** and **Add resource** in the Library) don't fit across the screen, they go onto a second line. Sideways scrolling would compete with Obsidian's swipe to open the sidebars.
 - **Interface scale** is worth a look on mobile — see [Settings](#settings).
 
 ---
@@ -678,6 +785,8 @@ A few things work differently by necessity:
 All plugin data is stored in `data.json` inside the Hold Course plugin folder. This file is created automatically on first use and holds all your semesters, classes, lectures, assignments, exams, and library resources. Back it up along with your vault.
 
 The **Export Hold Course data snapshot** command copies `data.json` to a timestamped file in the same folder (`hold-course-backup-2026-09-08-14-30-22.json`) — a one-click version of that backup. Every run makes a new file and nothing is ever overwritten or pruned, so clearing out old snapshots is up to you.
+
+The snapshot stays in the plugin folder, which Obsidian keeps out of sight. For a copy you can see and move, use **Export backup** (see [Export](#export)): it writes the same data to a dated JSON file in your export folder.
 
 ---
 

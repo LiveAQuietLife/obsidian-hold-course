@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.13.0 */
+/* --- Hold Course --- v1.14.0 */
 'use strict';
 
 const {
@@ -11,6 +11,7 @@ const {
   Menu,
   setIcon,
   FuzzySuggestModal,
+  AbstractInputSuggest,
   MarkdownRenderChild,
 } = require('obsidian');
 
@@ -100,8 +101,167 @@ function addResourceRoleSetting(contentEl, formData) {
       drop.addOption('', '—');
       for (const [k, label] of Object.entries(RESOURCE_ROLES)) drop.addOption(k, label);
       drop.setValue(formData.role || '');
-      drop.onChange(v => { formData.role = v; });
+      drop.onChange(v => { formData.role = v; if (formData.onRoleChange) formData.onRoleChange(); });
     });
+}
+
+// ─── Library: reminder, My copy, bulk add (2026-10-29) ───────────────────────
+// Two new optional resource keys, presence-only (Principles 1 and 5):
+//   resource.reminder: a one-line note to yourself ("Can't find it, try ILL").
+//     Separate from resource.notes (reading notes), so it can be cleared alone.
+//   resource.myCopy: where your copy is ("Kindle", "Logos", "Borrowed").
+// Both are private: neither is in the syllabus export.
+
+const RESOURCE_TYPES = ['Book', 'PDF', 'Handout', 'Article', 'Online resource', 'Other'];
+const MY_COPY_STARTERS = ['Print', 'Kindle', 'Logos', 'PDF', 'Borrowed', 'Library'];
+
+// The small right-hand line on a Library row: "Required · Kindle". Either part
+// alone when only one is set; '' when neither. One display rule (Principle 4).
+function resourceMetaLine(resource) {
+  if (!resource) return '';
+  const parts = [];
+  if (RESOURCE_ROLES[resource.role]) parts.push(RESOURCE_ROLES[resource.role]);
+  const copy = (resource.myCopy || '').trim();
+  if (copy) parts.push(copy);
+  return parts.join(' · ');
+}
+
+// My copy suggestions: values already used on any resource in any semester
+// (A–Z, first spelling seen wins), then the starters not already among them.
+function myCopyOptions(semesters) {
+  const seen = new Map();
+  for (const sem of (semesters || [])) {
+    for (const r of (sem.resources || [])) {
+      const v = (r.myCopy || '').trim();
+      if (v && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
+    }
+  }
+  const used = [...seen.values()].sort((a, b) => a.localeCompare(b));
+  const starters = MY_COPY_STARTERS.filter(s => !seen.has(s.toLowerCase()));
+  return [...used, ...starters];
+}
+
+function filterMyCopyOptions(options, query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return [...options];
+  return options.filter(o => o.toLowerCase().includes(q) && o.toLowerCase() !== q);
+}
+
+// For duplicate checks: case, punctuation, and a trailing "…" don't count.
+function normalizeResourceText(s) {
+  return (s || '').toLowerCase().replace(/[….]+\s*$/, '')
+    .replace(/[‘’']/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// The one duplicate rule (add dialog, bulk add, and later syllabus import).
+//   exact: same title, and same author or either author blank;
+//   possible: same title with a different author, or one title is the start
+//     of the other ("What Is the Bible?" / "What Is the Bible and How…").
+// Returns { kind, resource } or null. Exact wins over possible.
+function findResourceMatch(resources, title, author) {
+  const t = normalizeResourceText(title);
+  if (!t) return null;
+  const a = normalizeResourceText(author);
+  let possible = null;
+  for (const r of (resources || [])) {
+    const rt = normalizeResourceText(r.title);
+    if (!rt) continue;
+    const ra = normalizeResourceText(r.author);
+    if (rt === t) {
+      if (!a || !ra || a === ra) return { kind: 'exact', resource: r };
+      if (!possible) possible = { kind: 'possible', resource: r };
+    } else if (!possible && (rt.startsWith(t + ' ') || t.startsWith(rt + ' '))) {
+      possible = { kind: 'possible', resource: r };
+    }
+  }
+  return possible;
+}
+
+// Bulk add paste → { rows: [{ title, author }] }. One resource per line.
+// Bullets and numbering are stripped. A tab splits title from author (two
+// spreadsheet columns); otherwise the LAST lowercase " by " does, so "How to
+// Read the Bible Book by Book by Gordon Fee" keeps its title. No split: title
+// only. Lowercase only, so a title like "Stand By Me" isn't split.
+function parseBulkResources(text) {
+  const rows = [];
+  for (const raw of (text || '').split(/\r?\n/)) {
+    let line = raw.replace(/ /g, ' ').trim();
+    line = line.replace(/^(?:[-*•▪◦·‣]|\d+[.)])\s*/, '').trim();
+    if (!line) continue;
+    let title = line, author = '';
+    if (line.includes('\t')) {
+      const cols = line.split('\t').map(s => s.trim()).filter(Boolean);
+      title = cols[0] || '';
+      author = cols.slice(1).join(', ');
+    } else {
+      const m = line.match(/^(.*\S)\s+by\s+(\S.*)$/);
+      if (m) { title = m[1]; author = m[2]; }
+    }
+    title = title.replace(/\s+/g, ' ').replace(/[\s,;:–—-]+$/, '').trim();
+    author = author.replace(/^by\s+/i, '').replace(/\s+/g, ' ').trim();
+    if (!title) continue;
+    rows.push({ title, author });
+  }
+  return { rows, counts: { resources: rows.length } };
+}
+
+// Add/Edit/Bulk resource dialogs share these field builders.
+function addResourceTypeSetting(contentEl, formData) {
+  new Setting(contentEl).setName('Type').addDropdown(drop => {
+    drop.addOption('', '— Select type —');
+    for (const t of RESOURCE_TYPES) drop.addOption(t, t);
+    drop.setValue(formData.type || '');
+    drop.onChange(v => { formData.type = v; });
+  });
+}
+
+function addResourceClassesSetting(contentEl, classes, formData) {
+  if (!classes || classes.length === 0) return;
+  const setting = new Setting(contentEl).setName('Classes');
+  const picker = setting.controlEl.createDiv('hc-days-picker');
+  for (const cls of classes) {
+    const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: classLabel(cls), type: 'button' });
+    if (formData.classIds.includes(cls.id)) chip.addClass('hc-day-toggle--active');
+    chip.addEventListener('click', () => {
+      const idx = formData.classIds.indexOf(cls.id);
+      if (idx === -1) { formData.classIds.push(cls.id); chip.addClass('hc-day-toggle--active'); }
+      else { formData.classIds.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
+      if (formData.onClassesChange) formData.onClassesChange();
+    });
+  }
+}
+
+function addResourceReminderSetting(contentEl, formData) {
+  new Setting(contentEl)
+    .setName('Reminder')
+    .setDesc('A note to yourself, shown in the Library list.')
+    .addText(text => {
+      text.setPlaceholder('Can\'t find a copy, try the library').setValue(formData.reminder || '');
+      text.onChange(v => { formData.reminder = v; });
+    });
+}
+
+function addMyCopySetting(app, plugin, contentEl, formData) {
+  new Setting(contentEl)
+    .setName('My copy')
+    .setDesc('Where your copy is.')
+    .addText(text => {
+      text.setPlaceholder('Kindle, Logos, Borrowed…').setValue(formData.myCopy || '');
+      text.onChange(v => { formData.myCopy = v; });
+      new MyCopySuggest(app, text.inputEl, myCopyOptions(plugin.data.semesters), v => {
+        text.setValue(v);
+        formData.myCopy = v;
+      });
+    });
+}
+
+// URL fields stay type="text": themes (Lumen among them) style text inputs but
+// not type="url", which then drew a square, dark-bordered box. inputMode still
+// brings up the URL keyboard on phones.
+function urlInput(inputEl) {
+  inputEl.inputMode = 'url';
+  inputEl.setAttribute('autocapitalize', 'off');
+  inputEl.spellcheck = false;
 }
 
 const TERMS = ['Winter', 'Spring', 'Summer', 'Fall'];
@@ -115,6 +275,22 @@ const TERM_ORDER = { Winter: 0, Spring: 1, Summer: 2, Fall: 3 };
 const CLASS_STATUSES = ['ongoing', 'completed', 'dropped'];
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
+
+// How a class is named wherever it's shown by its code: chips, breadcrumbs,
+// back buttons, filters, Today. A class with no code falls back to its name,
+// then "Untitled class" (2026-10-29: a code-less class showed blank chips and
+// back buttons). With no class at all, ifMissing. Places that show the code
+// beside the name (class header, dashboard card, Courses) keep the raw code.
+function classLabel(cls, ifMissing = '') {
+  if (!cls) return ifMissing;
+  return String(cls.code || '').trim() || String(cls.name || '').trim() || 'Untitled class';
+}
+
+// "BIB 212 — Pentateuch", or whichever half exists.
+function classFullName(cls) {
+  const parts = [cls && cls.code, cls && cls.name].map(x => String(x || '').trim()).filter(Boolean);
+  return parts.join(' — ') || 'Untitled class';
+}
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
@@ -181,6 +357,28 @@ function isClassGraded(cls) {
 // still apply (term window). (2026-10-10)
 function isClassOnline(cls) {
   return !!(cls && cls.online);
+}
+
+// 1.14.0: Audit (taking the class without credit) and Self-paced (no set
+// meetings). Presence-only, like online; a class can be both. Defaults, not
+// rules: the class dialogs turn Track grades off with Audit and Online on
+// with Self-paced, but nothing here ties them together. Separate from #75's
+// class "kind": Audit is how you take a real class, kind is what the thing is.
+function isClassAudit(cls) {
+  return !!(cls && cls.audit);
+}
+
+function isClassSelfPaced(cls) {
+  return !!(cls && cls.selfPaced);
+}
+
+// Badge labels for the class header and the dashboard card, in that order.
+const CLASS_MODE_ICONS = { 'Audit': 'glasses', 'Self-paced': 'footprints' };
+function classModeLabels(cls) {
+  const labels = [];
+  if (isClassAudit(cls)) labels.push('Audit');
+  if (isClassSelfPaced(cls)) labels.push('Self-paced');
+  return labels;
 }
 
 // ─── #67 Grades (F7) ─────────────────────────────────────────────────────────
@@ -301,6 +499,142 @@ function collectClassEntries(cls) {
     out.push({ kind: 'exam', item: ex, lecture: null, number: null, date: ex.dueDate || '' });
   }
   return out;
+}
+
+// ─── Calendar (ICS) format (1.14.0) ──────────────────────────────────────────
+// Format-neutral events for one semester, from the F2 walker. Undated items
+// are left out. opts.skip: a Set of 'lectures', 'assignments', 'exams'.
+// A lecture is timed when its class meets that day (classMeetsOnDate, the
+// calendar view's rule: first lecture of the day only); assignments and
+// exams by their own optional times (itemTimes). Done items stay, with ✓.
+// UID: the item's id, which never changes, so a re-import updates events
+// instead of duplicating them (F3). Each event:
+//   { uid, date, start, end, summary, location, description, busy }
+function calendarEvents(sem, opts = {}) {
+  const skip = opts.skip || new Set();
+  const out = [];
+  for (const cls of ((sem && sem.classes) || [])) {
+    const code = String(cls.code || cls.name || '').trim();
+    const stamped = new Set();
+    collectClassEntries(cls).forEach((e, i) => {
+      if (skip.has(e.kind + 's') || !/^\d{4}-\d{2}-\d{2}$/.test(e.date)) return;
+      const it = e.item;
+      let times = null, label;
+      if (e.kind === 'lecture') {
+        const wd = WEEKDAY_NAMES[new Date(e.date + 'T12:00:00').getDay()];
+        if (!stamped.has(e.date) && classMeetsOnDate(cls, e.date, wd)) {
+          stamped.add(e.date);
+          times = itemTimes({ kind: 'lecture', meetingStartTime: cls.meetingStartTime, meetingEndTime: cls.meetingEndTime });
+        }
+        // A title that's only "Lecture 3" isn't repeated ("Lecture 3: Lecture 3").
+        const lt = /^lecture\s*\d+$/i.test(String(it.title || '').trim()) ? '' : it.title;
+        label = `Lecture ${e.number}${lt ? ': ' + lt : ''}`;
+      } else if (e.kind === 'assignment') {
+        times = itemTimes({ kind: 'assignment', assignment: it });
+        label = `${it.type || 'Assignment'}: ${it.title || 'Untitled'}`;
+      } else {
+        times = itemTimes({ kind: 'exam', exam: it });
+        label = `${getExamType(it)}: ${it.title || 'Untitled'}`;
+      }
+      out.push({
+        uid: `${it.id || (cls.id + '-' + e.kind + '-' + i)}@hold-course`,
+        date: e.date,
+        start: times ? times.start : '',
+        end: times ? (times.end || times.start) : '',
+        summary: (isDoneLike(it.status) ? '✓ ' : '') + (code ? code + ' · ' : '') + label,
+        location: e.kind === 'lecture' && !isClassOnline(cls) ? String(cls.location || '').trim() : '',
+        description: cls.name && cls.name !== code ? cls.name : '',
+        busy: !!times && e.kind !== 'assignment',
+      });
+    });
+  }
+  return out;
+}
+
+function icsEscape(s) {
+  return String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+}
+
+// Lines longer than 75 bytes (UTF-8) continue on the next line after a space.
+function icsFold(line) {
+  const out = [];
+  let cur = '', len = 0;
+  for (const ch of line) {
+    const cp = ch.codePointAt(0);
+    const b = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (len + b > (out.length ? 74 : 75)) { out.push(cur); cur = ''; len = 0; }
+    cur += ch; len += b;
+  }
+  out.push(cur);
+  return out.join('\r\n ');
+}
+
+// "20261027T020922Z"
+function icsStamp(date) {
+  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
+// Times are "floating" (no time zone): 9:00 stays 9:00 in the calendar's zone.
+// Timed lectures and exams show as busy; assignments and all-day items as free.
+function icsCalendar(events, name, stamp) {
+  const d = iso => iso.replace(/-/g, '');
+  const t = hhmm => hhmm.replace(':', '') + '00';
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//LiveAQuietLife//Hold Course//EN',
+    'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:' + icsEscape(name)];
+  for (const ev of events) {
+    L.push('BEGIN:VEVENT', 'UID:' + ev.uid, 'DTSTAMP:' + stamp);
+    if (ev.start) {
+      L.push('DTSTART:' + d(ev.date) + 'T' + t(ev.start), 'DTEND:' + d(ev.date) + 'T' + t(ev.end));
+    } else {
+      L.push('DTSTART;VALUE=DATE:' + d(ev.date), 'DTEND;VALUE=DATE:' + d(addDaysISO(ev.date, 1)));
+    }
+    L.push('SUMMARY:' + icsEscape(ev.summary));
+    if (ev.location) L.push('LOCATION:' + icsEscape(ev.location));
+    if (ev.description) L.push('DESCRIPTION:' + icsEscape(ev.description));
+    L.push('TRANSP:' + (ev.busy ? 'OPAQUE' : 'TRANSPARENT'), 'END:VEVENT');
+  }
+  L.push('END:VCALENDAR');
+  return L.map(icsFold).join('\r\n') + '\r\n';
+}
+
+// ─── CSV format (1.14.0) ─────────────────────────────────────────────────────
+// One row per lecture, assignment, and exam, from the F2 walker. Lecture:
+// the lecture's number, or for an assignment its lecture's. Times: an
+// assignment's due time is Start time. UTF-8 with a BOM, so Excel reads
+// accents; a leading = + @ gets a ' so spreadsheets don't run it as a formula.
+const CSV_COLUMNS = ['Semester', 'Class code', 'Class', 'Kind', 'Lecture', 'Title', 'Type', 'Date', 'Start time', 'End time', 'Status', 'Grade'];
+
+function csvCell(v) {
+  let s = v === null || v === undefined ? '' : String(v);
+  if (/^[=+@\t\r]/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) || s !== s.trim() ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function itemsCsv(semesters) {
+  const rows = [CSV_COLUMNS];
+  for (const sem of (semesters || [])) {
+    for (const cls of (sem.classes || [])) {
+      const lecNum = new Map();
+      for (const e of collectClassEntries(cls)) {
+        if (e.kind === 'lecture') lecNum.set(e.item, e.number);
+      }
+      for (const e of collectClassEntries(cls)) {
+        const it = e.item;
+        const t = e.kind === 'assignment' ? itemTimes({ kind: 'assignment', assignment: it })
+          : e.kind === 'exam' ? itemTimes({ kind: 'exam', exam: it }) : null;
+        rows.push([
+          sem.name || '', cls.code || '', cls.name || '',
+          e.kind === 'lecture' ? 'Lecture' : e.kind === 'exam' ? 'Exam' : 'Assignment',
+          e.kind === 'lecture' ? e.number : (e.lecture ? lecNum.get(e.lecture) || '' : ''),
+          it.title || '',
+          e.kind === 'lecture' ? '' : e.kind === 'exam' ? getExamType(it) : (it.type || ''),
+          e.date, t ? t.start : '', t && !t.due ? t.end : '',
+          statusLabel(it.status), e.kind === 'lecture' ? '' : (it.grade || ''),
+        ]);
+      }
+    }
+  }
+  return '\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 
 // Monday of the week holding an ISO date.
@@ -656,6 +990,59 @@ function syllabusGrading(cls, scale) {
 // A file name Obsidian accepts: drops \ / : * ? " < > | # ^ [ ] and trims.
 function safeFileName(name) {
   return String(name || '').replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim() || 'Untitled';
+}
+
+// ─── Lecture and assignment notes (1.14.0, #74) ──────────────────────────────
+// Create on a lecture's or assignment's note field writes a new note in
+// "<Notes folder>/<code>/", named by a pattern, from a template note or the
+// built-in default, then links and opens it. Never overwrites.
+const NOTE_NAME_DEFAULTS = { lecture: '{code} L{n} {title}', assignment: '{code} {title}' };
+const NOTE_TOKENS = ['title', 'code', 'class', 'n', 'date', 'professor'];
+
+// The fill-ins for one lecture or assignment. n is the lecture's number (for
+// an assignment, its lecture's, if it has one), two digits.
+function noteTokens(kind, cls, item, n) {
+  const title = String(item.title || '').trim() || (kind === 'lecture' && n ? `Lecture ${n}` : 'Untitled');
+  const date = (kind === 'lecture' ? item.date : item.dueDate) || '';
+  return {
+    title,
+    code: String(cls.code || cls.name || '').trim(),
+    class: String(cls.name || cls.code || '').trim(),
+    n: n ? String(n).padStart(2, '0') : '',
+    date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '',
+    professor: String(cls.professorName || '').trim(),
+  };
+}
+
+// "{code} L{n} {title}" → "OT 5200 L02 Primeval History". Unknown {tokens} stay.
+function fillNoteName(pattern, tokens) {
+  const p = String(pattern || '').trim();
+  return safeFileName(p.replace(/\{(\w+)\}/g, (m, k) => NOTE_TOKENS.includes(k) ? tokens[k] : m));
+}
+
+// {{title}}-style fills in a template note. Everything else (Templater's
+// <% %>, unknown {{tokens}}) is left as written.
+function fillNoteTemplate(text, tokens) {
+  return String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => NOTE_TOKENS.includes(k) ? tokens[k] : m);
+}
+
+// A YAML string, quoted unless plainly safe (and not number- or bool-like).
+function yamlString(v) {
+  const s = String(v);
+  const plain = /^[A-Za-z][\w .()&'\/-]*$/.test(s) && !/\s$/.test(s) && !/^(true|false|null|yes|no|on|off)$/i.test(s);
+  return plain ? s : JSON.stringify(s);
+}
+
+// No template set: frontmatter for Bases (course, lecture, date, type) + a title.
+function defaultNoteContent(kind, tokens, item) {
+  const L = ['---'];
+  if (tokens.code) L.push(`course: ${yamlString(tokens.code)}`);
+  if (tokens.n) L.push(`lecture: ${Number(tokens.n)}`);
+  if (tokens.date) L.push(`date: ${tokens.date}`);
+  L.push(`type: ${kind}`);
+  if (kind === 'assignment' && item.type) L.push(`assignment-type: ${yamlString(item.type)}`);
+  L.push('---', '', `# ${tokens.title}`, '', '');
+  return L.join('\n');
 }
 
 // Every graded item in a class: assignments (class-level and per lecture)
@@ -1608,11 +1995,11 @@ function getAllAssignments(semester, activeOnly = false) {
     if (activeOnly && isClassInactive(cls)) continue;
     const classInactive = isClassInactive(cls);
     for (const a of (cls.assignments || [])) {
-      all.push({ ...a, classId: cls.id, classCode: cls.code, colorIndex: cls.colorIndex, classInactive });
+      all.push({ ...a, classId: cls.id, classCode: classLabel(cls), colorIndex: cls.colorIndex, classInactive });
     }
     for (const lec of (cls.lectures || [])) {
       for (const a of (lec.assignments || [])) {
-        all.push({ ...a, classId: cls.id, classCode: cls.code, colorIndex: cls.colorIndex, classInactive, lectureId: lec.id });
+        all.push({ ...a, classId: cls.id, classCode: classLabel(cls), colorIndex: cls.colorIndex, classInactive, lectureId: lec.id });
       }
     }
   }
@@ -1939,6 +2326,13 @@ function formatTimeShort(hhmm) {
   return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+// 1.14.0: an exam's times, checked on save. Returns a message or ''.
+function examTimeProblem(f) {
+  if (f.endTime && !f.startTime) return 'Set a start time, or clear the end time.';
+  if (f.startTime && f.endTime && f.endTime <= f.startTime) return 'End time must be after the start time.';
+  return '';
+}
+
 function formatTimeRange(startHHMM, endHHMM) {
   return `${formatTimeShort(startHHMM)} – ${formatTimeShort(endHHMM)}`;
 }
@@ -1982,7 +2376,7 @@ function renderColorPicker(contentEl, classes, self, initialIndex, onPick) {
     const name = color.name.charAt(0).toUpperCase() + color.name.slice(1);
     const users = (classes || [])
       .filter(c => c !== self && typeof c.colorIndex === 'number' && c.colorIndex % COLOR_PALETTE.length === i)
-      .map(c => c.code || c.name || 'Untitled');
+      .map(c => classLabel(c));
     const sw = picker.createEl('button', { cls: 'hc-color-swatch', type: 'button' });
     sw.style.background = accentText(color);
     sw.setAttr('aria-label', name);
@@ -2067,10 +2461,8 @@ function renderTimePicker(contentEl, labelText, initialValue, onChange) {
 // class time gets a short start-time prefix rather than the full range —
 // enough to sort your day at a glance without crowding the cell.
 function calItemDisplayTitle(item) {
-  if (item.kind === 'lecture' && item.meetingStartTime) {
-    return `${formatTimeShort(item.meetingStartTime)} · ${item.title}`;
-  }
-  return item.title;
+  const start = itemStartTime(item);
+  return start ? `${formatTimeShort(start)} · ${item.title}` : item.title;
 }
 
 function resourceStatusLabel(status) {
@@ -2201,10 +2593,34 @@ function isItemDone(item) {
   return false;
 }
 
-// A lecture carries a start time only once a class meeting slot has been
-// merged onto it for that date (getItemsForDate, §1.3).
+// 1.14.0 (F4): the one place that says when a date item happens. A lecture
+// has a time once a class meeting slot is merged onto it (getItemsForDate,
+// §1.3); an assignment has an optional due time (assignment.dueTime); an
+// exam an optional start and end (exam.startTime, exam.endTime). All
+// "HH:MM", absent = untimed. Returns { start, end, due } or null.
+function itemTimes(item) {
+  if (item.kind === 'lecture') {
+    return item.meetingStartTime ? { start: item.meetingStartTime, end: item.meetingEndTime || '', due: false } : null;
+  }
+  if (item.kind === 'assignment') {
+    return item.assignment.dueTime ? { start: item.assignment.dueTime, end: '', due: true } : null;
+  }
+  if (item.kind === 'exam') {
+    return item.exam.startTime ? { start: item.exam.startTime, end: item.exam.endTime || '', due: false } : null;
+  }
+  return null;
+}
+
+// "due 11:59 PM", "9:00 AM – 11:00 AM", "9:00 AM", or ''.
+function formatItemTime(t) {
+  if (!t) return '';
+  if (t.due) return `due ${formatTimeShort(t.start)}`;
+  return t.end ? formatTimeRange(t.start, t.end) : formatTimeShort(t.start);
+}
+
 function itemStartTime(item) {
-  return item.kind === 'lecture' && item.meetingStartTime ? item.meetingStartTime : null;
+  const t = itemTimes(item);
+  return t ? t.start : null;
 }
 
 // Untimed first, then timed by start time — the Today sidebar's order.
@@ -2257,13 +2673,10 @@ function renderTodayItem(container, item, onClick, opts = {}) {
 }
 
 function itemMetaText(item) {
-  if (item.kind === 'lecture') {
-    let t = item.cls.code + ' · Lecture';
-    if (item.meetingStartTime) t += ' · ' + formatTimeRange(item.meetingStartTime, item.meetingEndTime);
-    return t;
-  }
-  if (item.kind === 'exam') return item.cls.code + ' · ' + getExamType(item.exam);
-  return item.cls.code + ' · ' + item.assignment.type;
+  const kind = item.kind === 'lecture' ? 'Lecture'
+    : item.kind === 'exam' ? getExamType(item.exam) : item.assignment.type;
+  const time = formatItemTime(itemTimes(item));
+  return classLabel(item.cls) + ' · ' + kind + (time ? ' · ' + time : '');
 }
 
 // ─── Daily note agenda (#71) ────────────────────────────────────────────────
@@ -2452,6 +2865,11 @@ class HoldCoursePlugin extends Plugin {
       callback: () => this.activateView(),
     });
 
+    // 1.14.0 exports.
+    this.addCommand({ id: 'export-calendar', name: 'Export calendar (.ics)', callback: () => this.writeCalendar(false) });
+    this.addCommand({ id: 'export-csv', name: 'Export items as CSV', callback: () => this.exportCsv() });
+    this.addCommand({ id: 'export-backup', name: 'Export backup (JSON)', callback: () => this.exportBackup() });
+
     // #71: daily note agenda. The block is live: nothing is written into the
     // note. Each rendered block registers itself and is dropped when Obsidian
     // unloads it (note closed, re-rendered, or edited).
@@ -2596,13 +3014,24 @@ class HoldCoursePlugin extends Plugin {
       },
     });
 
+    // 1.14.0: skipTodayOnStartup (present only when off) leaves Today closed
+    // until opened from the ribbon or the command.
+    // When Hold Course is enabled after the layout is ready (a reload, an
+    // update, or a delayed start through Lazy Loader), Obsidian takes this
+    // plugin's open tabs away and puts them back only after onload returns.
+    // Checking right away found no Today tab and opened a second one, one
+    // more on every reload. So wait a tick, then keep one Today tab.
     this.app.workspace.onLayoutReady(() => {
-      this.activateTodayView();
+      window.setTimeout(() => {
+        this.tidyTodayLeaves();
+        if (!this.data.settings.skipTodayOnStartup) this.activateTodayView();
+      }, 0);
     });
   }
 
   onunload() {
     window.clearTimeout(this._recheckTimer);
+    clearTimeout(this._calTimer);
     document.body.classList.remove('hc-eink');
     document.body.classList.remove('hc-scaled');
     document.body.style.removeProperty('--hc-ui-scale');
@@ -2768,10 +3197,26 @@ class HoldCoursePlugin extends Plugin {
 
   async activateTodayView() {
     const { workspace } = this.app;
-    if (workspace.getLeavesOfType(TODAY_VIEW_TYPE).length) return;
+    if (this.tidyTodayLeaves()) return;
     const leaf = workspace.getRightLeaf(false);
     await leaf.setViewState({ type: TODAY_VIEW_TYPE, active: true });
     workspace.revealLeaf(leaf);
+  }
+
+  // Keeps one Today tab and closes the rest; returns the one kept, or null.
+  // Extra copies came from the reload race in onload. Copies saved while the
+  // view wasn't registered come back as unloaded tabs with a ghost icon, so
+  // prefer a loaded copy and load the one kept.
+  tidyTodayLeaves() {
+    const leaves = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf.getViewState().type === TODAY_VIEW_TYPE) leaves.push(leaf);
+    });
+    if (!leaves.length) return null;
+    const keep = leaves.find(l => l.view instanceof HoldCourseTodayView) || leaves[0];
+    for (const leaf of leaves) if (leaf !== keep) leaf.detach();
+    if (!(keep.view instanceof HoldCourseTodayView)) keep.loadIfDeferred?.();
+    return keep;
   }
 
   async activateAndNavigate(screen) {
@@ -2871,6 +3316,10 @@ class HoldCoursePlugin extends Plugin {
     }
     // #44: the syllabus folder setting follows a renamed folder too.
     if (this.data.settings) fix(this.data.settings, 'syllabusFolder');
+    // 1.14.0: and the notes folder and template settings.
+    if (this.data.settings) {
+      for (const k of ['notesFolder', 'lectureTemplate', 'assignmentTemplate', 'exportFolder']) fix(this.data.settings, k);
+    }
     if (count) {
       await this.save();
       this.refreshMainView();
@@ -2889,6 +3338,7 @@ class HoldCoursePlugin extends Plugin {
       this._saving--;
     }
     this.refreshTodayView();
+    if (this.data.settings && this.data.settings.calendarAutoUpdate) this._queueCalendar();
   }
 
   // ─── Semester helpers ──────────────────────────────────────────────────────
@@ -3086,6 +3536,8 @@ class HoldCoursePlugin extends Plugin {
     // is explicitly marked ungraded, matching the removed/status idiom.
     if (classData.trackGrades === false) cls.notGraded = true;
     if (classData.online) cls.online = true; // #25
+    if (classData.audit) cls.audit = true; // 1.14.0
+    if (classData.selfPaced) cls.selfPaced = true;
     // Presence-based like notGraded: absent = automatic color.
     if (picked) cls.colorPicked = true;
     sem.classes.push(cls);
@@ -3316,6 +3768,192 @@ class HoldCoursePlugin extends Plugin {
     return path;
   }
 
+  // ─── 1.14.0 exports: calendar (ICS), CSV, JSON backup ───────────────────
+
+  // Export folder setting; absent or blank means the vault root.
+  exportFolder() {
+    return String(this.data.settings.exportFolder || '').trim()
+      .replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  }
+
+  _exportPath(name) {
+    const f = this.exportFolder();
+    return f ? f + '/' + name : name;
+  }
+
+  // Always the same file, so a calendar subscribed to it keeps its address.
+  calendarPath() {
+    return this._exportPath('Hold Course.ics');
+  }
+
+  // The current semester's calendar text, or null with no semester.
+  calendarText() {
+    const sem = this.getCurrentSemester();
+    if (!sem) return null;
+    const skip = new Set(this.data.settings.calendarSkip || []);
+    return icsCalendar(calendarEvents(sem, { skip }), 'Hold Course · ' + (sem.name || 'Semester'), icsStamp(new Date()));
+  }
+
+  // Writes (or replaces) Hold Course.ics. Skips the write when only the
+  // DTSTAMP lines would change, so syncing doesn't churn. quiet: no notices
+  // (the auto-update). Returns the path, or null.
+  async writeCalendar(quiet) {
+    try {
+      const text = this.calendarText();
+      if (text === null) {
+        if (!quiet) new Notice('No semester to export.');
+        return null;
+      }
+      const path = this.calendarPath();
+      await this._ensureFolder(this.exportFolder());
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file) {
+        const strip = s => s.replace(/^DTSTAMP:.*$/gm, '');
+        if (strip(await this.app.vault.read(file)) !== strip(text)) await this.app.vault.modify(file, text);
+      } else {
+        await this.app.vault.create(path, text);
+      }
+      if (!quiet) new Notice('Calendar saved: ' + path + '. Import it into your calendar app.');
+      return path;
+    } catch (e) {
+      console.error('Hold Course: calendar export failed', e);
+      if (!quiet) new Notice('Calendar export failed: ' + (e.message || e));
+      return null;
+    }
+  }
+
+  // "Keep the calendar file up to date": rewrite a moment after each save.
+  _queueCalendar() {
+    clearTimeout(this._calTimer);
+    this._calTimer = setTimeout(() => { this._calTimer = null; this.writeCalendar(true); }, 2000);
+  }
+
+  // A new file each time: "<name> 2.<ext>" and so on if the name is taken.
+  async _writeNewExport(name, text) {
+    await this._ensureFolder(this.exportFolder());
+    let path = this._exportPath(name);
+    const dot = path.lastIndexOf('.');
+    const base = path.slice(0, dot), ext = path.slice(dot);
+    for (let i = 2; this.app.vault.getAbstractFileByPath(path); i++) path = base + ' ' + i + ext;
+    await this.app.vault.create(path, text);
+    return path;
+  }
+
+  // Every lecture, assignment, and exam in every semester (removed ones left out).
+  async exportCsv() {
+    try {
+      const sems = (this.data.semesters || []).filter(s => !isSemesterRemoved(s));
+      const path = await this._writeNewExport('Hold Course items ' + getTodayISO() + '.csv', itemsCsv(sems));
+      new Notice('CSV saved: ' + path);
+      return path;
+    } catch (e) {
+      console.error('Hold Course: CSV export failed', e);
+      new Notice('CSV export failed: ' + (e.message || e));
+      return null;
+    }
+  }
+
+  // All of Hold Course's data, wrapped so a later restore (1.16.0) can tell
+  // what it is and which version wrote it.
+  async exportBackup() {
+    try {
+      const wrapped = {
+        holdCourseBackup: 1,
+        pluginVersion: (this.manifest && this.manifest.version) || '',
+        exported: new Date().toISOString(),
+        data: this.data,
+      };
+      const path = await this._writeNewExport('Hold Course backup ' + getTodayISO() + '.json', JSON.stringify(wrapped, null, 2));
+      new Notice('Backup saved: ' + path);
+      return path;
+    } catch (e) {
+      console.error('Hold Course: backup failed', e);
+      new Notice('Backup failed: ' + (e.message || e));
+      return null;
+    }
+  }
+
+  // ─── 1.14.0 lecture and assignment notes (#74) ──────────────────────────
+
+  // Notes folder setting; absent or blank means the vault root.
+  notesFolder() {
+    return String(this.data.settings.notesFolder || '').trim()
+      .replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  }
+
+  // The class's subfolder: "<Notes folder>/<code>".
+  classNotesFolder(cls) {
+    const folder = this.notesFolder();
+    const sub = safeFileName(cls.code || cls.name || 'Class');
+    return folder ? `${folder}/${sub}` : sub;
+  }
+
+  // kind 'lecture' or 'assignment'; n is the lecture number (or null).
+  itemNotePath(kind, cls, item, n) {
+    const key = kind === 'lecture' ? 'lectureNoteName' : 'assignmentNoteName';
+    const pattern = String(this.data.settings[key] || '').trim() || NOTE_NAME_DEFAULTS[kind];
+    return `${this.classNotesFolder(cls)}/${fillNoteName(pattern, noteTokens(kind, cls, item, n))}.md`;
+  }
+
+  async _ensureFolder(path) {
+    let cur = '';
+    for (const part of String(path || '').split('/').filter(Boolean)) {
+      cur = cur ? `${cur}/${part}` : part;
+      if (!this.app.vault.getAbstractFileByPath(cur)) await this.app.vault.createFolder(cur);
+    }
+  }
+
+  // Writes the note and returns its path. When the name is taken, the caller
+  // asks first (SyllabusNoteChoiceModal): mode 'existing' returns that path
+  // as is; 'new' writes "… 2.md", " 3"… Never overwrites. A template that's
+  // gone falls back to the default, with a notice.
+  async createItemNote(kind, cls, item, n, mode) {
+    let path = this.itemNotePath(kind, cls, item, n);
+    if (this.app.vault.getAbstractFileByPath(path)) {
+      if (mode !== 'new') return path;
+      const base = path.replace(/\.md$/, '');
+      for (let i = 2; this.app.vault.getAbstractFileByPath(path); i++) path = `${base} ${i}.md`;
+    }
+    const tokens = noteTokens(kind, cls, item, n);
+    let content = defaultNoteContent(kind, tokens, item);
+    const tplPath = String(this.data.settings[kind === 'lecture' ? 'lectureTemplate' : 'assignmentTemplate'] || '').trim();
+    if (tplPath) {
+      const tpl = this.app.vault.getAbstractFileByPath(tplPath);
+      if (tpl && tpl.extension) content = fillNoteTemplate(await this.app.vault.read(tpl), tokens);
+      else new Notice(`Template not found: ${tplPath}. Used the default instead.`);
+    }
+    await this._ensureFolder(path.slice(0, path.lastIndexOf('/')));
+    await this.app.vault.create(path, content);
+    return path;
+  }
+
+  // The Create button on the lecture and assignment screens: ask if the
+  // name is taken, create, onLinked(path), then open the note in a new tab.
+  createAndLinkNote(kind, cls, item, n, onLinked) {
+    const run = async (mode) => {
+      let path;
+      try {
+        path = await this.createItemNote(kind, cls, item, n, mode);
+      } catch (e) {
+        console.error('Hold Course: create note', e);
+        new Notice(`Couldn't create the note: ${e.message || e}`);
+        return;
+      }
+      await onLinked(path);
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file) await this.app.workspace.getLeaf('tab').openFile(file);
+    };
+    const existing = this.itemNotePath(kind, cls, item, n);
+    if (this.app.vault.getAbstractFileByPath(existing)) {
+      new SyllabusNoteChoiceModal(this.app, existing, run, {
+        title: 'A note with this name already exists',
+        body: `${existing} is already in your vault. Use it, or start a new note? Starting a new one leaves the old note where it is.`,
+      }).open();
+    } else {
+      run('new');
+    }
+  }
+
   // mode 'overwrite' replaces an existing file; otherwise an existing name
   // gets " 2", " 3"… (Save as new copy). Opens the note afterwards.
   async writeSyllabus(cls, sem, opts, mode) {
@@ -3496,7 +4134,11 @@ class HoldCoursePlugin extends Plugin {
     delete cls.finalGrade;
     // #72: the setting and minimum come along; the marks are results.
     delete cls.attendance;
-    if (sourceSemesterId === targetSemesterId) cls.code = `${cls.code} (copy)`;
+    if (sourceSemesterId === targetSemesterId) {
+      // A code-less class marks its name instead, so the copy isn't " (copy)".
+      if (String(cls.code || '').trim()) cls.code = `${cls.code} (copy)`;
+      else cls.name = `${cls.name || 'Untitled class'} (copy)`;
+    }
     if (!cls.colorPicked) cls.colorIndex = firstFreeColorIndex(target.classes);
 
     if (mode === 'shift') {
@@ -3564,6 +4206,9 @@ class HoldCoursePlugin extends Plugin {
       const idMap = new Map();
       for (const r of relevant) {
         const copy = { ...r, id: generateId(), classIds: [cls.id], status: 'unread' };
+        // 2026-10-29: a reminder ("find a copy") belongs to one term; My copy
+        // is kept, since you usually still have the book.
+        delete copy.reminder;
         if (!keepNotes) { copy.vaultLink = ''; copy.notes = ''; }
         target.resources.push(copy);
         idMap.set(r.id, copy.id);
@@ -3627,6 +4272,7 @@ class HoldCoursePlugin extends Plugin {
       linkedBook: '',
       linkedNote: '',
     };
+    if (data.dueTime) assign.dueTime = data.dueTime; // 1.14.0
     if (lectureId) {
       const lec = (cls.lectures || []).find(l => l.id === lectureId);
       if (lec) { lec.assignments.push(assign); return assign; }
@@ -3637,7 +4283,9 @@ class HoldCoursePlugin extends Plugin {
 
   updateAssignment(semesterId, classId, assignmentId, updates) {
     const result = this.findAssignment(semesterId, classId, assignmentId);
-    if (result) Object.assign(result.assignment, updates);
+    if (!result) return;
+    Object.assign(result.assignment, updates);
+    if ('dueTime' in updates && !updates.dueTime) delete result.assignment.dueTime;
   }
 
   deleteAssignment(semesterId, classId, assignmentId) {
@@ -3707,6 +4355,8 @@ class HoldCoursePlugin extends Plugin {
       status: 'not-started',
     };
     if (data.type && data.type !== 'Exam') exam.type = data.type;
+    if (data.startTime) exam.startTime = data.startTime; // 1.14.0
+    if (data.startTime && data.endTime) exam.endTime = data.endTime;
     cls.exams.push(exam);
     return exam;
   }
@@ -3716,6 +4366,8 @@ class HoldCoursePlugin extends Plugin {
     if (!exam) return;
     Object.assign(exam, updates);
     if ('type' in updates && (!updates.type || updates.type === 'Exam')) delete exam.type;
+    if ('startTime' in updates && !updates.startTime) delete exam.startTime;
+    if (!exam.startTime || ('endTime' in updates && !updates.endTime)) delete exam.endTime;
   }
 
   deleteExam(semesterId, classId, examId) {
@@ -3746,6 +4398,11 @@ class HoldCoursePlugin extends Plugin {
       notes: '',
     };
     if (RESOURCE_ROLES[data.role]) resource.role = data.role; // #44 C
+    // 2026-10-29: presence-only, like role.
+    for (const k of ['reminder', 'myCopy']) {
+      const v = (data[k] || '').trim();
+      if (v) resource[k] = v;
+    }
     sem.resources.push(resource);
     return resource;
   }
@@ -3756,6 +4413,12 @@ class HoldCoursePlugin extends Plugin {
     Object.assign(resource, updates);
     // #44 C: presence-based — a blank role removes the key.
     if ('role' in updates && !RESOURCE_ROLES[updates.role]) delete resource.role;
+    // 2026-10-29: same for reminder and My copy.
+    for (const k of ['reminder', 'myCopy']) {
+      if (!(k in updates)) continue;
+      const v = (updates[k] || '').trim();
+      if (v) resource[k] = v; else delete resource[k];
+    }
   }
 
   // #51: every assignment in the semester that links this resource as its
@@ -3799,10 +4462,43 @@ class HoldCourseSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
+  // 1.14.0: four tabs, since Notes and Export made one page too long. The
+  // open tab is kept on the plugin (not saved), so it survives closing and
+  // reopening Settings and every this.display() redraw in this session.
   display() {
     const { containerEl } = this;
     containerEl.empty();
 
+    const tabs = {
+      Display: el => this._renderDisplay(el),
+      Coursework: el => {
+        this._renderReadingPace(el);
+        this._renderGrades(el);
+        this._renderAssignmentTypes(el);
+        this._renderExamTypes(el);
+      },
+      Notes: el => {
+        this._renderNotes(el);
+        this._renderSyllabus(el);
+      },
+      Export: el => this._renderExport(el),
+    };
+    if (!tabs[this.plugin._settingsTab]) this.plugin._settingsTab = 'Display';
+
+    const tabRow = containerEl.createDiv('hc-tab-row hc-settings-tabs');
+    for (const name of Object.keys(tabs)) {
+      const btn = tabRow.createEl('button', { cls: 'hc-tab', text: name });
+      if (name === this.plugin._settingsTab) btn.addClass('hc-tab--active');
+      btn.addEventListener('click', () => {
+        if (name === this.plugin._settingsTab) return;
+        this.plugin._settingsTab = name;
+        this.display();
+      });
+    }
+    tabs[this.plugin._settingsTab](containerEl);
+  }
+
+  _renderDisplay(containerEl) {
     new Setting(containerEl)
       .setName('Grayscale display mode')
       .setDesc('Increases text contrast and size for e-ink displays (e.g. Boox tablets) or a phone/tablet set to grayscale — both wash out low-contrast text the same way.')
@@ -3836,11 +4532,102 @@ class HoldCourseSettingTab extends PluginSettingTab {
           await this.plugin.save();
         }));
 
-    this._renderReadingPace(containerEl);
-    this._renderGrades(containerEl);
-    this._renderAssignmentTypes(containerEl);
-    this._renderExamTypes(containerEl);
-    this._renderSyllabus(containerEl);
+    new Setting(containerEl)
+      .setName('Open Today when Obsidian starts')
+      .setDesc('Opens Today in the right sidebar at startup. When off, open it from the ribbon icon or the command.')
+      .addToggle(tg => tg
+        .setValue(!this.plugin.data.settings.skipTodayOnStartup)
+        .onChange(async on => {
+          if (on) delete this.plugin.data.settings.skipTodayOnStartup;
+          else this.plugin.data.settings.skipTodayOnStartup = true;
+          await this.plugin.save();
+        }));
+  }
+
+  // 1.14.0: calendar file, CSV, and backup. Keys are removed when back at
+  // their default: exportFolder (root), calendarSkip (include everything),
+  // calendarAutoUpdate (off).
+  _renderExport(containerEl) {
+    const settings = this.plugin.data.settings;
+    // No "Export" heading: the tab already says it.
+    new Setting(containerEl)
+      .setName('Export folder')
+      .setDesc('Where the calendar file, CSV files, and backups are saved. Leave blank for the top of the vault. Obsidian hides .ics, .csv, and .json files unless Settings → Files and links → Detect all file extensions is on.')
+      .addText(t => {
+        t.setPlaceholder('Vault root');
+        t.setValue(settings.exportFolder || '');
+        t.onChange(async v => {
+          if (v.trim()) settings.exportFolder = v.trim();
+          else delete settings.exportFolder;
+          await this.plugin.save();
+        });
+      });
+
+    const skip = new Set(settings.calendarSkip || []);
+    const include = (name, key) => new Setting(containerEl)
+      .setName(name)
+      .addToggle(tg => tg.setValue(!skip.has(key)).onChange(async on => {
+        if (on) skip.delete(key); else skip.add(key);
+        if (skip.size) settings.calendarSkip = [...skip]; else delete settings.calendarSkip;
+        await this.plugin.save();
+      }));
+    new Setting(containerEl)
+      .setName('Calendar file')
+      .setDesc('Writes "Hold Course.ics" for the current semester, to import into Google Calendar, Apple Calendar, or Outlook. Importing it again updates the same events instead of adding copies. Lectures are timed when their class has meeting days and times; items without a time are all-day. Done items are marked ✓.')
+      .addButton(b => b.setButtonText('Export calendar').setCta().onClick(() => this.plugin.writeCalendar(false)));
+    include('Include lectures', 'lectures');
+    include('Include assignments', 'assignments');
+    include('Include exams', 'exams');
+    new Setting(containerEl)
+      .setName('Keep the calendar file up to date')
+      .setDesc('Rewrites the calendar file after every change. To subscribe instead of importing, put the export folder in a cloud drive that gives the file a public link, and subscribe to that link in your calendar app.')
+      .addToggle(tg => tg.setValue(!!settings.calendarAutoUpdate).onChange(async on => {
+        if (on) settings.calendarAutoUpdate = true; else delete settings.calendarAutoUpdate;
+        await this.plugin.save();
+        if (on) this.plugin.writeCalendar(false);
+      }));
+
+    new Setting(containerEl)
+      .setName('CSV')
+      .setDesc('Every lecture, assignment, and exam in all semesters, one row each, for a spreadsheet.')
+      .addButton(b => b.setButtonText('Export CSV').onClick(() => this.plugin.exportCsv()));
+    new Setting(containerEl)
+      .setName('Backup')
+      .setDesc('All of Hold Course\'s data in one JSON file. Keep it somewhere safe.')
+      .addButton(b => b.setButtonText('Export backup').onClick(() => this.plugin.exportBackup()));
+  }
+
+  // 1.14.0 (#74): where Create puts lecture and assignment notes, their
+  // names, and their templates. Blank settings are removed (defaults apply).
+  _renderNotes(containerEl) {
+    const settings = this.plugin.data.settings;
+    const text = (name, desc, key, placeholder) => new Setting(containerEl)
+      .setName(name).setDesc(desc)
+      .addText(t => {
+        t.setPlaceholder(placeholder);
+        t.setValue(settings[key] || '');
+        t.onChange(async v => {
+          if (v.trim()) settings[key] = v.trim();
+          else delete settings[key];
+          await this.plugin.save();
+        });
+      });
+    const template = (name, desc, key) => {
+      const s = text(name, desc, key, 'Built-in default');
+      s.addButton(b => b.setButtonText('Browse').onClick(() => {
+        new VaultLinkSuggestModal(this.app, async p => {
+          settings[key] = p;
+          await this.plugin.save();
+          this.display();
+        }).open();
+      }));
+    };
+    new Setting(containerEl).setName('Notes').setHeading();
+    text('Notes folder', 'Where Create saves new lecture and assignment notes, in a subfolder for each class. Leave blank for the top of the vault.', 'notesFolder', 'Vault root');
+    text('Lecture note name', 'Fill-ins: {code}, {class}, {n} (lecture number), {title}, {date}.', 'lectureNoteName', NOTE_NAME_DEFAULTS.lecture);
+    text('Assignment note name', 'Same fill-ins. {n} is the number of the assignment\'s lecture, if it has one.', 'assignmentNoteName', NOTE_NAME_DEFAULTS.assignment);
+    template('Lecture template', 'A note to copy for new lecture notes. Hold Course fills in {{title}}, {{code}}, {{class}}, {{n}}, {{date}}, and {{professor}}, and leaves everything else, such as Templater code, as written. Leave blank for a short default with course, lecture, date, and type properties.', 'lectureTemplate');
+    template('Assignment template', 'The same, for new assignment notes.', 'assignmentTemplate');
   }
 
   // #44: where exported syllabi go. Absent means the vault root.
@@ -3848,7 +4635,7 @@ class HoldCourseSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName('Syllabus').setHeading();
     new Setting(containerEl)
       .setName('Syllabus folder')
-      .setDesc('Where exported syllabi are saved. Leave blank for the top of the vault. The folder is created if it doesn\'t exist.')
+      .setDesc('Where exported syllabi and new syllabus notes are saved. Leave blank for the top of the vault. The folder is created if it doesn\'t exist.')
       .addText(text => {
         text.setPlaceholder('Vault root');
         text.setValue(this.plugin.data.settings.syllabusFolder || '');
@@ -4358,7 +5145,7 @@ class HoldCourseView extends ItemView {
       const cls = sem.classes.find(c => c.id === this.currentClassId);
       if (cls) {
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
-        const span = bc.createSpan({ text: cls.code });
+        const span = bc.createSpan({ text: classLabel(cls) });
         span.style.color = accentText(getColor(cls.colorIndex));
         span.style.fontWeight = '500';
         span.style.fontSize = '12px';
@@ -4369,7 +5156,7 @@ class HoldCourseView extends ItemView {
       const cls = sem.classes.find(c => c.id === this.currentClassId);
       if (cls) {
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
-        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: cls.code });
+        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: classLabel(cls) });
         clsBtn.style.color = accentText(getColor(cls.colorIndex));
         clsBtn.style.fontWeight = '500';
         clsBtn.addEventListener('click', () => this.navigate('class', cls.id));
@@ -4391,7 +5178,7 @@ class HoldCourseView extends ItemView {
         const bcResult = this.plugin.findAssignment(sem.id, cls.id, this.currentAssignmentId);
         const bcIsReading = !!(bcResult && bcResult.assignment && bcResult.assignment.type === 'Reading');
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
-        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: cls.code });
+        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: classLabel(cls) });
         clsBtn.style.color = accentText(getColor(cls.colorIndex));
         clsBtn.style.fontWeight = '500';
         clsBtn.addEventListener('click', () => {
@@ -4407,7 +5194,7 @@ class HoldCourseView extends ItemView {
       const cls = sem.classes.find(c => c.id === this.currentClassId);
       if (cls) {
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
-        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: cls.code });
+        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: classLabel(cls) });
         clsBtn.style.color = accentText(getColor(cls.colorIndex));
         clsBtn.style.fontWeight = '500';
         clsBtn.addEventListener('click', () => {
@@ -4423,7 +5210,7 @@ class HoldCourseView extends ItemView {
       const cls = sem.classes.find(c => c.id === this.currentClassId);
       if (cls) {
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
-        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: cls.code });
+        const clsBtn = bc.createEl('button', { cls: 'hc-bc-link', text: classLabel(cls) });
         clsBtn.style.color = accentText(getColor(cls.colorIndex));
         clsBtn.style.fontWeight = '500';
         clsBtn.addEventListener('click', () => {
@@ -4789,17 +5576,26 @@ class HoldCourseView extends ItemView {
 
     // Meeting days (+ time, when set — same row, no extra height).
     // #25: an online class shows an Online tag in that spot instead.
+    // 1.14.0: Audit / Self-paced chips end the same row (or make one).
     const online = isClassOnline(cls);
+    const modes = classModeLabels(cls);
+    let daysRow = null;
     if (online) {
-      const daysRow = body.createDiv('hc-class-days');
+      daysRow = body.createDiv('hc-class-days');
       daysRow.createSpan({ cls: 'hc-day-chip hc-online-chip', text: 'Online' });
     } else if (cls.meetingDays?.length) {
-      const daysRow = body.createDiv('hc-class-days');
+      daysRow = body.createDiv('hc-class-days');
       for (const day of cls.meetingDays) {
         daysRow.createSpan({ cls: 'hc-day-chip', text: day });
       }
       if (cls.meetingStartTime && cls.meetingEndTime) {
         daysRow.createSpan({ cls: 'hc-class-days-time', text: formatTimeRange(cls.meetingStartTime, cls.meetingEndTime) });
+      }
+    }
+    if (modes.length) {
+      if (!daysRow) daysRow = body.createDiv('hc-class-days');
+      for (const label of modes) {
+        daysRow.createSpan({ cls: 'hc-day-chip hc-online-chip hc-class-mode-chip', text: label });
       }
     }
 
@@ -4972,6 +5768,15 @@ class HoldCourseView extends ItemView {
         clockText += ' · ' + formatTimeRange(cls.meetingStartTime, cls.meetingEndTime);
       }
       item.createSpan({ text: clockText });
+    }
+
+    // 1.14.0: Audit / Self-paced, after when the class meets. Silent when absent.
+    for (const label of classModeLabels(cls)) {
+      const item = meta.createDiv('hc-class-meta-item hc-class-mode');
+      const icon = item.createSpan({ cls: 'hc-inline-icon' });
+      setIcon(icon, CLASS_MODE_ICONS[label]);
+      icon.style.color = accentText(color);
+      item.createSpan({ text: label });
     }
 
     if (!online && cls.location) {
@@ -5296,7 +6101,7 @@ class HoldCourseView extends ItemView {
     const backBtn = topbar.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
-    backBtn.createSpan({ text: cls.code });
+    backBtn.createSpan({ text: classLabel(cls) });
     backBtn.addEventListener('click', () => this.navigate('class', cls.id));
 
     const navEl = topbar.createDiv('hc-detail-nav');
@@ -5427,6 +6232,16 @@ class HoldCourseView extends ItemView {
           lec.vaultLink = '';
           this.plugin.save();
           renderVaultLinkSection();
+        });
+      } else {
+        // 1.14.0: new note from the lecture template, linked and opened.
+        const createBtn = linkRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Create' });
+        createBtn.addEventListener('click', () => {
+          this.plugin.createAndLinkNote('lecture', cls, lec, num, async (p) => {
+            lec.vaultLink = p;
+            await this.plugin.save();
+            renderVaultLinkSection();
+          });
         });
       }
     };
@@ -5956,7 +6771,7 @@ class HoldCourseView extends ItemView {
       const srcSorted = getLecturesSorted(cls);
       const srcNum = srcLec ? srcSorted.indexOf(srcLec) + 1 : '?';
       backBtn.createSpan({ text: `Lecture ${srcNum}` });
-    } else backBtn.createSpan({ text: cls.code });
+    } else backBtn.createSpan({ text: classLabel(cls) });
     backBtn.addEventListener('click', () => {
       if (fromGlobal) {
         this.navigate('assignments');
@@ -6010,7 +6825,8 @@ class HoldCourseView extends ItemView {
     if (assignment.dueDate) {
       const info = getDueInfo(assignment.dueDate);
       const dueRow = content.createDiv('hc-assign-detail-due');
-      dueRow.createSpan({ text: `Due ${formatDateLong(assignment.dueDate)}` });
+      const dueAt = assignment.dueTime ? ` at ${formatTimeShort(assignment.dueTime)}` : '';
+      dueRow.createSpan({ text: `Due ${formatDateLong(assignment.dueDate)}${dueAt}` });
       if (info && info.urgency !== 'upcoming' && !isDoneLike(assignment.status)) {
         const chip = dueRow.createSpan({ cls: 'hc-assign-detail-due-chip', text: info.note });
         chip.style.color = info.color;
@@ -6207,6 +7023,18 @@ class HoldCourseView extends ItemView {
             this.plugin.save();
             renderNoteSection();
             refreshNoteDependents();
+          });
+        } else {
+          // #74: new note from the assignment template, linked and opened.
+          const createBtn = noteRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Create' });
+          createBtn.addEventListener('click', () => {
+            const lecIdx = lectureId ? getLecturesSorted(cls).findIndex(l => l.id === lectureId) : -1;
+            this.plugin.createAndLinkNote('assignment', cls, assignment, lecIdx >= 0 ? lecIdx + 1 : null, async (p) => {
+              assignment.linkedNote = p;
+              await this.plugin.save();
+              renderNoteSection();
+              refreshNoteDependents();
+            });
           });
         }
       };
@@ -6587,7 +7415,7 @@ class HoldCourseView extends ItemView {
     const backBtn = topbar.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
-    backBtn.createSpan({ text: cls.code });
+    backBtn.createSpan({ text: classLabel(cls) });
     backBtn.addEventListener('click', () => {
       this.currentTab = 'Exams';
       this.navigate('class', cls.id);
@@ -6614,7 +7442,8 @@ class HoldCourseView extends ItemView {
     renderTermWindowFlag(titleRow, exam.dueDate, cls, isDoneLike(exam.status));
 
     // Type and due date
-    const examMeta = [getExamType(exam), exam.dueDate ? formatDateLong(exam.dueDate) : ''].filter(Boolean).join(' · ');
+    const examTime = formatItemTime(itemTimes({ kind: 'exam', exam }));
+    const examMeta = [getExamType(exam), exam.dueDate ? formatDateLong(exam.dueDate) : '', examTime].filter(Boolean).join(' · ');
     content.createDiv({ cls: 'hc-lecture-detail-date', text: examMeta });
 
     // Actions row
@@ -6696,7 +7525,7 @@ class HoldCourseView extends ItemView {
     const libFilterIcon = libFilterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(libFilterIcon, 'filter');
     const libFilterLabel = this.libraryFilterClassId
-      ? (sem.classes.find(c => c.id === this.libraryFilterClassId)?.code || 'All classes')
+      ? classLabel(sem.classes.find(c => c.id === this.libraryFilterClassId), 'All classes')
       : 'All classes';
     libFilterBtn.createSpan({ cls: 'hc-global-filter-label', text: libFilterLabel });
     const libFilterChev = libFilterBtn.createSpan({ cls: 'hc-btn-icon' });
@@ -6719,7 +7548,7 @@ class HoldCourseView extends ItemView {
           if (c.id === this.libraryFilterClassId) item.addClass('hc-sem-drop-item--active');
           const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
           if (c.id === this.libraryFilterClassId) setIcon(icon, 'check');
-          const lbl = item.createSpan({ text: c.code });
+          const lbl = item.createSpan({ text: classLabel(c) });
           lbl.style.color = accentText(getColor(c.colorIndex));
           item.addEventListener('click', () => { this.libraryFilterClassId = c.id; close(); this.render(); });
         }
@@ -6737,6 +7566,20 @@ class HoldCourseView extends ItemView {
       sem.librarySort = sortCycle[sortKey];
       this.plugin.save();
       this.render(true); // #60
+    });
+
+    // 2026-10-29: paste a reading list. The Library filter's class (else the
+    // class being viewed) starts selected.
+    const bulkBtn = libRightControls.createEl('button', { cls: 'hc-btn' });
+    const bulkIcon = bulkBtn.createSpan({ cls: 'hc-btn-icon' });
+    setIcon(bulkIcon, 'list-plus');
+    bulkBtn.createSpan({ text: 'Bulk add' });
+    bulkBtn.addEventListener('click', () => {
+      const preselect = this.libraryFilterClassId || (cls && cls.id) || null;
+      new BulkAddResourcesModal(this.app, this.plugin, sem.id, sem.classes, preselect, () => {
+        this.plugin.save();
+        this.render(true);
+      }).open();
     });
 
     const addBtn = libRightControls.createEl('button', { cls: 'hc-btn' });
@@ -6770,7 +7613,19 @@ class HoldCourseView extends ItemView {
     if (resource.author) {
       main.createDiv({ cls: 'hc-resource-author', text: resource.author });
     }
+    // "Required · Kindle" under the author (2026-10-30: was under the chips
+    // on the right, which crowded the row on a phone). Silent when absent.
+    const meta = resourceMetaLine(resource);
+    if (meta) main.createDiv({ cls: 'hc-resource-meta', text: meta });
+    // 2026-10-29: silent when absent (Principle 5).
+    if (resource.reminder) {
+      const rem = main.createDiv({ cls: 'hc-resource-reminder' });
+      const remIcon = rem.createSpan({ cls: 'hc-resource-reminder-icon' });
+      setIcon(remIcon, 'sticky-note');
+      rem.createSpan({ text: resource.reminder });
+    }
 
+    // Right: chips + status.
     const right = row.createDiv('hc-resource-right');
 
     if (resource.classIds && resource.classIds.length > 0) {
@@ -6778,7 +7633,7 @@ class HoldCourseView extends ItemView {
       for (const classId of resource.classIds) {
         const c = sem.classes.find(x => x.id === classId);
         if (c) {
-          const chip = chipsEl.createSpan({ cls: 'hc-resource-class-chip', text: c.code });
+          const chip = chipsEl.createSpan({ cls: 'hc-resource-class-chip', text: classLabel(c) });
           chip.style.color = accentText(getColor(c.colorIndex));
           chip.style.background = getColor(c.colorIndex).bg;
         }
@@ -6822,7 +7677,7 @@ class HoldCourseView extends ItemView {
     const backBtn = topbar.createEl('button', { cls: 'hc-btn hc-lecture-back-btn' });
     const backIcon = backBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(backIcon, 'arrow-left');
-    backBtn.createSpan({ text: cls.code });
+    backBtn.createSpan({ text: classLabel(cls) });
     backBtn.addEventListener('click', () => {
       this.currentTab = 'Library';
       this.navigate('class', cls.id);
@@ -6902,7 +7757,7 @@ class HoldCourseView extends ItemView {
       for (const classId of resource.classIds) {
         const c = sem.classes.find(x => x.id === classId);
         if (c) {
-          const chip = chipsRow.createSpan({ cls: 'hc-resource-class-chip', text: c.code });
+          const chip = chipsRow.createSpan({ cls: 'hc-resource-class-chip', text: classLabel(c) });
           chip.style.color = accentText(getColor(c.colorIndex));
           chip.style.background = getColor(c.colorIndex).bg;
         }
@@ -6918,6 +7773,11 @@ class HoldCourseView extends ItemView {
     if (RESOURCE_ROLES[resource.role]) {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Use' });
       content.createDiv({ cls: 'hc-resource-detail-type', text: RESOURCE_ROLES[resource.role] });
+    }
+    // 2026-10-29: silent when absent.
+    if (resource.myCopy) {
+      content.createDiv({ cls: 'hc-lecture-section-label', text: 'My copy' });
+      content.createDiv({ cls: 'hc-resource-detail-type', text: resource.myCopy });
     }
 
     // Sources
@@ -6992,7 +7852,7 @@ class HoldCourseView extends ItemView {
       for (const { assignment, refCls, lectureLabel } of allRefs) {
         const refRow = refList.createDiv('hc-resource-ref-row');
 
-        const chip = refRow.createSpan({ cls: 'hc-resource-class-chip', text: refCls.code });
+        const chip = refRow.createSpan({ cls: 'hc-resource-class-chip', text: classLabel(refCls) });
         chip.style.color = accentText(getColor(refCls.colorIndex));
         chip.style.background = getColor(refCls.colorIndex).bg;
 
@@ -7009,6 +7869,19 @@ class HoldCourseView extends ItemView {
         refRow.addEventListener('click', () => this.navigate('assignment', refCls.id, null, assignment.id, null, null, this.viewedSemesterId));
       }
     }
+
+    // Reminder (2026-10-29): one line, saved on blur like Notes. Through
+    // updateResource so a cleared reminder removes the key.
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Reminder' });
+    const reminderInput = content.createEl('input', { cls: 'hc-resource-reminder-input', type: 'text' });
+    reminderInput.value = resource.reminder || '';
+    reminderInput.placeholder = 'Add a reminder…';
+    reminderInput.addEventListener('keydown', e => { if (e.key === 'Enter') reminderInput.blur(); });
+    reminderInput.addEventListener('blur', () => {
+      if ((reminderInput.value || '').trim() === (resource.reminder || '')) return;
+      this.plugin.updateResource(sem.id, resource.id, { reminder: reminderInput.value });
+      this.plugin.save();
+    });
 
     // Notes
     content.createDiv({ cls: 'hc-lecture-section-label', text: 'Notes' });
@@ -7059,7 +7932,7 @@ class HoldCourseView extends ItemView {
     const filterIcon = filterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(filterIcon, 'filter');
     const filterLabel = this.globalAssignFilterClassId
-      ? (classes.find(c => c.id === this.globalAssignFilterClassId)?.code || 'All classes')
+      ? classLabel(classes.find(c => c.id === this.globalAssignFilterClassId), 'All classes')
       : 'All classes';
     filterBtn.createSpan({ cls: 'hc-global-filter-label', text: filterLabel });
     const filterChev = filterBtn.createSpan({ cls: 'hc-btn-icon' });
@@ -7086,7 +7959,7 @@ class HoldCourseView extends ItemView {
           if (cls.id === this.globalAssignFilterClassId) item.addClass('hc-sem-drop-item--active');
           const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
           if (cls.id === this.globalAssignFilterClassId) setIcon(icon, 'check');
-          const label = item.createSpan({ text: cls.code });
+          const label = item.createSpan({ text: classLabel(cls) });
           label.style.color = accentText(getColor(cls.colorIndex));
           item.addEventListener('click', () => {
             this.globalAssignFilterClassId = cls.id;
@@ -7297,7 +8170,7 @@ class HoldCourseView extends ItemView {
       if (a.classInactive) row.addClass('hc-atable-row--done');
 
       // Code
-      const codeEl = row.createDiv({ cls: 'hc-atable-code', text: cls.code });
+      const codeEl = row.createDiv({ cls: 'hc-atable-code', text: classLabel(cls) });
       codeEl.style.color = accentText(color);
 
       // Type pill — same treatment as the card list it replaces.
@@ -7568,14 +8441,14 @@ class HoldCourseView extends ItemView {
     const bySemester = (a, b) => compareSemestersByTimeline(a.sem, b.sem, -1);
 
     const tiebreak = (a, b) =>
-      bySemester(a, b) || txt(a.cls.code).localeCompare(txt(b.cls.code));
+      bySemester(a, b) || txt(classLabel(a.cls)).localeCompare(txt(classLabel(b.cls)));
 
     rows.sort((a, b) => {
       let primary = 0;
       if (this.coursesSortKey === 'semester') {
         primary = compareSemestersByTimeline(a.sem, b.sem, dir);
       } else if (this.coursesSortKey === 'code') {
-        primary = dir * txt(a.cls.code).localeCompare(txt(b.cls.code));
+        primary = dir * txt(classLabel(a.cls)).localeCompare(txt(classLabel(b.cls)));
       } else if (this.coursesSortKey === 'course') {
         primary = dir * txt(a.cls.name).localeCompare(txt(b.cls.name));
       } else if (this.coursesSortKey === 'status') {
@@ -7650,10 +8523,16 @@ class HoldCourseView extends ItemView {
       // Typed final grade reads plainly. A computed one is the letter and
       // percent, muted, marked "so far". Clicking a grade opens the class
       // on its Grades tab.
+      // 1.14.0: an audited class with no grade reads "Audit", not a dash.
       const gradeEl = row.createDiv('hc-courses-grade');
       if (!grade) {
         gradeEl.addClass('hc-courses-grade--none');
-        gradeEl.setText('—');
+        if (isClassAudit(cls)) {
+          gradeEl.addClass('hc-courses-grade--audit');
+          gradeEl.setText('Audit');
+        } else {
+          gradeEl.setText('—');
+        }
       } else {
         if (grade.typed) {
           gradeEl.setText(grade.text);
@@ -7816,7 +8695,7 @@ class HoldCourseView extends ItemView {
       const item = classGroup.createDiv('hc-cal-legend-item');
       const dot = item.createDiv('hc-cal-legend-dot');
       dot.style.background = c.accent;
-      item.createSpan({ cls: 'hc-cal-legend-label', text: cls.code });
+      item.createSpan({ cls: 'hc-cal-legend-label', text: classLabel(cls) });
     }
 
     legend.createDiv('hc-cal-legend-sep');
@@ -7962,7 +8841,7 @@ class HoldCourseView extends ItemView {
     const filterIcon = filterBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(filterIcon, 'filter');
     const label = this.calFilterClassId
-      ? (classes.find(c => c.id === this.calFilterClassId)?.code || 'All classes')
+      ? classLabel(classes.find(c => c.id === this.calFilterClassId), 'All classes')
       : 'All classes';
     filterBtn.createSpan({ text: label });
     const chevron = filterBtn.createSpan({ cls: 'hc-btn-icon' });
@@ -7990,7 +8869,7 @@ class HoldCourseView extends ItemView {
         if (cls.id === this.calFilterClassId) item.addClass('hc-sem-drop-item--active');
         const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
         if (cls.id === this.calFilterClassId) setIcon(icon, 'check');
-        const lbl = item.createSpan({ text: cls.code });
+        const lbl = item.createSpan({ text: classLabel(cls) });
         lbl.style.color = accentText(getColor(cls.colorIndex));
         item.addEventListener('click', () => { this.calFilterClassId = cls.id; closeDrop(); this.render(); });
       }
@@ -8171,12 +9050,12 @@ class HoldCourseView extends ItemView {
       info.createDiv({  cls: 'hc-cal-popover-title', text: item.title });
 
       // §1.3 merged time — a lecture that matched its class's meeting schedule.
-      if (item.kind === 'lecture' && item.meetingStartTime) {
-        info.createDiv({ cls: 'hc-cal-popover-time', text: formatTimeRange(item.meetingStartTime, item.meetingEndTime) });
-      }
+      // 1.14.0: and an assignment's due time or an exam's times.
+      const popTime = formatItemTime(itemTimes(item));
+      if (popTime) info.createDiv({ cls: 'hc-cal-popover-time', text: popTime });
 
       // Class code in muted text
-      info.createDiv({ cls: 'hc-cal-popover-class', text: item.cls.code });
+      info.createDiv({ cls: 'hc-cal-popover-class', text: classLabel(item.cls) });
 
       row.addEventListener('click', () => {
         this._closeCalPopover();
@@ -8563,9 +9442,27 @@ const CLASS_MODAL_TABS = ['Details', 'People', 'Schedule'];
 
 // Track grades, then Credits and Final grade (hidden, but kept, while off).
 // #12: off hides Grade everywhere for the class.
+// 1.14.0: Audit sits just above, since turning it on turns Track grades off
+// (a default; Track grades can go back on). Turning Audit off changes nothing.
 function renderClassGradeFields(contentEl, formData) {
   const gradeFields = createDiv();
+  let gradeToggle = null;
+  new Setting(contentEl)
+    .setClass('hc-setting-wide-desc')
+    .setName('Audit')
+    .setDesc('You’re taking this class without credit. Turning this on also turns off Track grades.')
+    .addToggle(toggle => {
+      toggle.setValue(!!formData.audit).onChange(v => {
+        formData.audit = v;
+        if (v && formData.trackGrades) {
+          formData.trackGrades = false;
+          if (gradeToggle) gradeToggle.setValue(false);
+          gradeFields.toggle(false);
+        }
+      });
+    });
   new Setting(contentEl).setName('Track grades').addToggle(toggle => {
+    gradeToggle = toggle;
     toggle.setValue(formData.trackGrades).onChange(v => {
       formData.trackGrades = v;
       gradeFields.toggle(v);
@@ -8585,6 +9482,25 @@ function renderClassGradeFields(contentEl, formData) {
     .addText(text => {
       text.setPlaceholder('e.g. A-');
       text.setValue(formData.finalGrade).onChange(v => formData.finalGrade = v);
+    });
+}
+
+// 1.14.0: Self-paced, just above Online on the Schedule tab. Turning it on
+// also turns Online on (a default; Online can go back off) and redraws the
+// tab so the meeting fields hide. Turning it off changes nothing else.
+function renderClassSelfPacedField(contentEl, formData, rerender) {
+  new Setting(contentEl)
+    .setClass('hc-setting-wide-desc')
+    .setName('Self-paced')
+    .setDesc('No set class meetings; you work at your own pace. Turning this on also turns on Online.')
+    .addToggle(toggle => {
+      toggle.setValue(!!formData.selfPaced).onChange(v => {
+        formData.selfPaced = v;
+        if (v && !formData.online) {
+          formData.online = true;
+          rerender();
+        }
+      });
     });
 }
 
@@ -8658,6 +9574,7 @@ class AddClassModal extends Modal {
       credits: '', finalGrade: '',               // #67
       trackAttendance: false, attendanceMin: '', // #72
       online: false,
+      audit: false, selfPaced: false,            // 1.14.0
     };
     // #53 / Discussion #18: preselect the color addClass() would choose, so
     // the swatch shown is the one you get. Only a tap marks it picked.
@@ -8721,7 +9638,7 @@ class AddClassModal extends Modal {
 
     new Setting(contentEl).setName('Course page URL').addText(text => {
       text.setPlaceholder('https://www.coursera.org/learn/...').setValue(this.formData.courseUrl).onChange(v => this.formData.courseUrl = v);
-      text.inputEl.type = 'url';
+      urlInput(text.inputEl);
     });
 
     // #12: on by default — matches current behavior for every class no one
@@ -8765,6 +9682,8 @@ class AddClassModal extends Modal {
   }
 
   _renderScheduleFields(contentEl) {
+    // 1.14.0
+    renderClassSelfPacedField(contentEl, this.formData, () => { contentEl.empty(); this._renderScheduleFields(contentEl); });
     // #25: Online (no meeting time). Hidden fields keep their values in
     // formData, so turning this off brings them back.
     new Setting(contentEl)
@@ -8801,7 +9720,7 @@ class AddClassModal extends Modal {
 
     new Setting(contentEl).setName('Meeting link').addText(text => {
       text.setPlaceholder('https://zoom.us/j/...').setValue(this.formData.meetingLink).onChange(v => this.formData.meetingLink = v);
-      text.inputEl.type = 'url';
+      urlInput(text.inputEl);
     });
 
     // #72
@@ -8854,7 +9773,7 @@ class AttendanceModal extends Modal {
     contentEl.empty();
     contentEl.addClass('hc-modal');
     contentEl.addClass('hc-attendance-modal');
-    contentEl.createEl('h2', { cls: 'hc-modal-title', text: `Attendance — ${this.cls.code || this.cls.name || 'Class'}` });
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: `Attendance — ${classLabel(this.cls)}` });
     const st = getAttendanceState(this.cls);
     if (!st) { contentEl.createDiv({ cls: 'hc-empty-text', text: 'Attendance isn’t on for this class.' }); return; }
     const sum = contentEl.createDiv({ cls: 'hc-attendance-summary' + (st.level ? ` hc-attendance--${st.level}` : ''), text: attendanceSummaryText(st) });
@@ -8925,6 +9844,8 @@ class EditClassModal extends Modal {
       trackAttendance: !!cls.trackAttendance,
       attendanceMin: cls.attendanceMin != null ? String(cls.attendanceMin) : '',
       online: isClassOnline(cls),
+      audit: isClassAudit(cls),         // 1.14.0
+      selfPaced: isClassSelfPaced(cls),
       colorIndex: typeof cls.colorIndex === 'number' ? cls.colorIndex % COLOR_PALETTE.length : 0,
       syllabusNote: cls.syllabusNote || '', // #44 A
     };
@@ -8984,7 +9905,7 @@ class EditClassModal extends Modal {
 
     new Setting(contentEl).setName('Course page URL').addText(text => {
       text.setValue(this.formData.courseUrl).onChange(v => this.formData.courseUrl = v);
-      text.inputEl.type = 'url';
+      urlInput(text.inputEl);
     });
 
     this._renderSyllabusNoteField(contentEl); // #44 A
@@ -9094,6 +10015,8 @@ class EditClassModal extends Modal {
   }
 
   _renderScheduleFields(contentEl) {
+    // 1.14.0
+    renderClassSelfPacedField(contentEl, this.formData, () => { contentEl.empty(); this._renderScheduleFields(contentEl); });
     // #25: Online (no meeting time). Hidden fields keep their values in
     // formData, so turning this off brings them back.
     new Setting(contentEl)
@@ -9130,7 +10053,7 @@ class EditClassModal extends Modal {
 
     new Setting(contentEl).setName('Meeting link').addText(text => {
       text.setValue(this.formData.meetingLink).onChange(v => this.formData.meetingLink = v);
-      text.inputEl.type = 'url';
+      urlInput(text.inputEl);
     });
 
     // #72: attendance, from the meeting schedule above.
@@ -9184,6 +10107,11 @@ class EditClassModal extends Modal {
     // #25: presence-based, same as notGraded.
     if (this.formData.online) this.cls.online = true;
     else delete this.cls.online;
+    // 1.14.0: presence-based, same as online.
+    if (this.formData.audit) this.cls.audit = true;
+    else delete this.cls.audit;
+    if (this.formData.selfPaced) this.cls.selfPaced = true;
+    else delete this.cls.selfPaced;
     // #44 A: presence-based.
     if ((this.formData.syllabusNote || '').trim()) this.cls.syllabusNote = this.formData.syllabusNote.trim();
     else delete this.cls.syllabusNote;
@@ -9240,7 +10168,7 @@ class MoveClassModal extends Modal {
     const n = (v, s, p) => `${v} ${v === 1 ? s : (p || s + 's')}`;
     contentEl.createEl('p', {
       cls: 'hc-modal-body',
-      text: `"${this.cls.code} — ${this.cls.name}" moves with ${n(lectures, 'lecture')}, ${n(assignments, 'assignment')}, and ${n(exams, 'exam')}. Nothing is deleted.`,
+      text: `"${classFullName(this.cls)}" moves with ${n(lectures, 'lecture')}, ${n(assignments, 'assignment')}, and ${n(exams, 'exam')}. Nothing is deleted.`,
     });
 
     const targetOptions = {};
@@ -9265,7 +10193,7 @@ class MoveClassModal extends Modal {
       const target = this.plugin.data.semesters.find(s => s.id === this.targetId);
       if (this.plugin.moveClass(this.sourceSemesterId, this.targetId, this.cls.id)) {
         this.onMove();
-        new Notice(`"${this.cls.code}" moved to ${target ? target.name : 'the selected semester'}.`);
+        new Notice(`"${classLabel(this.cls)}" moved to ${target ? target.name : 'the selected semester'}.`);
       }
       this.close();
     });
@@ -9282,21 +10210,23 @@ class MoveClassModal extends Modal {
 // #44 A: Create, when "<code> Syllabus notes.md" already exists (it was
 // removed from the class, or made for another class with the same code).
 // onChoose('existing' | 'new'); Cancel does nothing. (user, 2026-10-21)
+// Also used by Create on lecture and assignment notes (1.14.0), with text.
 class SyllabusNoteChoiceModal extends Modal {
-  constructor(app, path, onChoose) {
+  constructor(app, path, onChoose, text) {
     super(app);
     this.path = path;
     this.onChoose = onChoose;
+    this.text = text || {};
   }
 
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass('hc-modal');
-    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'A syllabus note already exists' });
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: this.text.title || 'A syllabus note already exists' });
     contentEl.createEl('p', {
       cls: 'hc-modal-body',
-      text: `${this.path} is already in your vault. Use it, or start a new note from the template? Starting a new one leaves the old note where it is.`,
+      text: this.text.body || `${this.path} is already in your vault. Use it, or start a new note from the template? Starting a new one leaves the old note where it is.`,
     });
     const footer = contentEl.createDiv('hc-modal-footer');
     footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' }).addEventListener('click', () => this.close());
@@ -9343,7 +10273,7 @@ class SyllabusExportModal extends Modal {
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Export syllabus' });
     contentEl.createEl('p', {
       cls: 'hc-modal-body',
-      text: `Makes a note with the course details and schedule for ${this.cls.code}. Statuses, grades, and progress are never included.`,
+      text: `Makes a note with the course details and schedule for ${classLabel(this.cls)}. Statuses, grades, and progress are never included.`,
     });
     contentEl.createEl('p', { cls: 'hc-modal-body', text: 'Also include:' });
     const toggle = (key, name, desc) => new Setting(contentEl).setName(name).setDesc(desc)
@@ -9452,7 +10382,7 @@ class CopyClassModal extends Modal {
     const n = (v, s) => `${v} ${v === 1 ? s : s + 's'}`;
     contentEl.createEl('p', {
       cls: 'hc-modal-body',
-      text: `"${this.cls.code} — ${this.cls.name}" is copied with ${n(lectures, 'lecture')}, ${n(assignments, 'assignment')}, and ${n(exams, 'exam')}. The original isn't changed.`,
+      text: `"${classFullName(this.cls)}" is copied with ${n(lectures, 'lecture')}, ${n(assignments, 'assignment')}, and ${n(exams, 'exam')}. The original isn't changed.`,
     });
 
     const targets = this.plugin.visibleSemesters();
@@ -9545,7 +10475,7 @@ class CopyClassModal extends Modal {
     });
     if (copy) {
       this.onCopy();
-      new Notice(`"${copy.code}" copied to ${target ? target.name : 'the selected semester'}.`);
+      new Notice(`"${classLabel(copy)}" copied to ${target ? target.name : 'the selected semester'}.`);
     }
     this.close();
   }
@@ -9573,7 +10503,7 @@ class DeleteClassModal extends Modal {
     const { toDelete, toUntag } = this.plugin._classResourcePlan(this.semesterId, this.cls.id);
     const res = (n) => `${n} library ${n === 1 ? 'resource' : 'resources'}`;
     const parts = [
-      `Delete "${this.cls.code} — ${this.cls.name}"? All its lectures, assignments, and exams will be removed.`,
+      `Delete "${classFullName(this.cls)}"? All its lectures, assignments, and exams will be removed.`,
     ];
     if (toDelete.length) parts.push(`${res(toDelete.length)} used only by this class will be deleted.`);
     if (toUntag.length) parts.push(`${res(toUntag.length)} used by other classes will stay.`);
@@ -10108,7 +11038,7 @@ class AddAssignmentModal extends Modal {
     if (!lockedType && excludeTypes.includes(initialType)) {
       initialType = ASSIGNMENT_TYPES.find(t => !excludeTypes.includes(t)) || initialType;
     }
-    this.formData = { title: '', type: initialType, dueDate: '', lectureId: defaultLectureId || null, linkedNote: '' };
+    this.formData = { title: '', type: initialType, dueDate: '', dueTime: '', lectureId: defaultLectureId || null, linkedNote: '' };
     // Pre-fill due date if opening from a lecture context
     if (defaultLectureId) {
       const lec = (cls.lectures || []).find(l => l.id === defaultLectureId);
@@ -10168,6 +11098,8 @@ class AddAssignmentModal extends Modal {
       dueDateInputEl = text.inputEl;
       text.onChange(v => this.formData.dueDate = v);
     });
+    // 1.14.0: optional due time (blank = all day).
+    renderTimePicker(contentEl, 'Due time', this.formData.dueTime, v => this.formData.dueTime = v);
 
     // Raised during #4 vault testing: setting up a reading required a trip
     // out to the detail screen just to attach the note that #4's estimate
@@ -10257,6 +11189,7 @@ class EditAssignmentModal extends Modal {
       title: assignment.title || '',
       type: assignment.type || 'Other',
       dueDate: assignment.dueDate || '',
+      dueTime: assignment.dueTime || '',
       lectureId: this.originalLectureId,
       linkedBook: assignment.linkedBook || '',
       linkedNote: assignment.linkedNote || '',
@@ -10318,6 +11251,8 @@ class EditAssignmentModal extends Modal {
       dueDateInputEl = text.inputEl;
       text.onChange(v => this.formData.dueDate = v);
     });
+    // 1.14.0: optional due time (blank = all day).
+    renderTimePicker(contentEl, 'Due time', this.formData.dueTime, v => this.formData.dueTime = v);
 
     // #4 follow-up: formData.linkedNote was already carried through _save()
     // below, but never had a field rendering it — editing a note link was
@@ -10383,6 +11318,7 @@ class EditAssignmentModal extends Modal {
       title: this.formData.title.trim(),
       type: this.formData.type,
       dueDate: this.formData.dueDate,
+      dueTime: this.formData.dueTime,
       linkedBook: this.formData.type === 'Reading' ? this.formData.linkedBook : '',
       linkedNote: this.formData.linkedNote,
     });
@@ -10816,7 +11752,7 @@ class AddExamModal extends Modal {
     this.semesterId = semesterId;
     this.cls = cls;
     this.onSave = onSave;
-    this.formData = { title: '', dueDate: '', type: 'Exam' };
+    this.formData = { title: '', dueDate: '', type: 'Exam', startTime: '', endTime: '' };
   }
 
   onOpen() {
@@ -10841,11 +11777,16 @@ class AddExamModal extends Modal {
       text.onChange(v => this.formData.dueDate = v);
     });
 
+    // 1.14.0: optional times (blank = all day).
+    renderTimePicker(contentEl, 'Start time', this.formData.startTime, v => this.formData.startTime = v);
+    renderTimePicker(contentEl, 'End time', this.formData.endTime, v => this.formData.endTime = v);
+
     this._renderFooter(contentEl, 'Add exam', () => this._save());
   }
 
   _save() {
     if (!this.formData.title.trim()) { new Notice('Exam title is required.'); return; }
+    { const bad = examTimeProblem(this.formData); if (bad) { new Notice(bad); return; } }
     this.plugin.addExam(this.semesterId, this.cls.id, this.formData);
     this.onSave();
     this.close();
@@ -10866,6 +11807,8 @@ class EditExamModal extends Modal {
       title: exam.title || '',
       dueDate: exam.dueDate || '',
       type: getExamType(exam),
+      startTime: exam.startTime || '',
+      endTime: exam.endTime || '',
     };
   }
 
@@ -10891,15 +11834,22 @@ class EditExamModal extends Modal {
       text.onChange(v => this.formData.dueDate = v);
     });
 
+    // 1.14.0: optional times (blank = all day).
+    renderTimePicker(contentEl, 'Start time', this.formData.startTime, v => this.formData.startTime = v);
+    renderTimePicker(contentEl, 'End time', this.formData.endTime, v => this.formData.endTime = v);
+
     this._renderFooter(contentEl, 'Save changes', () => this._save());
   }
 
   _save() {
     if (!this.formData.title.trim()) { new Notice('Exam title is required.'); return; }
+    { const bad = examTimeProblem(this.formData); if (bad) { new Notice(bad); return; } }
     this.plugin.updateExam(this.semesterId, this.classId, this.exam.id, {
       title: this.formData.title.trim(),
       dueDate: this.formData.dueDate,
       type: this.formData.type,
+      startTime: this.formData.startTime,
+      endTime: this.formData.endTime,
     });
     this.onSave();
     this.close();
@@ -10940,6 +11890,23 @@ class DeleteExamModal extends Modal {
   }
 
   onClose() { this.contentEl.empty(); }
+}
+
+// ─── My copy suggester (2026-10-29) ───────────────────────────────────────────
+// Free text with a dropdown of places already used, plus a few starters.
+
+class MyCopySuggest extends AbstractInputSuggest {
+  constructor(app, inputEl, options, onPick) {
+    super(app, inputEl);
+    this.options = options;
+    this.onPick = onPick;
+  }
+  getSuggestions(query) { return filterMyCopyOptions(this.options, query); }
+  renderSuggestion(value, el) { el.setText(value); }
+  selectSuggestion(value) {
+    this.onPick(value);
+    this.close();
+  }
 }
 
 // ─── Vault file suggester ─────────────────────────────────────────────────────
@@ -11051,6 +12018,207 @@ class QuickAddResourceModal extends Modal {
 
 // ─── Resource modals ──────────────────────────────────────────────────────────
 
+// Bulk add resources (2026-10-29), format-neutral: what happens to each parsed
+// row. action: 'new' (add), 'check' (add, but a similar title exists),
+// 'tag' (already in the Library: add the chosen classes to it), 'skip'
+// (reason 'have': already tagged to every chosen class; 'repeat': earlier in
+// the same paste). key identifies a row across re-parses (for its checkbox).
+function bulkResourcePlan(rows, resources, classIds) {
+  const picked = classIds || [];
+  const earlier = [];
+  return rows.map(row => {
+    const key = normalizeResourceText(row.title) + '|' + normalizeResourceText(row.author);
+    const out = { ...row, key, match: null };
+    const repeat = findResourceMatch(earlier, row.title, row.author);
+    earlier.push(row);
+    if (repeat && repeat.kind === 'exact') return { ...out, action: 'skip', reason: 'repeat' };
+    const m = findResourceMatch(resources, row.title, row.author);
+    if (m && m.kind === 'exact') {
+      const has = m.resource.classIds || [];
+      const missing = picked.filter(id => !has.includes(id));
+      return missing.length
+        ? { ...out, match: m.resource, action: 'tag', addClassIds: missing }
+        : { ...out, match: m.resource, action: 'skip', reason: 'have' };
+    }
+    if (m) return { ...out, match: m.resource, action: 'check' };
+    return { ...out, action: 'new' };
+  });
+}
+
+class BulkAddResourcesModal extends Modal {
+  constructor(app, plugin, semesterId, classes, preselectClassId, onSave) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.classes = classes || [];
+    this.onSave = onSave;
+    this.text = '';
+    this.unticked = new Set();
+    this.plan = [];
+    this.formData = {
+      type: 'Book',
+      role: '',
+      classIds: preselectClassId && this.classes.some(c => c.id === preselectClassId) ? [preselectClassId] : [],
+      onClassesChange: () => this._refresh(),
+    };
+  }
+
+  _semResources() {
+    const sem = this.plugin.data.semesters.find(s => s.id === this.semesterId);
+    return (sem && sem.resources) || [];
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this._makeDraggable(this);
+    // Same frame as Add/Edit resource (620px, 90vw on narrow screens): widening
+    // contentEl instead ran the dialog off its frame.
+    this.modalEl.addClass('hc-resource-modal-frame');
+    contentEl.addClass('hc-modal');
+    contentEl.addClass('hc-bulk-modal');
+    contentEl.addClass('hc-bulk-resource-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Bulk add resources' });
+
+    contentEl.createDiv({
+      cls: 'hc-bulk-hint',
+      text: 'One resource per line, as "Title by Author". A tab between title and author works too, for two columns copied from a spreadsheet. Add the other details later with Edit.',
+    });
+
+    this.textarea = contentEl.createEl('textarea', { cls: 'hc-bulk-textarea' });
+    this.textarea.setAttribute('placeholder', 'Grasping God\'s Word by J. Scott Duvall and J. Daniel Hays\nThe Blue Parakeet by Scot McKnight\nHow to Read the Bible Book by Book by Gordon D. Fee and Douglas Stuart');
+    this.textarea.setAttribute('rows', '8');
+    this.textarea.addEventListener('input', () => { this.text = this.textarea.value; this._refresh(); });
+
+    addResourceClassesSetting(contentEl, this.classes, this.formData);
+    addResourceRoleSetting(contentEl, this.formData);
+    addResourceTypeSetting(contentEl, this.formData);
+
+    this.summaryEl = contentEl.createDiv('hc-bulk-summary');
+    contentEl.createDiv({
+      cls: 'hc-bulk-warning',
+      text: 'Check every row before adding: a pasted line break splits one entry into two, and this can\'t be undone in bulk. Untick a row to leave it out.',
+    });
+    this.previewEl = contentEl.createDiv('hc-bulk-preview');
+
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    this.saveBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: 'Add resources' });
+    this.saveBtn.addEventListener('click', () => this._save());
+
+    this._refresh();
+    this.textarea.focus();
+  }
+
+  _codes(ids) {
+    return this.classes.filter(c => (ids || []).includes(c.id)).map(c => classLabel(c)).join(', ');
+  }
+
+  _refresh() {
+    if (!this.previewEl) return;
+    const { rows } = parseBulkResources(this.text);
+    this.plan = bulkResourcePlan(rows, this._semResources(), this.formData.classIds);
+
+    this.summaryEl.empty();
+    this.previewEl.empty();
+
+    if (this.plan.length === 0) {
+      this.summaryEl.setText(this.text.trim() ? 'No resources found.' : 'Paste a reading list above to preview.');
+      this.saveBtn.setText('Add resources');
+      this.saveBtn.disabled = true;
+      return;
+    }
+
+    for (const p of this.plan) {
+      const el = this.previewEl.createDiv('hc-bulk-row hc-bulk-res-row');
+      if (p.action === 'skip') {
+        el.addClass('hc-bulk-row--skip');
+        el.createSpan({ cls: 'hc-bulk-res-check' });
+      } else {
+        const cb = el.createEl('input', { cls: 'hc-bulk-res-check', type: 'checkbox' });
+        cb.checked = !this.unticked.has(p.key);
+        cb.addEventListener('change', () => {
+          if (cb.checked) this.unticked.delete(p.key); else this.unticked.add(p.key);
+          this._refreshCounts();
+        });
+      }
+      const text = el.createDiv('hc-bulk-res-text');
+      text.createDiv({ cls: 'hc-bulk-row-title', text: p.title });
+      text.createDiv({
+        cls: 'hc-bulk-res-author' + (p.author ? '' : ' hc-bulk-res-author--none'),
+        text: p.author || 'No author',
+      });
+      let note = '';
+      if (p.action === 'new') note = 'New';
+      else if (p.action === 'tag') note = `In Library: tag to ${this._codes(p.addClassIds)}`;
+      else if (p.action === 'check') note = `Check: like "${p.match.title}"${p.match.author ? ' by ' + p.match.author : ''}`;
+      else if (p.reason === 'have') note = 'Already in Library';
+      else note = 'Repeated above';
+      el.createDiv({ cls: `hc-bulk-res-note hc-bulk-res-note--${p.action}`, text: note });
+    }
+    this._refreshCounts();
+  }
+
+  _ticked() {
+    return this.plan.filter(p => p.action !== 'skip' && !this.unticked.has(p.key));
+  }
+
+  _refreshCounts() {
+    const ticked = this._ticked();
+    const add = ticked.filter(p => p.action === 'new' || p.action === 'check').length;
+    const tag = ticked.filter(p => p.action === 'tag').length;
+    const check = ticked.filter(p => p.action === 'check').length;
+    const skip = this.plan.filter(p => p.action === 'skip').length;
+    const parts = [`${add} to add`];
+    if (tag) parts.push(`${tag} already in Library, to tag`);
+    if (check) parts.push(`${check} to check`);
+    if (skip) parts.push(`${skip} skipped`);
+    this.summaryEl.setText(parts.join(' · '));
+
+    const s = n => (n === 1 ? '' : 's');
+    let label = 'Add resources';
+    if (add && tag) label = `Add ${add}, tag ${tag}`;
+    else if (add) label = `Add ${add} resource${s(add)}`;
+    else if (tag) label = `Tag ${tag} resource${s(tag)}`;
+    this.saveBtn.setText(label);
+    this.saveBtn.disabled = !(add || tag);
+  }
+
+  _save() {
+    const ticked = this._ticked();
+    if (!ticked.length) { new Notice('Nothing to add.'); return; }
+    let added = 0, tagged = 0;
+    for (const p of ticked) {
+      if (p.action === 'tag') {
+        p.match.classIds = [...(p.match.classIds || []), ...p.addClassIds.filter(id => !(p.match.classIds || []).includes(id))];
+        tagged++;
+      } else {
+        this.plugin.addResource(this.semesterId, {
+          title: p.title,
+          author: p.author,
+          type: this.formData.type,
+          role: this.formData.role,
+          classIds: [...this.formData.classIds],
+          status: 'unread',
+          vaultLink: '',
+          url: '',
+        });
+        added++;
+      }
+    }
+    const s = n => (n === 1 ? '' : 's');
+    const parts = [];
+    if (added) parts.push(`Added ${added} resource${s(added)}`);
+    if (tagged) parts.push(`tagged ${tagged} already in your Library`);
+    new Notice(parts.join(', ') + '.');
+    this.onSave();
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
 class AddResourceModal extends Modal {
   constructor(app, plugin, semesterId, classes, onSave) {
     super(app);
@@ -11058,7 +12226,7 @@ class AddResourceModal extends Modal {
     this.semesterId = semesterId;
     this.classes = classes;
     this.onSave = onSave;
-    this.formData = { title: '', author: '', type: '', role: '', classIds: [], status: 'unread', vaultLink: '', url: '' };
+    this.formData = { title: '', author: '', type: '', role: '', reminder: '', classIds: [], status: 'unread', myCopy: '', vaultLink: '', url: '' };
   }
 
   onOpen() {
@@ -11071,26 +12239,22 @@ class AddResourceModal extends Modal {
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Add resource' });
 
     new Setting(contentEl).setName('Title').addText(text => {
-      text.setPlaceholder('The Jewish Study Bible').onChange(v => this.formData.title = v);
+      text.setPlaceholder('The Jewish Study Bible').onChange(v => { this.formData.title = v; this._clearDuplicate(); });
+      text.inputEl.addEventListener('blur', () => this._checkDuplicate());
       text.inputEl.focus();
     });
 
     new Setting(contentEl).setName('Author').addText(text => {
-      text.setPlaceholder('Author name').onChange(v => this.formData.author = v);
+      text.setPlaceholder('Author name').onChange(v => { this.formData.author = v; this._clearDuplicate(); });
+      text.inputEl.addEventListener('blur', () => this._checkDuplicate());
     });
 
-    new Setting(contentEl).setName('Type').addDropdown(drop => {
-      drop.addOption('', '— Select type —');
-      drop.addOption('Book', 'Book');
-      drop.addOption('PDF', 'PDF');
-      drop.addOption('Handout', 'Handout');
-      drop.addOption('Article', 'Article');
-      drop.addOption('Online resource', 'Online resource');
-      drop.addOption('Other', 'Other');
-      drop.setValue(this.formData.type);
-      drop.onChange(v => this.formData.type = v);
-    });
+    // 2026-10-29: the same match rule as bulk add (findResourceMatch).
+    this.dupEl = contentEl.createDiv('hc-resource-dup');
+
+    addResourceTypeSetting(contentEl, this.formData);
     addResourceRoleSetting(contentEl, this.formData); // #44 C
+    addResourceReminderSetting(contentEl, this.formData);
 
     new Setting(contentEl).setName('Status').addDropdown(drop => {
       drop.addOption('unread', 'Unread');
@@ -11100,18 +12264,8 @@ class AddResourceModal extends Modal {
       drop.onChange(v => this.formData.status = v);
     });
 
-    if (this.classes.length > 0) {
-      const setting = new Setting(contentEl).setName('Classes');
-      const picker = setting.controlEl.createDiv('hc-days-picker');
-      for (const cls of this.classes) {
-        const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: cls.code, type: 'button' });
-        chip.addEventListener('click', () => {
-          const idx = this.formData.classIds.indexOf(cls.id);
-          if (idx === -1) { this.formData.classIds.push(cls.id); chip.addClass('hc-day-toggle--active'); }
-          else { this.formData.classIds.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
-        });
-      }
-    }
+    addResourceClassesSetting(contentEl, this.classes, this.formData);
+    addMyCopySetting(this.app, this.plugin, contentEl, this.formData);
 
     const addVaultLinkSetting = new Setting(contentEl).setName('Vault link');
     const renderAddVaultLinkField = () => {
@@ -11151,10 +12305,50 @@ class AddResourceModal extends Modal {
 
     new Setting(contentEl).setName('URL').addText(text => {
       text.setPlaceholder('https://…').onChange(v => this.formData.url = v);
-      text.inputEl.type = 'url';
+      urlInput(text.inputEl);
     });
 
     this._renderFooter(contentEl, 'Add resource', () => this._save());
+  }
+
+  _semResources() {
+    const sem = this.plugin.data.semesters.find(s => s.id === this.semesterId);
+    return (sem && sem.resources) || [];
+  }
+
+  // Checked when Title or Author loses focus, not per keystroke: mid-typing,
+  // "The " matched the start of every "The …" title as similar, and the button-less
+  // "similar" note showed before the full title could match exactly. Typing
+  // again clears a stale note.
+  _clearDuplicate() { if (this.dupEl) this.dupEl.empty(); this._dupKey = null; }
+
+  _checkDuplicate() {
+    const el = this.dupEl;
+    if (!el) return;
+    const match = findResourceMatch(this._semResources(), this.formData.title, this.formData.author);
+    // Same result as shown: leave it, so a blur from clicking "Use that one"
+    // doesn't replace the button mid-click.
+    const key = match ? `${match.kind}:${match.resource.id}` : '';
+    if (key === this._dupKey && (key === '' || el.hasChildNodes())) return;
+    this._dupKey = key;
+    el.empty();
+    if (!match) return;
+    const r = match.resource;
+    const name = r.author ? `"${r.title}" by ${r.author}` : `"${r.title}"`;
+    if (match.kind === 'possible') {
+      el.createSpan({ text: `A similar title is already in your Library: ${name}.` });
+      return;
+    }
+    el.createSpan({ text: `Already in your Library: ${name}. Adding it makes a second entry. ` });
+    const useBtn = el.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Use that one', type: 'button' });
+    useBtn.addEventListener('click', () => {
+      const add = this.formData.classIds.filter(id => !(r.classIds || []).includes(id));
+      if (add.length) r.classIds = [...(r.classIds || []), ...add];
+      const codes = this.classes.filter(c => add.includes(c.id)).map(c => classLabel(c));
+      new Notice(codes.length ? `Tagged "${r.title}" to ${codes.join(', ')}.` : `"${r.title}" is already in your Library.`);
+      this.onSave();
+      this.close();
+    });
   }
 
   _save() {
@@ -11180,8 +12374,10 @@ class EditResourceModal extends Modal {
       author: resource.author || '',
       type: resource.type || '',
       role: resource.role || '',
+      reminder: resource.reminder || '',
       classIds: [...(resource.classIds || [])],
       status: resource.status || 'unread',
+      myCopy: resource.myCopy || '',
       vaultLink: resource.vaultLink || '',
       url: resource.url || '',
     };
@@ -11205,18 +12401,9 @@ class EditResourceModal extends Modal {
       text.setValue(this.formData.author).onChange(v => this.formData.author = v);
     });
 
-    new Setting(contentEl).setName('Type').addDropdown(drop => {
-      drop.addOption('', '— Select type —');
-      drop.addOption('Book', 'Book');
-      drop.addOption('PDF', 'PDF');
-      drop.addOption('Handout', 'Handout');
-      drop.addOption('Article', 'Article');
-      drop.addOption('Online resource', 'Online resource');
-      drop.addOption('Other', 'Other');
-      drop.setValue(this.formData.type);
-      drop.onChange(v => this.formData.type = v);
-    });
+    addResourceTypeSetting(contentEl, this.formData);
     addResourceRoleSetting(contentEl, this.formData); // #44 C
+    addResourceReminderSetting(contentEl, this.formData);
 
     new Setting(contentEl).setName('Status').addDropdown(drop => {
       drop.addOption('unread', 'Unread');
@@ -11226,19 +12413,8 @@ class EditResourceModal extends Modal {
       drop.onChange(v => this.formData.status = v);
     });
 
-    if (this.classes.length > 0) {
-      const setting = new Setting(contentEl).setName('Classes');
-      const picker = setting.controlEl.createDiv('hc-days-picker');
-      for (const cls of this.classes) {
-        const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: cls.code, type: 'button' });
-        if (this.formData.classIds.includes(cls.id)) chip.addClass('hc-day-toggle--active');
-        chip.addEventListener('click', () => {
-          const idx = this.formData.classIds.indexOf(cls.id);
-          if (idx === -1) { this.formData.classIds.push(cls.id); chip.addClass('hc-day-toggle--active'); }
-          else { this.formData.classIds.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
-        });
-      }
-    }
+    addResourceClassesSetting(contentEl, this.classes, this.formData);
+    addMyCopySetting(this.app, this.plugin, contentEl, this.formData);
 
     const editVaultLinkSetting = new Setting(contentEl).setName('Vault link');
     const renderEditVaultLinkField = () => {
@@ -11278,7 +12454,7 @@ class EditResourceModal extends Modal {
 
     new Setting(contentEl).setName('URL').addText(text => {
       text.setValue(this.formData.url).setPlaceholder('https://…').onChange(v => this.formData.url = v);
-      text.inputEl.type = 'url';
+      urlInput(text.inputEl);
     });
 
     this._renderFooter(contentEl, 'Save changes', () => this._save());
@@ -11291,8 +12467,10 @@ class EditResourceModal extends Modal {
       author: this.formData.author.trim(),
       type: this.formData.type.trim(),
       role: this.formData.role,
+      reminder: this.formData.reminder,
       classIds: this.formData.classIds,
       status: this.formData.status,
+      myCopy: this.formData.myCopy,
       vaultLink: this.formData.vaultLink.trim(),
       url: this.formData.url.trim(),
     });
@@ -11472,7 +12650,7 @@ const DRAGGABLE_MODALS = [
   AddAssignmentModal, BulkAddAssignmentsModal, EditAssignmentModal,
   ReadingPaceSetupModal, ReadingPaceLogModal, WritingGoalModal,
   AddExamModal, EditExamModal,
-  QuickAddResourceModal, AddResourceModal, EditResourceModal,
+  QuickAddResourceModal, AddResourceModal, EditResourceModal, BulkAddResourcesModal,
 ];
 for (const Cls of DRAGGABLE_MODALS) {
   Cls.prototype._makeDraggable = _makeDraggable;
