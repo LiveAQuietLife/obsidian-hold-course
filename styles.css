@@ -12,6 +12,7 @@
 
 .hc-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 10px 16px;
@@ -39,10 +40,15 @@
   align-items: center;
   gap: 5px;
   font-size: 12px;
-  flex: 1;
+  /* Needs this much room to be readable. In a narrow pane the nav moves to the
+     next line instead of squeezing it. An empty one (top-level screens) needs none. */
+  flex: 1 1 200px;
+  min-width: 0;
   margin: 0 10px;
   overflow: hidden;
 }
+
+.hc-breadcrumb:empty { flex-basis: 0; }
 
 .hc-bc-link {
   background: none;
@@ -56,6 +62,28 @@
 }
 
 .hc-bc-link:hover { color: var(--text-normal); }
+
+/* .hc-root button: Obsidian's button:not(.clickable-icon) outranks one class,
+   and drew the link as a gray button that took the name's room. */
+.hc-root button.hc-bc-link {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  height: auto;
+  flex-shrink: 0;
+}
+.hc-root button.hc-bc-link:hover { background: none; }
+
+/* The page you're on: one line, cut short only if it must. */
+.hc-bc-current {
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The semester still gives way first (see .hc-bc-sem). */
+.hc-breadcrumb .hc-bc-sem { flex-shrink: 100; }
 
 .hc-bc-sep {
   color: var(--text-faint);
@@ -183,6 +211,20 @@ body.is-phone .hc-breadcrumb:empty {
 
 .hc-dash-title-wrap {
   min-width: 0;
+}
+
+/* #75: Add class and Add group side by side. On a phone the pair wraps
+   under itself, right-aligned, like the Library buttons. */
+.hc-dash-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+body.is-phone .hc-dash-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex-shrink: 1;
 }
 
 /* Semester switcher */
@@ -377,6 +419,11 @@ body.is-phone .hc-breadcrumb:empty {
   border-color: var(--background-modifier-border-hover);
 }
 
+/* A completed or dropped class, an ended group. Comes back to full strength
+   under the pointer, so it still reads as something you can open. */
+.hc-class-card--finished { opacity: 0.6; transition: border-color 0.15s, opacity 0.15s; }
+.hc-class-card--finished:hover { opacity: 1; }
+
 .hc-class-bar {
   height: 4px;
   border-radius: 10px 10px 0 0;
@@ -420,8 +467,11 @@ body.is-mobile .hc-card-more-btn { opacity: 1; }
 .hc-card-more-btn:hover { background: var(--background-secondary); color: var(--text-normal); }
 .hc-card-more-btn svg { width: 14px; height: 14px; }
 
+/* flex-wrap: on a narrow card the status tag and link drop to their own line
+   instead of running out of the card. */
 .hc-class-name-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 6px;
@@ -433,6 +483,8 @@ body.is-mobile .hc-card-more-btn { opacity: 1; }
   color: var(--text-normal);
   line-height: 1.4;
   flex: 1;
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
 
 .hc-class-url-btn {
@@ -1342,6 +1394,10 @@ body.is-mobile .hc-lecture-right {
   font-size: 11px;
   color: var(--text-faint);
 }
+
+/* A linked note that isn't in the vault. Same quiet treatment as a missing
+   book (.hc-reading-book--orphan): a validity signal, not an urgency signal. */
+.hc-note-missing { font-style: italic; color: var(--text-muted); }
 
 .hc-lecture-assign-actions {
   display: flex;
@@ -2360,6 +2416,10 @@ body.is-phone .hc-lecture-controls .hc-lecture-controls-right {
 .hc-resource-source-row:hover {
   background: var(--background-modifier-border);
 }
+
+/* Nothing to open: not clickable, so no pointer or hover change. */
+.hc-resource-source-row--missing,
+.hc-resource-source-row--missing:hover { cursor: default; background: var(--background-secondary); }
 
 .hc-resource-source-icon {
   color: var(--text-muted);
@@ -4018,6 +4078,31 @@ body.is-mobile.hc-scaled .hc-content {
 
 /* 1.14.0: Settings tabs. Wrap instead of scrolling sideways on a phone. */
 .hc-settings-tabs { flex-wrap: wrap; overflow: visible; margin-bottom: 16px; }
+.hc-dash-tabs { margin-bottom: 16px; }
+.hc-groups-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.hc-groups-info .hc-inline-icon { flex-shrink: 0; margin-top: 1px; }
+/* Classes | Groups. .hc-root button: Obsidian's button:not(.clickable-icon)
+   outranks one class, and drew every tab as the same gray button. */
+.hc-root .hc-dash-tabs button.hc-tab {
+  background: none;
+  box-shadow: none;
+  border-radius: 6px 6px 0 0;
+}
+.hc-root .hc-dash-tabs button.hc-tab:hover { background: var(--background-modifier-hover); }
+.hc-root .hc-dash-tabs button.hc-tab--active,
+.hc-root .hc-dash-tabs button.hc-tab--active:hover {
+  background: var(--background-secondary);
+  font-weight: 600;
+  border-bottom-width: 3px;
+}
+.hc-dash-tabs .hc-tab--active,
 .hc-settings-tabs .hc-tab--active {
   color: var(--text-accent);
   border-bottom-color: var(--interactive-accent);
@@ -4076,3 +4161,87 @@ body.is-mobile .hc-lecture-att { padding: 2px 4px; }
    horizontal on mobile, so the description wouldn't shrink: it ran off-screen
    on one line and pushed the toggle out of view. */
 body.is-mobile .hc-modal .hc-setting-wide-desc .setting-item-info { flex: 1 1 auto; min-width: 0; }
+
+/* --- Groups (#75): Overview card and group page ----------------------------- */
+
+.hc-group-schedule {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+.hc-group-topic { color: var(--text-muted); }
+
+.hc-group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.hc-group-more svg { width: 14px; height: 14px; display: block; }
+
+.hc-group-meta { row-gap: 6px; }
+.hc-group-meta .hc-inline-icon { color: var(--text-faint); }
+
+/* .hc-root button: Obsidian's button:not(.clickable-icon) outranks one class. */
+.hc-root button.hc-group-class-link {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  height: auto;
+  font-size: 13px;
+  cursor: pointer;
+  /* A button doesn't wrap by default; a long study group line must. */
+  white-space: normal;
+  text-align: left;
+}
+.hc-root button.hc-group-class-link:hover { background: none; text-decoration: underline; }
+
+.hc-group-meeting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+}
+
+.hc-group-meeting--skipped .hc-group-meeting-main { opacity: 0.5; }
+.hc-group-meeting--skipped .hc-group-meeting-when { text-decoration: line-through; }
+
+.hc-group-meeting-main { flex: 1; min-width: 0; }
+.hc-group-meeting-when { font-size: 13px; color: var(--text-normal); }
+.hc-group-meeting-topic { font-size: 12px; color: var(--text-muted); margin-top: 2px; overflow-wrap: anywhere; }
+
+.hc-group-meeting-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* --- Groups (#75): Courses page ---------------------------------------------- */
+
+
+.hc-courses-group-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.1s;
+}
+.hc-courses-group-row:hover {
+  border-color: var(--background-modifier-border-hover);
+  background: var(--background-secondary);
+}
+.hc-courses-group-row--ended { opacity: 0.6; }
+.hc-courses-group-name { font-size: 13px; font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.hc-courses-group-cell { font-size: 12px; color: var(--text-muted); min-width: 0; }
+body.is-phone .hc-courses-group-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }

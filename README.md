@@ -124,6 +124,7 @@ Hold Course runs on desktop and mobile.
 - [Grades](#grades)
 - [Attendance](#attendance)
 - [Library](#library)
+- [Groups](#groups)
 - [Syllabus](#syllabus)
 - [Calendar View](#calendar-view)
 - [Assignments View](#assignments-view)
@@ -146,7 +147,7 @@ Hold Course grew out of a simple frustration: syllabi don't fit cleanly into tas
 
 Hold Course is built around a simple premise: you should always know exactly where you are in a course — which lectures you've attended, which assignments are coming, and what needs your attention today. It tells you where things stand. The rest is up to you.
 
-Classes are organized into **semesters**. Each class holds its own **lectures**, **assignments**, **exams**, and a **library** of resources referenced across your coursework. You advance items through their status as you go, and optionally link anything to notes in your vault. The plugin tracks the rest.
+Classes are organized into **semesters**. Each class holds its own **lectures**, **assignments**, **exams**, and a **library** of resources referenced across your coursework. You advance items through their status as you go, and optionally link anything to notes in your vault. The plugin tracks the rest. Clubs, study groups, and other regular meetings sit alongside your classes as **[groups](#groups)**.
 
 ---
 
@@ -160,13 +161,14 @@ Search for **Hold Course** in Obsidian's community plugin browser (*Settings > C
 
 Click the Hold Course ribbon icon to open the plugin. It opens as a full-width tab.
 
-On first launch you'll see the **Overview** — an empty workspace. Here's the typical setup flow for a new semester:
+On first launch you'll see the **Overview** — an empty workspace with a **Create semester** button. Here's the typical setup flow for a new semester:
 
-1. **Create a semester** using the semester dropdown at the top of the Overview.
+1. **Create a semester** with that button, or later with the semester dropdown at the top of the Overview. If you run **Add a class** or **Add a group** from the command palette before you have a semester, Hold Course asks you to create one first, then carries on to the dialog.
 2. **Add your classes** to the semester — one for each course you're taking.
 3. **Open a class** and start adding lectures. You can add all your lectures up front and fill in assignments later, or build them out together as you work through the syllabus — whichever fits how you read a course schedule.
 4. **Add exams** on the Exams tab for any high-stakes dates you need to track separately.
 5. **Add resources** to the Library as you encounter them, or quick-add them from within a lecture or assignment and fill in the details later.
+6. **Add a group** for any club or study group that meets regularly (see [Groups](#groups)).
 
 From there, it's a matter of advancing item statuses as the semester moves. To see what a semester in progress looks like, open [Screenshots](#screenshots) at the top of this page.
 
@@ -181,6 +183,8 @@ The Overview opens with a strip summarizing what needs attention right now, draw
 **Due Today:** Assignments due today.
 
 **Coming Up:** The next several assignments due after today, soonest first.
+
+**Meetings:** Each [group](#groups)'s next meeting in the coming 7 days, up to four rows. This column only appears when there is one.
 
 Click any item in the strip to jump straight to its detail screen.
 
@@ -200,7 +204,7 @@ The semester dropdown at the top of the Overview lets you switch between semeste
 
 **Restoring a removed semester:** Open the dropdown and select **Show removed semesters**, then choose the one you want back. Restoring a semester also switches you to it. Only appears when at least one semester is removed.
 
-**Deleting a semester:** Open the dropdown and select **Delete Semester**. Since this removes every class, lecture, assignment, exam, and library resource under that semester, the confirmation dialog states exactly how much is about to be deleted. This cannot be undone.
+**Deleting a semester:** Open the dropdown and select **Delete Semester**. Since this removes every class, lecture, assignment, exam, and library resource under that semester, the confirmation dialog states exactly how much is about to be deleted. This cannot be undone. [Groups](#groups) aren't part of a semester, so they stay; the dialog tells you if any will lose a link to a class.
 
 ---
 
@@ -217,6 +221,8 @@ Inside a semester, each class appears as a card on the Overview showing the clas
 Only the class name is required; fill in the rest as you have it. A class without a code is shown by its name wherever the code would appear.
 
 **Opening a class:** Click the class card. Each class has five tabs: **Lectures**, **Assignments**, **Readings**, **Exams**, and **Library**, plus a sixth, **[Grades](#grades)**, when the class tracks grades.
+
+**Study groups:** A [group](#groups) linked to a class shows as a **Study group** line in the class's header, with its next meeting. Click it to open the group.
 
 **Editing, copying, or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. **Copy to semester…** is on the class's own menu and on its right-click menu in Courses — see [Copying a Class](#copying-a-class). A class can also be edited from the **Edit** button in its detail screen — editing uses the same Details/People/Schedule tabs as adding a class.
 
@@ -273,7 +279,7 @@ Copying makes a fresh version of a class in any semester — next term's run of 
 
 **Copying a class:** Choose **Copy to semester…** from the class's menu, or right-click it in the Courses view. Pick the semester; a class copied into its own semester gets " (copy)" added to its code.
 
-**What comes along:** Lectures, assignments, exams, and Library books. Within the same semester the copy shares the existing books; in another semester it gets its own copies, marked Unread.
+**What comes along:** Lectures, assignments, exams, and Library books. Groups aren't copied; a study group stays linked to the original class. Within the same semester the copy shares the existing books; in another semester it gets its own copies, marked Unread.
 
 **Dates:** Give the copy a new start date and every date moves with it, in whole weeks so lectures keep their weekdays. Or clear the dates and fill them in later. If the class has no start date, you can also keep its dates as they are.
 
@@ -504,9 +510,50 @@ As with the other bulk dialogs, a pasted line break splits one entry into two, s
 
 ---
 
+## Groups
+
+A group is anything that meets regularly where you take notes or want a record of what was discussed: a club, a study group, a reading group. Groups have no grades, credits, attendance, or assignments, and group projects stay assignments. They aren't for one-off meetings or appointments.
+
+**Groups aren't part of a semester.** A group that runs for years stays one group, and nothing needs copying from term to term.
+
+**Adding a group:** Click **Add group** next to **Add class** on the Overview, or run **Add a group** from the command palette. Fill in:
+
+- **Name**
+- **For a class** (optional), for a study group. It fills in the color and end date from the class, and the class's header shows the group.
+- **Repeats:** weekly, every 2 weeks, or monthly (such as first Tuesday or last Friday). Every 2 weeks counts from the first scheduled day on or after the start date.
+- **Start time**, **End time**, and **Where** (optional). A web address in Where shows as a **Meeting link**. A meeting without a time is an all-day event.
+- **Starts** and **Runs until:** the end of this term, a date you pick, or ongoing.
+- **Color**
+
+**Finding your groups:** Once you have a group, the Overview and [Courses](#courses) have **Classes** and **Groups** tabs. The Overview's Groups tab lists every group that hasn't ended, in every semester, whether or not it has started, so you can plan ahead for one starting next term. An ended group shows only in semesters it ran during. Courses lists all of them.
+
+**Group cards** show the schedule, how long the group runs, its next meeting, where it meets, and its class if it has one.
+
+**The group page** has two lists:
+
+- **Upcoming:** the next 5 meetings, plus any later date you've saved something on. Skipped dates don't use up one of the 5.
+- **Past:** every earlier meeting, newest first.
+
+**Meetings come from the schedule.** You don't add them one at a time, and changing the schedule never removes a note or topic you've saved. Each meeting's **...** menu has:
+
+- **Add topic** or **Edit topic:** a one-line topic, such as "Romans 8 discussion", so the Past list reads without opening notes;
+- **Skip this date** and **Undo skip;**
+- **Remove this date**, for a date you added;
+- **Remove note link**.
+
+**Add meeting** adds a date that isn't on the schedule. It's also how you plan a date further out than the Upcoming list reaches: pick a scheduled date and enter a topic, and it joins the list.
+
+**Meeting notes:** **Create note** on a meeting makes a note, links it, and opens it. See [Linked Notes](#linked-notes).
+
+**Ending a group:** **End group** in the group page's **...** menu sets its end date to today. It shows **ENDS TODAY**, then **ENDED** from tomorrow. Its meetings leave the Calendar, Today, and the calendar file, and stay on the group page. To undo it, use **Edit group** and change **Runs until**.
+
+**Deleting a group:** **Delete group** in the same menu removes its schedule, topics, and skipped dates. Its meeting notes stay in your vault. Deleting a class or semester a group is linked to keeps the group and removes the link; the dialog tells you first.
+
+---
+
 ## Syllabus
 
-Hold Course can write a syllabus for any class as a regular note: the course details, reading list, grade weights, and a week-by-week schedule built from your lectures, assignments, and exams. Statuses, grades, and progress are never included.
+Hold Course can write a syllabus for any class as a regular note: the course details, reading list, grade weights, and a week-by-week schedule built from your lectures, assignments, and exams. Statuses, grades, progress, and [groups](#groups) are never included. A link to a note that no longer exists is left out.
 
 **Exporting:** Open a class and select **Syllabus** in its header. Choose what else to include (Key Concepts & Lesson Goal under each lecture, links to linked notes, assignment and exam notes) and select **Export**. The syllabus is saved as `<code> Syllabus.md` in the folder set under **Settings → Syllabus folder** (the top of the vault if blank). If an earlier export is already there, you can **Replace** it or **Keep both**. Nothing is overwritten without asking.
 
@@ -541,15 +588,15 @@ Without a syllabus note, the export has the course details plus Readings, Gradin
 
 ## Calendar View
 
-The **Calendar** shows all your lectures, assignments, and exams across all classes in one view.
+The **Calendar** shows all your lectures, assignments, and exams across all classes in one view, plus your [groups'](#groups) meetings. If you have groups but no semester, it still shows their meetings.
 
 **Week and month modes:** Switch between views using the toggle in the upper left.
 
-**Legend:** The top of the calendar shows a color key — lectures listed by class, assignments listed by type (Reading, Writing, Discussion, Project, Exam, Other). Exams from the Exams tab appear in their own color.
+**Legend:** The top of the calendar shows a color key — lectures listed by class, assignments listed by type (Reading, Writing, Discussion, Project, Exam, Other). Exams from the Exams tab appear in their own color. Meetings are listed by group, each in its group's color.
 
-**Class filter:** Use the **All classes** dropdown at the bottom to narrow the calendar to a single class.
+**Class filter:** Use the **All classes** dropdown at the bottom to narrow the calendar to a single class. A study group's meetings stay with its class.
 
-**Show filter:** Narrow the calendar by item kind — **All**, **Lectures**, **Assignments**, or **Exams**.
+**Show filter:** Narrow the calendar by item kind — **All**, **Lectures**, **Assignments**, or **Exams**. Once you have a group, it also offers **Meetings**, and **Classes** for everything but meetings.
 
 **Type filter:** Appears once the Show filter is narrowed to Assignments, letting you further narrow to a single assignment type (Reading, Writing, Project, Discussion, Other).
 
@@ -595,19 +642,21 @@ Columns are semester, course code, course name, credits, grade, and status. On a
 
 Click any row to open that class's Lectures tab. Right-clicking a class here is also how you [move it to a different semester](#moving-a-class).
 
+**Groups:** Once you have a [group](#groups), Courses has **Classes** and **Groups** tabs. The Groups tab lists every group, with its class, how long it runs, and how many meetings have notes. The filters and the class and credit totals apply to Classes only.
+
 ---
 
 ## HC Today Sidebar
 
-Hold Course adds an **HC Today** panel to Obsidian's right sidebar. It shows everything due or happening today and tomorrow — lectures, assignments, and exams, all classes combined.
+Hold Course adds an **HC Today** panel to Obsidian's right sidebar. It shows everything due or happening today and tomorrow — lectures, assignments, exams, and [group](#groups) meetings, all classes combined.
 
 Each item shows its title and a subtitle line with the class name and item type. Lectures are color-coded by class; assignments are color-coded by type — the same system used throughout the plugin. Items you've marked done appear with strikethrough and muted gray styling so finished work recedes and what's still ahead stays visible.
 
 **Opening:** The sidebar opens when Obsidian starts. To keep it closed until you want it, turn off **Settings → Display → Open Today when Obsidian starts**. Either way, open it from the **Hold Course — Today** ribbon icon or the **Open Hold Course — Today** command. Hold Course keeps one Today tab; if a reload or a late start (with a plugin such as Lazy Loader) left extra copies, they're closed.
 
-**Times:** Assignments with a due time and exams with a start time show it, and sort by it alongside lectures.
+**Times:** Assignments with a due time, exams with a start time, and meetings with a time show it, and sort by it alongside lectures.
 
-**Navigating:** Click any item to open the main Hold Course tab and navigate directly to that item's detail screen.
+**Navigating:** Click any item to open the main Hold Course tab and navigate directly to that item's detail screen. A meeting opens its group's page.
 
 **Auto-refresh:** The sidebar updates automatically whenever you make a change in Hold Course, and again on its own if the date rolls over while Obsidian is left open — so Today and Tomorrow stay accurate even overnight. You don't need to refresh it manually.
 
@@ -624,7 +673,7 @@ Hold Course can show a day's agenda inside a note, which makes it a natural fit 
 
 The command **Insert live agenda block** types it for you.
 
-**What it shows:** overdue assignments first, each with its due date, then that day's lectures (with meeting times), assignments (with due times), and exams (with start times), styled like the HC Today sidebar. Readings with pace tracking and writing with a word goal show their pace line underneath. Done items are struck through. A day with nothing on it says **Nothing scheduled**.
+**What it shows:** overdue assignments first, each with its due date, then that day's lectures (with meeting times), assignments (with due times), exams (with start times), and [group](#groups) meetings, styled like the HC Today sidebar. Readings with pace tracking and writing with a word goal show their pace line underneath. Done items are struck through. A day with nothing on it says **Nothing scheduled**.
 
 **Which day:** in a daily note, the block reads the date from the note's name using your Daily Notes format, so last Tuesday's note shows last Tuesday. In any other note it shows today. To pick a date yourself, add a line inside the block:
 
@@ -650,11 +699,12 @@ date: 2026-10-20
 
 **Export calendar** writes `Hold Course.ics` for the current semester. Import it into Google Calendar, Apple Calendar, or Outlook.
 
-- **What's in it:** lectures, assignments, and exams. Turn off **Include lectures**, **Include assignments**, or **Include exams** to leave any of them out.
+- **What's in it:** lectures, assignments, exams, and [group](#groups) meetings. Turn off **Include lectures**, **Include assignments**, or **Include exams** to leave any of them out. Once you have a group, there's **Include meetings** too.
+- **Meetings:** every group's meetings from the semester's start (or today, if that's earlier) through its end or the next 6 months, whichever is later, so a club doesn't drop off over a break or before a term starts. Each one is titled with its group and topic, such as "Romans Reading Group: Romans 8". A group's end date still applies.
 - **Times:** a lecture gets its class's meeting time when the class has meeting days and times, an assignment its due time, and an exam its start and end time. Anything without a time is an all-day event. Times are written without a time zone, so 9:00 AM in Hold Course is 9:00 AM in your calendar.
 - **Done items** stay in, with ✓ at the start of the title.
 
-**Importing is a one-time copy.** Your calendar app doesn't see later changes in Hold Course. To catch up, export again and import the new file: events you'd already imported are updated rather than added a second time, and new ones are added. Something you deleted in Hold Course isn't deleted from your calendar app, so delete it there too.
+**Importing is a one-time copy.** Your calendar app doesn't see later changes in Hold Course. To catch up, export again and import the new file: events you'd already imported are updated rather than added a second time, and new ones are added. Something you deleted in Hold Course isn't deleted from your calendar app, so delete it there too. The same goes for a meeting you skip and for an ended group's later meetings.
 
 **Keep the calendar file up to date** rewrites `Hold Course.ics` after every change in Hold Course. That keeps the file current, but your calendar app still needs a new import to see it, unless you **subscribe** instead. To subscribe, the file needs a web address: put the export folder in a cloud drive that can give the file a public link, then subscribe to that link in your calendar app. Calendar apps check subscriptions on their own schedule, which can be hours apart, and anyone with the link can see the calendar.
 
@@ -662,7 +712,7 @@ The file name never changes, so a subscription keeps working.
 
 ### CSV
 
-**Export CSV** writes `Hold Course items <date>.csv`: every lecture, assignment, and exam in every semester on your list, one row each, with its semester, class, lecture, title, type, date, times, status, and grade. It opens in Excel, Google Sheets, or Numbers.
+**Export CSV** writes `Hold Course items <date>.csv`: every lecture, assignment, and exam in every semester on your list, one row each, with its semester, class, lecture, title, type, date, times, status, and grade. Each group meeting that has a note or topic gets a row too. It opens in Excel, Google Sheets, or Numbers.
 
 ### Backup
 
@@ -681,6 +731,7 @@ Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P
 - Open Hold Course — opens the main tab
 - Open Hold Course — Today — opens the Today sidebar
 - Add a class — opens the Add Class dialog for the active semester
+- Add a group — opens the Add Group dialog
 - Open calendar — opens the main tab and navigates directly to Calendar view
 - Show global assignments — opens the main tab and navigates to the Assignments view
 - Add a library resource — opens the Add Resource dialog for the active semester
@@ -690,7 +741,7 @@ Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P
 - Insert live agenda block — adds a `hold-course-agenda` block at the cursor (see [Daily Note Agenda](#daily-note-agenda))
 - Insert agenda as text — writes the note's day's agenda as a plain Markdown list at the cursor
 - Export calendar (.ics) — writes `Hold Course.ics` for the current semester (see [Export](#export))
-- Export items as CSV — writes every lecture, assignment, and exam to a CSV file
+- Export items as CSV — writes every lecture, assignment, exam, and meeting with a note or topic to a CSV file
 - Export backup (JSON) — writes all of Hold Course's data to one JSON file
 
 All commands are hotkey-bindable via Settings > Hotkeys.
@@ -708,7 +759,17 @@ Any lecture, assignment, or exam can be linked to an existing note in your vault
 - **Template:** pick a template note for lectures and one for assignments. Hold Course fills in `{{title}}`, `{{code}}`, `{{class}}`, `{{n}}`, `{{date}}`, and `{{professor}}`, and leaves everything else as written, including Templater code. Without a template, the note gets `course`, `lecture`, `date`, and `type` properties (for use in Bases) and a title heading.
 - **Name already taken:** Hold Course asks whether to **Use existing note** (link the one that's there) or **Start a new one**, which leaves the old note where it is.
 
-If you rename or move the Notes folder or a template in Obsidian, the setting follows it.
+**Meeting notes:** **Create note** on a [group](#groups)'s meeting works the same way.
+
+- **Where:** in a folder for each group inside the **Meeting notes folder**, or the Notes folder if that's blank.
+- **Name:** `{group} {date}` by default, for example "Romans Reading Group 2026-11-10". The fill-ins are `{group}`, `{date}`, `{topic}`, and `{class}`.
+- **Template:** Hold Course fills in `{{group}}`, `{{date}}`, `{{time}}`, `{{where}}`, `{{topic}}`, and `{{class}}`. Without a template, the note gets `group`, `date`, and `type` properties (and `course` for a study group) and **Agenda**, **Notes**, and **Action items** headings.
+
+If you rename or move the Notes folder, the Meeting notes folder, or a template in Obsidian, the setting follows it.
+
+**Missing notes:** If a linked note no longer exists, a list shows **Note missing**, and the item's page offers **Create note** or **Browse**. This can also be a sync matter: links are saved in Hold Course's data, and notes only travel if your vault syncs them. If you share just the plugin's data between devices, a note made on one shows as missing on the other.
+
+**Back to Hold Course:** When you open a note from the main Hold Course tab and then close it, you land back on Hold Course, even if another tab is next to it. If you drag the note to another pane, or close it while it's in the background, Obsidian decides as usual.
 
 A linked Markdown note can also be measured: a reading's note for [reading pace in words](#measuring-in-words), and a Writing assignment's draft for its word goal.
 
@@ -722,9 +783,11 @@ Hold Course's settings are under *Settings > Community plugins > Hold Course*, o
 
 **Grayscale display mode** — increases text contrast and size for e-ink displays (such as Boox tablets) or a phone or tablet set to grayscale, both of which wash out low-contrast text. Colored text — overdue dates, class names, assignment type labels — switches to darker shades of the same colors. Off by default; it isn't detected automatically, since the CSS feature meant to detect e-ink displays isn't implemented in the browser engine Obsidian uses.
 
-**Interface scale** — a slider from 90% to 150%, in 10% steps. It scales the whole interface together — text, icons, and spacing — rather than just enlarging the type, which is what makes it useful on an e-ink tablet or in a narrow pane. Above 100% some control rows scroll sideways rather than shrink, so everything stays reachable instead of clipped. On a phone, rows of buttons wrap onto a second line instead.
+**Interface scale** — a slider from 90% to 150%, in 10% steps. Desktop and mobile each keep their own scale. It scales the whole interface together — text, icons, and spacing — rather than just enlarging the type, which is what makes it useful on an e-ink tablet or in a narrow pane. Above 100% some control rows scroll sideways rather than shrink, so everything stays reachable instead of clipped. On a phone, rows of buttons wrap onto a second line instead.
 
 This works on desktop and Android. It has no effect on iOS, which doesn't support the underlying CSS property — the setting is simply inert there rather than broken.
+
+**Dim finished classes and groups** — on by default. Fades the Overview cards of completed or dropped classes and ended groups. Their status tag shows either way.
 
 **Open Today when Obsidian starts** — on by default. Turn it off to open the [Today sidebar](#hc-today-sidebar) only when you ask for it.
 
@@ -740,13 +803,13 @@ This works on desktop and Android. It has no effect on iOS, which doesn't suppor
 
 ### Notes
 
-**Notes folder**, **Lecture note name**, **Assignment note name**, **Lecture template**, and **Assignment template** — where **Create** puts new lecture and assignment notes, what it names them, and what goes in them. See [Linked Notes](#linked-notes).
+**Notes folder**, **Lecture note name**, **Assignment note name**, **Lecture template**, and **Assignment template** — where **Create** puts new lecture and assignment notes, what it names them, and what goes in them. See [Linked Notes](#linked-notes). Once you have a [group](#groups), this tab also has **Meeting notes folder**, **Meeting note name**, and **Meeting template**.
 
 **Syllabus folder** — where exported syllabi and new syllabus notes are saved. Leave it blank for the top of the vault. See [Syllabus](#syllabus).
 
 ### Export
 
-**Export folder**, the calendar file and its **Include** and **Keep the calendar file up to date** toggles, **CSV**, and **Backup**. See [Export](#export).
+**Export folder**, the calendar file and its **Include** and **Keep the calendar file up to date** toggles (with **Include meetings** once you have a [group](#groups)), **CSV**, and **Backup**. See [Export](#export).
 
 ---
 
@@ -776,13 +839,13 @@ A few things work differently by necessity:
 - **Modals can't be dragged on a phone.** The drag bar is hidden there, since a phone modal is effectively full-screen and has nowhere to move to. Tablets keep it.
 - **No logo on a phone.** The Hold Course name above the breadcrumb is hidden there, since Obsidian's header already shows it, so the breadcrumb gets the whole line. If it still doesn't fit, the semester name is shortened.
 - **Button rows wrap.** When the buttons above a list (such as **Bulk add** and **Add resource** in the Library) don't fit across the screen, they go onto a second line. Sideways scrolling would compete with Obsidian's swipe to open the sidebars.
-- **Interface scale** is worth a look on mobile — see [Settings](#settings).
+- **Interface scale** is worth a look on mobile, and a phone keeps its own — see [Settings](#settings).
 
 ---
 
 ## Data Storage
 
-All plugin data is stored in `data.json` inside the Hold Course plugin folder. This file is created automatically on first use and holds all your semesters, classes, lectures, assignments, exams, and library resources. Back it up along with your vault.
+All plugin data is stored in `data.json` inside the Hold Course plugin folder. This file is created automatically on first use and holds all your semesters, classes, lectures, assignments, exams, library resources, and groups. Back it up along with your vault.
 
 The **Export Hold Course data snapshot** command copies `data.json` to a timestamped file in the same folder (`hold-course-backup-2026-09-08-14-30-22.json`) — a one-click version of that backup. Every run makes a new file and nothing is ever overwritten or pruned, so clearing out old snapshots is up to you.
 

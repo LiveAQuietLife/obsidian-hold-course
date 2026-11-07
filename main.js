@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.14.0 */
+/* --- Hold Course --- v1.15.0 */
 'use strict';
 
 const {
@@ -13,6 +13,7 @@ const {
   FuzzySuggestModal,
   AbstractInputSuggest,
   MarkdownRenderChild,
+  Platform,
 } = require('obsidian');
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -51,9 +52,11 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 // Calendar "Show" filter entries.
 const CAL_KIND_OPTIONS = [
   { value: null,         label: 'All' },
+  { value: 'class',      label: 'Classes' }, // #75: everything but meetings; listed once a group exists
   { value: 'lecture',    label: 'Lectures' },
   { value: 'assignment', label: 'Assignments' },
   { value: 'exam',       label: 'Exams' },
+  { value: 'meeting',    label: 'Meetings' }, // #75: listed once a group exists
 ];
 
 const ASSIGNMENT_TYPES = ['Reading', 'Writing', 'Project', 'Discussion', 'Other'];
@@ -551,6 +554,50 @@ function calendarEvents(sem, opts = {}) {
   return out;
 }
 
+// #75: "Romans Reading Group: Romans 8", the one label for a meeting in an export.
+function meetingExportTitle(group, m) {
+  return String(group.name || '').trim() + (m.topic ? ': ' + m.topic : '');
+}
+
+// How far ahead meetings go in the calendar file when the term has no dates.
+const MEETING_EXPORT_DAYS = 183;
+
+// Which dates a calendar file lists meetings for: from the semester's start or
+// today, whichever is earlier (today, with no dates), through its end or about
+// the next 6 months, whichever is later, so an ongoing club doesn't drop off
+// over a break or before a coming term. A group's schedule has no last date of
+// its own; its end date still applies.
+function meetingExportWindow(sem, todayISO) {
+  const span = semesterSpan(sem);
+  const ahead = addDaysISO(todayISO, MEETING_EXPORT_DAYS);
+  if (!span) return { from: todayISO, to: ahead };
+  return { from: span.start < todayISO ? span.start : todayISO, to: span.end > ahead ? span.end : ahead };
+}
+
+// Every group's meetings in the window, as calendarEvents' shape. Skipped dates
+// are left out. UID: the group's id and the date, neither of which a schedule
+// edit changes, so a re-import updates events instead of duplicating them.
+function meetingCalendarEvents(data, fromISO, toISO) {
+  const out = [];
+  for (const group of (data && data.groups) || []) {
+    const found = findClassInSemesters(data.semesters, group.classId);
+    for (const m of getGroupMeetings(group, fromISO, toISO)) {
+      const times = itemTimes({ kind: 'meeting', meeting: m });
+      out.push({
+        uid: `${group.id}-${m.date.replace(/-/g, '')}@hold-course`,
+        date: m.date,
+        start: times ? times.start : '',
+        end: times ? (times.end || times.start) : '',
+        summary: meetingExportTitle(group, m),
+        location: String(group.where || '').trim(),
+        description: found ? String(found.cls.name || found.cls.code || '').trim() : '',
+        busy: !!times,
+      });
+    }
+  }
+  return out;
+}
+
 function icsEscape(s) {
   return String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
 }
@@ -598,7 +645,8 @@ function icsCalendar(events, name, stamp) {
 }
 
 // ─── CSV format (1.14.0) ─────────────────────────────────────────────────────
-// One row per lecture, assignment, and exam, from the F2 walker. Lecture:
+// One row per lecture, assignment, and exam, from the F2 walker, then one per
+// group meeting with a note or topic (#75). Lecture:
 // the lecture's number, or for an assignment its lecture's. Times: an
 // assignment's due time is Start time. UTF-8 with a BOM, so Excel reads
 // accents; a leading = + @ gets a ' so spreadsheets don't run it as a formula.
@@ -610,7 +658,27 @@ function csvCell(v) {
   return /[",\r\n]/.test(s) || s !== s.trim() ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-function itemsCsv(semesters) {
+// A group's saved meetings that have a note or topic, oldest first. Unsaved
+// schedule dates and skipped dates aren't in it. Semester and class come from
+// the linked class, and stay blank without one.
+function meetingCsvRows(semesters, groups) {
+  const rows = [];
+  for (const group of groups || []) {
+    const dates = Object.keys(group.meetings || {}).sort();
+    if (!dates.length) continue;
+    const found = findClassInSemesters(semesters, group.classId);
+    for (const m of getGroupMeetings(group, dates[0], dates[dates.length - 1], { includeAfterEnd: true })) {
+      if (!hasMeetingContent(m)) continue;
+      rows.push([
+        found ? found.sem.name || '' : '', found ? found.cls.code || '' : '', found ? found.cls.name || '' : '',
+        'Meeting', '', meetingExportTitle(group, m), '', m.date, m.start, m.end, '', '',
+      ]);
+    }
+  }
+  return rows;
+}
+
+function itemsCsv(semesters, groups) {
   const rows = [CSV_COLUMNS];
   for (const sem of (semesters || [])) {
     for (const cls of (sem.classes || [])) {
@@ -634,6 +702,7 @@ function itemsCsv(semesters) {
       }
     }
   }
+  rows.push(...meetingCsvRows(semesters, groups));
   return '\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 
@@ -749,6 +818,7 @@ function syllabusMarkdown(cls, sem, opts) {
     .map(x => x.trimEnd()).filter(x => x.trim())
     .map(x => indent + x.replace(/^(\s*)#/, '$1\\#') + '  ');
   const noteLink = path => {
+    if (opts.noteExists && !opts.noteExists(path)) return '';
     const p = String(path || '').trim().replace(/\.md$/i, '');
     return p ? `[[${p}|${p.split('/').pop()}]]` : '';
   };
@@ -988,8 +1058,24 @@ function syllabusGrading(cls, scale) {
 }
 
 // A file name Obsidian accepts: drops \ / : * ? " < > | # ^ [ ] and trims.
+// #13: the Interface scale is kept apart for desktop and mobile, since data.json
+// syncs between them. uiScale is desktop's (and the older shared value);
+// uiScaleMobile is present once mobile has its own. Absent on mobile = uiScale.
+function uiScaleFor(settings, isMobile) {
+  return (isMobile && settings.uiScaleMobile) || settings.uiScale || 100;
+}
+
+// Moving the slider changes only this kind of device. The first desktop change
+// first copies the shared value to mobile, so the phone stays where it was.
+function setUiScaleFor(settings, value, isMobile) {
+  if (isMobile) { settings.uiScaleMobile = value; return; }
+  if (settings.uiScaleMobile === undefined) settings.uiScaleMobile = settings.uiScale || 100;
+  settings.uiScale = value;
+}
+
 function safeFileName(name) {
-  return String(name || '').replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim() || 'Untitled';
+  // Obsidian refuses a name ending in a dot or a space ("Book Club Jr.").
+  return String(name || '').replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '') || 'Untitled';
 }
 
 // ─── Lecture and assignment notes (1.14.0, #74) ──────────────────────────────
@@ -1015,15 +1101,20 @@ function noteTokens(kind, cls, item, n) {
 }
 
 // "{code} L{n} {title}" → "OT 5200 L02 Primeval History". Unknown {tokens} stay.
-function fillNoteName(pattern, tokens) {
+function fillNoteName(pattern, tokens, allowed = NOTE_TOKENS) {
   const p = String(pattern || '').trim();
-  return safeFileName(p.replace(/\{(\w+)\}/g, (m, k) => NOTE_TOKENS.includes(k) ? tokens[k] : m));
+  return safeFileName(p.replace(/\{(\w+)\}/g, (m, k) => allowed.includes(k) ? tokens[k] : m));
+}
+
+// A linked note that isn't in the vault. The one wording (Principle 4).
+function missingNoteText(path) {
+  return `Note missing: ${String(path || '').trim().split('/').pop()}`;
 }
 
 // {{title}}-style fills in a template note. Everything else (Templater's
 // <% %>, unknown {{tokens}}) is left as written.
-function fillNoteTemplate(text, tokens) {
-  return String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => NOTE_TOKENS.includes(k) ? tokens[k] : m);
+function fillNoteTemplate(text, tokens, allowed = NOTE_TOKENS) {
+  return String(text || '').replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => allowed.includes(k) ? tokens[k] : m);
 }
 
 // A YAML string, quoted unless plainly safe (and not number- or bool-like).
@@ -2290,7 +2381,7 @@ function parseSemesterName(name) {
 }
 
 // F5 groundwork: whether a status counts as finished. Only 'done' today;
-// later states (submitted, graded, returned — 1.18.0) join here, so every
+// later states (submitted, graded, returned — 1.19.0) join here, so every
 // "is it finished?" check changes in one place. Labels, CSS state classes,
 // and the done/not-done toggles still name 'done' directly: they're about
 // that one state, not "finished". (2026-10-15)
@@ -2509,6 +2600,429 @@ function getWeekStartISO(dateISO) {
   return addDaysISO(dateISO, -daysBack);
 }
 
+// ─── Groups (#75, 1.15.0) ─────────────────────────────────────────────────
+// Clubs, study groups, and regular meetings. Groups live in data.groups,
+// outside semesters, so a club that runs for years is one record and needs no
+// copying between terms. Design: `Groups design (#75).md`.
+
+// F4 repeat rule. One object, general on purpose: recurring assignments
+// (1.16.0) carry the same shape.
+//   { every: 'week' | '2weeks' | 'month', days: ['Tue', …], nth: 1–4 | -1, weekday: 'Tue' }
+// week and 2weeks read `days`; month reads nth + weekday (-1 = last).
+const REPEAT_EVERY = ['week', '2weeks', 'month'];
+const REPEAT_NTH = [1, 2, 3, 4, -1];
+const REPEAT_NTH_LABELS = { 1: 'First', 2: 'Second', 3: 'Third', 4: 'Fourth', '-1': 'Last' };
+const WEEKDAY_FULL = { Sun: 'Sunday', Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday' };
+
+function isValidRepeat(r) {
+  if (!r || !REPEAT_EVERY.includes(r.every)) return false;
+  if (r.every === 'month') return REPEAT_NTH.includes(r.nth) && r.weekday in BULK_DAY_NUM;
+  return Array.isArray(r.days) && r.days.some(d => d in BULK_DAY_NUM);
+}
+
+// The nth weekday (0 = Sun) of a month as ISO, or null (no fifth, etc.).
+// nth -1 is the last one.
+function nthWeekdayOfMonth(year, month1, weekdayNum, nth) {
+  const daysIn = new Date(year, month1, 0).getDate();
+  if (nth === -1) {
+    const lastWd = new Date(year, month1 - 1, daysIn, 12).getDay();
+    return makeISO(year, month1, daysIn - ((lastWd - weekdayNum + 7) % 7));
+  }
+  const firstWd = new Date(year, month1 - 1, 1, 12).getDay();
+  const day = 1 + ((weekdayNum - firstWd + 7) % 7) + (nth - 1) * 7;
+  return day <= daysIn ? makeISO(year, month1, day) : null;
+}
+
+// Dates the rule lands on within [fromISO, toISO], oldest first, never before
+// anchorISO (the series start). Every-2-weeks counts from the first scheduled
+// day on or after the anchor: that day's Mon–Sun week is "on", so the first
+// meeting is never skipped. A bad rule gives [].
+function repeatDates(repeat, anchorISO, fromISO, toISO) {
+  if (!isValidRepeat(repeat) || !anchorISO || !toISO) return [];
+  const from = fromISO && fromISO > anchorISO ? fromISO : anchorISO;
+  if (from > toISO) return [];
+  const out = [];
+  if (repeat.every === 'month') {
+    const wd = BULK_DAY_NUM[repeat.weekday];
+    let y = +from.slice(0, 4), m = +from.slice(5, 7);
+    for (let guard = 0; guard < 2400 && makeISO(y, m, 1) <= toISO; guard++) {
+      const d = nthWeekdayOfMonth(y, m, wd, repeat.nth);
+      if (d && d >= from && d <= toISO) out.push(d);
+      if (++m > 12) { m = 1; y++; }
+    }
+    return out;
+  }
+  const nums = new Set(repeat.days.map(d => BULK_DAY_NUM[d]).filter(n => n !== undefined));
+  let firstDay = anchorISO;
+  for (let i = 0; i < 6 && !nums.has(new Date(firstDay + 'T12:00:00').getDay()); i++) firstDay = addDaysISO(firstDay, 1);
+  const anchorWeek = getWeekStartISO(firstDay);
+  for (let d = from, guard = 0; d <= toISO && guard < 40000; d = addDaysISO(d, 1), guard++) {
+    if (!nums.has(new Date(d + 'T12:00:00').getDay())) continue;
+    if (repeat.every === '2weeks' && Math.round(daysBetweenISO(anchorWeek, getWeekStartISO(d)) / 7) % 2) continue;
+    out.push(d);
+  }
+  return out;
+}
+
+// The one way to say a repeat rule in words (Principle 4).
+//   "Tuesdays" · "Tuesdays and Thursdays" · "Mon, Wed, Fri" · "Every other Tuesday"
+//   · "First Tuesday of the month" · "" for a bad rule
+function describeRepeat(r) {
+  if (!isValidRepeat(r)) return '';
+  if (r.every === 'month') return `${REPEAT_NTH_LABELS[r.nth]} ${WEEKDAY_FULL[r.weekday]} of the month`;
+  const days = DAYS.filter(d => r.days.includes(d));
+  let list;
+  if (days.length === 1) list = WEEKDAY_FULL[days[0]] + 's';
+  else if (days.length === 2) list = `${WEEKDAY_FULL[days[0]]}s and ${WEEKDAY_FULL[days[1]]}s`;
+  else list = days.join(', ');
+  if (r.every === '2weeks') return days.length === 1 ? `Every other ${WEEKDAY_FULL[days[0]]}` : `Every other week: ${list}`;
+  return list;
+}
+
+// Whether a group's run [startDate, endDate] overlaps [fromISO, toISO].
+// No endDate = ongoing.
+function groupRunsDuring(group, fromISO, toISO) {
+  if (!group || !group.startDate) return false;
+  return group.startDate <= toISO && (!group.endDate || group.endDate >= fromISO);
+}
+
+function isGroupEnded(group, todayISO) {
+  return !!(group && group.endDate && group.endDate < todayISO);
+}
+
+// The tag on a group's card and page. The end date is the last day, so a group
+// ended today still counts as running, but End group needs something to show.
+function groupEndTag(group, todayISO) {
+  if (isGroupEnded(group, todayISO)) return 'ENDED';
+  return group && group.endDate === todayISO ? 'ENDS TODAY' : '';
+}
+
+// A saved meeting entry holds only what's set: note, topic, skipped, extra.
+function hasMeetingContent(m) {
+  return !!(m && (m.note || m.topic));
+}
+
+// The one rule for a group's meetings in [fromISO, toISO], oldest first:
+// schedule dates inside the group's run, plus saved extras, plus any saved
+// meeting with a note or topic (so changing the schedule never hides a note),
+// minus skipped dates without a note. opts.includeSkipped keeps skipped ones,
+// marked, for the group page. Saved dates after the group's end date are left
+// out, so an ended group leaves the Calendar, Today, and the calendar file;
+// opts.includeAfterEnd keeps them for the group page and the CSV record, so no
+// note is orphaned. A date the schedule also lands on isn't reported as extra.
+//   → [{ date, start, end, note, topic, extra, skipped, offSchedule }]
+function getGroupMeetings(group, fromISO, toISO, opts = {}) {
+  if (!group || !group.startDate || !fromISO || !toISO || fromISO > toISO) return [];
+  const saved = group.meetings || {};
+  const lo = fromISO > group.startDate ? fromISO : group.startDate;
+  const hi = group.endDate && group.endDate < toISO ? group.endDate : toISO;
+  const scheduled = new Set(lo <= hi ? repeatDates(group.repeat, group.startDate, lo, hi) : []);
+  const dates = new Set(scheduled);
+  for (const [d, m] of Object.entries(saved)) {
+    if (group.endDate && d > group.endDate && !opts.includeAfterEnd) continue;
+    if (d >= fromISO && d <= toISO && m && (m.extra || hasMeetingContent(m))) dates.add(d);
+  }
+  const out = [];
+  for (const date of [...dates].sort()) {
+    const m = saved[date] || {};
+    const skipped = !!m.skipped && !m.note;
+    if (skipped && !opts.includeSkipped) continue;
+    out.push({
+      date,
+      start: group.startTime || '',
+      end: group.endTime || '',
+      note: m.note || '',
+      topic: m.topic || '',
+      extra: !!m.extra && !scheduled.has(date),
+      skipped,
+      offSchedule: !scheduled.has(date) && !m.extra,
+    });
+  }
+  return out;
+}
+
+// The next meeting on or after todayISO, or null. Looks a year ahead.
+function getNextGroupMeeting(group, todayISO) {
+  const list = getGroupMeetings(group, todayISO, addDaysISO(todayISO, 400));
+  return list.length ? list[0] : null;
+}
+
+// Set or clear one field of a saved meeting, presence-only (Principle 1):
+// empty values remove the key, an empty entry is removed, and an empty map is
+// removed from the group.
+function setGroupMeetingField(group, dateISO, key, value) {
+  const map = { ...(group.meetings || {}) };
+  const entry = { ...(map[dateISO] || {}) };
+  if (value === '' || value === false || value == null) delete entry[key];
+  else entry[key] = value;
+  if (Object.keys(entry).length) map[dateISO] = entry; else delete map[dateISO];
+  if (Object.keys(map).length) group.meetings = map; else delete group.meetings;
+}
+
+// A semester's date range, taken from its classes (semesters themselves have
+// no dates): earliest class start to latest class end. Null when either end
+// is unknown. The one rule for "the term's dates" (Principle 4).
+function semesterSpan(sem) {
+  let start = '', end = '';
+  for (const cls of (sem && sem.classes) || []) {
+    if (cls.startDate && (!start || cls.startDate < start)) start = cls.startDate;
+    if (cls.endDate && (!end || cls.endDate > end)) end = cls.endDate;
+  }
+  return start && end && start <= end ? { start, end } : null;
+}
+
+// Groups to show for a semester: every group that hasn't ended, whether or not
+// it has started, so one you're planning ahead for can be found. An ended group
+// shows only if it ran during the semester's dates.
+function groupsForSemester(groups, sem, todayISO) {
+  const span = semesterSpan(sem);
+  return (groups || []).filter(g => {
+    if (!g.startDate) return false;
+    return !isGroupEnded(g, todayISO) || (!!span && groupRunsDuring(g, span.start, span.end));
+  });
+}
+
+// What the Delete semester dialog says about groups: they aren't part of a
+// semester, so they stay, and a study group for one of its classes loses the
+// link (see deleteSemester). Empty with no groups (Principle 5).
+function deleteSemesterGroupNote(groups, sem) {
+  const all = groups || [];
+  if (!all.length) return '';
+  const classIds = new Set(((sem && sem.classes) || []).map(c => c.id));
+  const linked = all.filter(g => classIds.has(g.classId)).length;
+  if (all.length === 1) {
+    return "Your group isn't part of a semester, so it will stay." +
+      (linked ? ' It will lose its link to a class here.' : '');
+  }
+  return `Your ${all.length} groups aren't part of a semester, so they will stay.` +
+    (linked ? ` ${linked === 1 ? '1 of them' : linked + ' of them'} will lose ${linked === 1 ? 'its link' : 'their links'} to a class here.` : '');
+}
+
+// What the Delete class dialog says about study groups linked to the class.
+function deleteClassGroupNote(groups, classId) {
+  const linked = (groups || []).filter(g => g.classId === classId);
+  if (!linked.length) return '';
+  if (linked.length === 1) return `The group "${linked[0].name}" will stay and lose its link to this class.`;
+  return `${linked.length} groups linked to this class will stay and lose their links to it.`;
+}
+
+// ─── Groups (#75, 1.15.0): the Add group / Edit group form ─────────────────
+// Pure, so the dialog and the tests share one rule. formData:
+//   { name, classId, every, days, nth, weekday, startTime, endTime, where,
+//     startDate, until: 'term' | 'date' | 'ongoing', endDate, colorIndex }
+// `span` is semesterSpan() of the semester the dialog opened in, or null
+// ("End of this term" is hidden without one).
+function groupFormData(group, span, todayISO, defaultColor) {
+  const g = group || {};
+  const r = g.repeat || {};
+  let until = 'ongoing';
+  if (!group) until = span ? 'term' : 'ongoing';
+  else if (g.endDate) until = span && g.endDate === span.end ? 'term' : 'date';
+  return {
+    name: g.name || '',
+    classId: g.classId || '',
+    every: REPEAT_EVERY.includes(r.every) ? r.every : 'week',
+    days: Array.isArray(r.days) ? [...r.days] : [],
+    nth: REPEAT_NTH.includes(r.nth) ? r.nth : 1,
+    weekday: r.weekday in BULK_DAY_NUM ? r.weekday : WEEKDAY_NAMES[new Date((g.startDate || todayISO) + 'T12:00:00').getDay()],
+    startTime: g.startTime || '',
+    endTime: g.endTime || '',
+    where: g.where || '',
+    startDate: g.startDate || todayISO,
+    until,
+    endDate: g.endDate || '',
+    colorIndex: typeof g.colorIndex === 'number' ? g.colorIndex : (defaultColor || 0),
+  };
+}
+
+// Picking a class fills the color and the end date from it (design §2).
+// "End of this term" stays when the class ends with the term.
+function applyGroupClassChoice(formData, cls, span) {
+  formData.classId = cls ? cls.id : '';
+  if (!cls) return;
+  if (typeof cls.colorIndex === 'number') formData.colorIndex = cls.colorIndex;
+  if (cls.endDate) {
+    if (span && cls.endDate === span.end) formData.until = 'term';
+    else { formData.until = 'date'; formData.endDate = cls.endDate; }
+  }
+}
+
+// The repeat object the form describes: only the keys its kind reads.
+function groupFormRepeat(formData) {
+  if (formData.every === 'month') return { every: 'month', nth: formData.nth, weekday: formData.weekday };
+  return { every: formData.every, days: DAYS.filter(d => (formData.days || []).includes(d)) };
+}
+
+// The end date the form saves: '' = ongoing.
+function groupFormEndDate(formData, span) {
+  if (formData.until === 'term') return span ? span.end : '';
+  if (formData.until === 'date') return formData.endDate || '';
+  return '';
+}
+
+// An error message, or null.
+function validateGroupForm(formData, span) {
+  if (!String(formData.name || '').trim()) return 'Group name is required.';
+  if (formData.every !== 'month' && !(formData.days || []).length) return 'Pick at least one day.';
+  if (!isValidRepeat(groupFormRepeat(formData))) return 'Pick when the group repeats.';
+  const { startTime, endTime } = formData;
+  if ((startTime || endTime) && !(startTime && endTime)) return 'Set both start and end time, or neither.';
+  if (startTime && endTime && endTime <= startTime) return 'End time must be after start time.';
+  if (!formData.startDate) return 'Start date is required.';
+  if (formData.until === 'date' && !formData.endDate) return 'Pick the date the group runs until.';
+  const end = groupFormEndDate(formData, span);
+  if (end && end < formData.startDate) {
+    return formData.until === 'term' ? 'This term ends before the start date. Pick a date or Ongoing.' : 'The end date must be on or after the start date.';
+  }
+  return null;
+}
+
+// The group fields the form sets. Blank optional fields come back as
+// undefined, so updateGroup removes them (presence-only, Principle 1).
+// Meetings are never touched here: a schedule change keeps every saved one.
+function groupFieldsFromForm(formData, span) {
+  const opt = (v) => { const s = String(v || '').trim(); return s || undefined; };
+  return {
+    name: String(formData.name).trim(),
+    colorIndex: formData.colorIndex,
+    repeat: groupFormRepeat(formData),
+    startTime: opt(formData.startTime),
+    endTime: opt(formData.endTime),
+    where: opt(formData.where),
+    startDate: formData.startDate,
+    endDate: opt(groupFormEndDate(formData, span)),
+    classId: opt(formData.classId),
+  };
+}
+
+// ─── Groups (#75, 1.15.0): what the Overview card and the group page show ──
+
+const GROUP_UPCOMING_SHOWN = 5;
+
+// "Tuesdays · 7:00 PM – 8:30 PM". The one schedule line (Principle 4).
+function groupScheduleLine(group) {
+  const bits = [describeRepeat(group.repeat)];
+  if (group.startTime && group.endTime) bits.push(formatTimeRange(group.startTime, group.endTime));
+  return bits.filter(Boolean).join(' · ');
+}
+
+// "Sep 2026 – ongoing" · "Sep 2026 – Dec 2026"
+function groupRunLabel(group) {
+  const my = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  if (!group.startDate) return '';
+  return `${my(group.startDate)} – ${group.endDate ? my(group.endDate) : 'ongoing'}`;
+}
+
+// "Tue, Nov 10 · 7:00 PM"
+function groupMeetingWhen(m) {
+  return m.start ? `${formatDateWithDay(m.date)} · ${formatTimeShort(m.start)}` : formatDateWithDay(m.date);
+}
+
+// "Where" is free text; a web address inside it shows as a link.
+//   → { text, url }, either may be ''
+function parseGroupWhere(where) {
+  const s = String(where || '').trim();
+  const m = s.match(/https?:\/\/[^\s<>"]+/i);
+  if (!m) return { text: s, url: '' };
+  // Trailing punctuation isn't part of the address, and neither is a closing
+  // parenthesis with no opening one inside it (a /wiki/A_(b) address keeps its own).
+  let url = m[0];
+  let closed = false;
+  for (;;) {
+    if (/[.,;:!?]$/.test(url)) url = url.slice(0, -1);
+    else if (url.endsWith(')') && url.split(')').length > url.split('(').length) { url = url.slice(0, -1); closed = true; }
+    else break;
+  }
+  // "Zoom (address)" loses the empty parentheses; "(join at address)" keeps its pair.
+  let before = s.slice(0, m.index);
+  if (closed) before = /\(\s*$/.test(before) ? before.replace(/\(\s*$/, '') : before.trimEnd() + ')';
+  const text = (before + ' ' + s.slice(m.index + m[0].length)).replace(/\s+/g, ' ').replace(/^[\s,;:·–-]+|[\s,;:·–-]+$/g, '');
+  return { text, url };
+}
+
+// The group page's two lists, skipped dates included. Upcoming starts today,
+// soonest first: the next few meetings, plus any date with something saved on it
+// (topic, note, added date, skip) however far out, so it can always be found and
+// changed. A skipped date doesn't use up one of the few. Past is everything
+// before today, newest first; it reaches back past startDate so an older saved
+// note stays listed after the start date moves.
+function groupMeetingLists(group, todayISO) {
+  const savedDates = Object.keys(group.meetings || {});
+  let latest = addDaysISO(todayISO, 400);
+  for (const d of savedDates) if (d > latest) latest = d;
+  let counted = 0;
+  const upcoming = getGroupMeetings(group, todayISO, latest, { includeSkipped: true, includeAfterEnd: true }).filter(m => {
+    const keep = m.skipped || m.extra || hasMeetingContent(m) || counted < GROUP_UPCOMING_SHOWN;
+    if (!m.skipped) counted++;
+    return keep;
+  });
+  let earliest = group.startDate || todayISO;
+  for (const d of savedDates) if (d < earliest) earliest = d;
+  const past = getGroupMeetings(group, earliest, addDaysISO(todayISO, -1), { includeSkipped: true, includeAfterEnd: true }).reverse();
+  return { upcoming, past };
+}
+
+// End group sets the end date to today. Nothing to end when the group already
+// has, and a group that hasn't started yet is deleted or edited instead (an
+// end date before the start date would fail Edit group's own check).
+function canEndGroup(group, todayISO) {
+  if (group.startDate && group.startDate > todayISO) return false;
+  return !(group.endDate && group.endDate <= todayISO);
+}
+
+// Add meeting's check: an error message, or null. A skipped date is fair game
+// (adding it brings it back), and so is a scheduled date with nothing saved on
+// it when there's a topic to add, which is how a far-off date gets planned.
+function groupMeetingDateProblem(group, dateISO, topic) {
+  if (!dateISO) return 'Pick a date.';
+  if (group.startDate && dateISO < group.startDate) return `This group starts ${formatDateYear(group.startDate)}. Pick that date or later.`;
+  if (group.endDate && dateISO > group.endDate) return `This group runs until ${formatDateYear(group.endDate)}. Pick that date or earlier.`;
+  const [taken] = getGroupMeetings(group, dateISO, dateISO);
+  if (!taken) return null;
+  if (taken.extra || hasMeetingContent(taken)) return 'There is already a meeting on that date. Use the menu on its row to change it.';
+  return String(topic || '').trim() ? null : 'That date is already on the schedule. Add a topic to plan it.';
+}
+
+// A date on the schedule just loses its skip; any other date is saved as extra.
+function addGroupMeeting(group, dateISO, topic) {
+  setGroupMeetingField(group, dateISO, 'skipped', false);
+  if (!repeatDates(group.repeat, group.startDate, dateISO, dateISO).length) setGroupMeetingField(group, dateISO, 'extra', true);
+  if (String(topic || '').trim()) setGroupMeetingField(group, dateISO, 'topic', String(topic).trim());
+}
+
+// Takes an added (or no longer scheduled) date off the list. Callers keep this
+// away from a date with a note, which stays listed until the note is unlinked.
+function removeGroupMeeting(group, dateISO) {
+  for (const key of ['extra', 'topic', 'skipped']) setGroupMeetingField(group, dateISO, key, false);
+}
+
+// ─── Groups (#75, 1.15.0): meeting notes ───────────────────────────────────
+// Same flow as 1.14.0's lecture notes. Settings → Notes holds the name pattern
+// (meetingNoteName) and template (meetingTemplate); blank uses the defaults.
+const MEETING_NOTE_NAME_DEFAULT = '{group} {date}';
+const MEETING_NOTE_TOKENS = ['group', 'date', 'topic', 'class'];
+const MEETING_TEMPLATE_TOKENS = [...MEETING_NOTE_TOKENS, 'time', 'where'];
+
+function meetingNoteTokens(group, m, cls) {
+  return {
+    group: String(group.name || '').trim(),
+    date: m.date,
+    topic: String(m.topic || '').trim(),
+    class: cls ? String(cls.name || cls.code || '').trim() : '',
+    code: cls ? String(cls.code || cls.name || '').trim() : '',
+    time: formatItemTime(itemTimes({ kind: 'meeting', meeting: m })),
+    where: String(group.where || '').trim(),
+  };
+}
+
+function defaultMeetingNoteContent(tokens) {
+  const L = ['---', `group: ${yamlString(tokens.group)}`];
+  if (tokens.code) L.push(`course: ${yamlString(tokens.code)}`);
+  L.push(`date: ${tokens.date}`, 'type: meeting', '---', '');
+  L.push(`# ${tokens.group}, ${formatDate(tokens.date)}`, '', '## Agenda', '', '## Notes', '', '## Action items', '', '');
+  return L.join('\n');
+}
+
 // A class meets today by its recurring schedule only when every one of these
 // is set and matches: meetingDays includes today's weekday, both times are
 // set, and dateISO falls inside startDate/endDate inclusive. Any piece
@@ -2573,9 +3087,88 @@ function getItemsForDate(sem, dateISO, filterClassId) {
   return items;
 }
 
+// A class by id, in any semester (a group's class can be in another one).
+//   → { cls, sem } or null
+function findClassInSemesters(semesters, classId) {
+  if (!classId) return null;
+  for (const sem of semesters || []) {
+    const cls = (sem.classes || []).find(c => c.id === classId);
+    if (cls) return { cls, sem };
+  }
+  return null;
+}
+
+// #75: a date's meetings as date items, kind 'meeting'. Groups live outside
+// semesters, so this sits beside getItemsForDate rather than inside it: the
+// agenda walks every semester and must list a meeting once. Skipped dates are
+// left out. A meeting has no done state and is never overdue. cls is the
+// linked class or null. Unlike a class, a group's schedule IS its data, so
+// these are the one thing the calendar lists without an entered record.
+function getMeetingItemsForDate(data, dateISO, filterClassId) {
+  const items = [];
+  for (const group of (data && data.groups) || []) {
+    if (filterClassId && group.classId !== filterClassId) continue;
+    for (const meeting of getGroupMeetings(group, dateISO, dateISO)) {
+      const found = findClassInSemesters(data.semesters, group.classId);
+      items.push({ kind: 'meeting', title: group.name, group, meeting, cls: found ? found.cls : null });
+    }
+  }
+  return items;
+}
+
+// One semester's items for a date plus every group's meetings: the Calendar
+// and the Today sidebar's list.
+function getDayItems(plugin, sem, dateISO, filterClassId) {
+  return [...(sem ? getItemsForDate(sem, dateISO, filterClassId) : []), ...getMeetingItemsForDate(plugin.data, dateISO, filterClassId)];
+}
+
+// Each group's next meeting within `days` days of fromISO, soonest first, at
+// most `limit`: the Today strip's column. One row per group, so a group that
+// meets three times a week doesn't crowd out the others.
+function getUpcomingMeetings(groups, fromISO, days, limit) {
+  const out = [];
+  const to = addDaysISO(fromISO, days - 1);
+  for (const group of groups || []) {
+    const [meeting] = getGroupMeetings(group, fromISO, to);
+    if (meeting) out.push({ group, meeting });
+  }
+  out.sort((a, b) => a.meeting.date.localeCompare(b.meeting.date) || a.meeting.start.localeCompare(b.meeting.start));
+  return out.slice(0, limit);
+}
+
+// "Today · 7:00 PM", "Tue, Nov 10". The strip is narrow, so only today's
+// meeting carries its time.
+function stripMeetingWhen(m, todayISO) {
+  if (m.date !== todayISO) return formatDateWithDay(m.date);
+  return m.start ? `Today · ${formatTimeShort(m.start)}` : 'Today';
+}
+
+// A class page's line for a group that points at it.
+function studyGroupLine(group, todayISO) {
+  const head = `Study group: ${group.name}`;
+  if (isGroupEnded(group, todayISO)) return `${head} · ended`;
+  const next = getNextGroupMeeting(group, todayISO);
+  return next ? `${head} · next ${groupMeetingWhen(next)}` : head;
+}
+
+// The Courses page's list: running groups by name, then ended ones, latest
+// end first.
+function coursesGroupOrder(groups, todayISO) {
+  const name = (g) => String(g.name || '');
+  const running = (groups || []).filter(g => !isGroupEnded(g, todayISO)).sort((a, b) => name(a).localeCompare(name(b)));
+  const ended = (groups || []).filter(g => isGroupEnded(g, todayISO)).sort((a, b) => b.endDate.localeCompare(a.endDate) || name(a).localeCompare(name(b)));
+  return [...running, ...ended];
+}
+
+// "3 notes", "1 note", "No notes". A link to a missing file doesn't count.
+function groupNoteCountLabel(group, isMissing) {
+  const n = Object.values(group.meetings || {}).filter(m => m && m.note && !isMissing(m.note)).length;
+  return n === 0 ? 'No notes' : n === 1 ? '1 note' : `${n} notes`;
+}
+
 function getCalItemStyle(item) {
-  if (item.kind === 'lecture') {
-    const c = getColor(item.cls.colorIndex);
+  if (item.kind === 'lecture' || item.kind === 'meeting') {
+    const c = getColor(item.kind === 'meeting' ? item.group.colorIndex : item.cls.colorIndex);
     return { color: accentOnBg(c), bg: c.bg };
   }
   // #68: copy with the pill-text shade; callers draw color on bg.
@@ -2607,6 +3200,9 @@ function itemTimes(item) {
   }
   if (item.kind === 'exam') {
     return item.exam.startTime ? { start: item.exam.startTime, end: item.exam.endTime || '', due: false } : null;
+  }
+  if (item.kind === 'meeting') {
+    return item.meeting.start ? { start: item.meeting.start, end: item.meeting.end || '', due: false } : null;
   }
   return null;
 }
@@ -2647,7 +3243,7 @@ function renderTodayItem(container, item, onClick, opts = {}) {
     pill.style.background = style.bg;
     pill.style.color      = style.color;
   }
-  if (item.kind === 'lecture') pill.addClass('hc-today-pill--lecture');
+  if (item.kind === 'lecture' || item.kind === 'meeting') pill.addClass('hc-today-pill--lecture');
 
   const titleEl = pill.createDiv({ cls: 'hc-today-item-title', text: item.title });
   if (isDone) titleEl.style.textDecoration = 'line-through';
@@ -2673,6 +3269,9 @@ function renderTodayItem(container, item, onClick, opts = {}) {
 }
 
 function itemMetaText(item) {
+  if (item.kind === 'meeting') {
+    return [classLabel(item.cls), 'Meeting', formatItemTime(itemTimes(item)), item.meeting.topic].filter(Boolean).join(' · ');
+  }
   const kind = item.kind === 'lecture' ? 'Lecture'
     : item.kind === 'exam' ? getExamType(item.exam) : item.assignment.type;
   const time = formatItemTime(itemTimes(item));
@@ -2697,6 +3296,7 @@ function getAgendaForDate(plugin, dateISO) {
     if (isSemesterRemoved(sem)) continue;
     all.push(...getItemsForDate(sem, dateISO, null));
   }
+  all.push(...getMeetingItemsForDate(plugin.data, dateISO, null));
   const { untimed, timed } = orderDayItems(all);
 
   const overdue = [];
@@ -2852,6 +3452,7 @@ class HoldCoursePlugin extends Plugin {
     // #49: keep stored note paths pointing at their notes when a note or
     // folder is moved or renamed. (LiveAQuietLife, 2026-10-03)
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => this._onVaultRename(file, oldPath)));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => this._onActiveLeafChange(leaf)));
 
     this.registerView(VIEW_TYPE, (leaf) => new HoldCourseView(leaf, this));
     this.registerView(TODAY_VIEW_TYPE, (leaf) => new HoldCourseTodayView(leaf, this));
@@ -2916,11 +3517,22 @@ class HoldCoursePlugin extends Plugin {
     this.addCommand({
       id: 'hc-add-class',
       name: 'Add a class',
-      callback: () => {
-        const sem = this._getActiveSemester();
-        if (!sem) { new Notice('No active semester. Create one in Hold Course first.'); return; }
+      callback: () => this.withSemester(NO_SEMESTER_CLASS_INTRO, (sem) => {
         new AddClassModal(this.app, this, sem.id, () => this.save()).open();
-      },
+      }),
+    });
+
+    // #75
+    this.addCommand({
+      id: 'hc-add-group',
+      name: 'Add a group',
+      callback: () => this.withSemester(NO_SEMESTER_GROUP_INTRO, (sem) => {
+        new GroupModal(this.app, this, sem, null, (group) => {
+          this.save();
+          const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+          if (view instanceof HoldCourseView) view._showAddedGroup(group, sem);
+        }).open();
+      }),
     });
 
     this.addCommand({
@@ -3056,7 +3668,7 @@ class HoldCoursePlugin extends Plugin {
   // 100 (zoom: 1) is a no-op, so this is always safe to apply unconditionally
   // — no separate on/off gate needed the way einkMode has one.
   applyUiScale() {
-    const scale = this.data.settings.uiScale || 100;
+    const scale = uiScaleFor(this.data.settings, !!Platform.isMobile);
     document.body.style.setProperty('--hc-ui-scale', scale / 100);
     // Gated behind a class (see styles.css) so zoom is genuinely absent at
     // 100%, not just present with a no-op value — zoom is non-standard
@@ -3264,6 +3876,7 @@ class HoldCoursePlugin extends Plugin {
     if (item.kind === 'lecture')    view.navigate('lecture',    item.cls.id, item.lec.id);
     if (item.kind === 'assignment') view.navigate('assignment', item.cls.id, item.lectureId, item.assignment.id);
     if (item.kind === 'exam')       view.navigate('exam',       item.cls.id, null, null, item.exam.id);
+    if (item.kind === 'meeting')    view.navigateToGroup(item.group.id);
   }
 
   // Companion to refreshTodayView() — same pattern, main dashboard view.
@@ -3314,11 +3927,17 @@ class HoldCoursePlugin extends Plugin {
       }
       for (const r of (sem.resources || [])) fix(r, 'vaultLink');
     }
+    // #75: meeting notes. Groups live outside semesters.
+    for (const group of (this.data.groups || [])) {
+      for (const m of Object.values(group.meetings || {})) {
+        if (m) fix(m, 'note');
+      }
+    }
     // #44: the syllabus folder setting follows a renamed folder too.
     if (this.data.settings) fix(this.data.settings, 'syllabusFolder');
     // 1.14.0: and the notes folder and template settings.
     if (this.data.settings) {
-      for (const k of ['notesFolder', 'lectureTemplate', 'assignmentTemplate', 'exportFolder']) fix(this.data.settings, k);
+      for (const k of ['notesFolder', 'meetingNotesFolder', 'lectureTemplate', 'assignmentTemplate', 'meetingTemplate', 'exportFolder']) fix(this.data.settings, k);
     }
     if (count) {
       await this.save();
@@ -3458,6 +4077,20 @@ class HoldCoursePlugin extends Plugin {
     return sem;
   }
 
+  // An action that needs a semester: with none, Create semester opens first and
+  // the action carries on after it. Cancelling that dialog ends the action.
+  withSemester(intro, run) {
+    const sem = this.getCurrentSemester();
+    if (sem) { run(sem); return; }
+    new AddSemesterModal(this.app, this, () => {
+      this.save();
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+        if (leaf.view instanceof HoldCourseView) leaf.view.render();
+      }
+      run(this.getCurrentSemester());
+    }, intro).open();
+  }
+
   updateSemester(id, updates) {
     const sem = (this.data.semesters || []).find(s => s.id === id);
     if (!sem) return;
@@ -3471,6 +4104,10 @@ class HoldCoursePlugin extends Plugin {
   }
 
   deleteSemester(id) {
+    // #75: a study group for one of its classes stays and loses the link.
+    const doomed = (this.data.semesters || []).find(s => s.id === id);
+    const goneClasses = new Set(((doomed && doomed.classes) || []).map(c => c.id));
+    for (const g of this.data.groups || []) if (goneClasses.has(g.classId)) delete g.classId;
     this.data.semesters = (this.data.semesters || []).filter(s => s.id !== id);
     if (this.data.currentSemesterId === id) {
       this.data.currentSemesterId = this._mostRecentSemesterId();
@@ -3594,6 +4231,65 @@ class HoldCoursePlugin extends Plugin {
       sem.resources = (sem.resources || []).filter(r => !gone.has(r.id));
     }
     sem.classes = sem.classes.filter(c => c.id !== classId);
+    // #75: a study group for this class stays and loses the link.
+    for (const g of this.data.groups || []) if (g.classId === classId) delete g.classId;
+  }
+
+  // ─── Group helpers (#75) ───────────────────────────────────────────────────
+  // data.groups is top-level and additive: absent = no groups.
+
+  findGroup(groupId) {
+    return (this.data.groups || []).find(g => g.id === groupId) || null;
+  }
+
+  addGroup(fields) {
+    const group = { id: generateId() };
+    for (const [k, v] of Object.entries(fields)) if (v !== undefined) group[k] = v;
+    if (!this.data.groups) this.data.groups = [];
+    this.data.groups.push(group);
+    return group;
+  }
+
+  // undefined removes a key; meetings are left alone.
+  updateGroup(groupId, fields) {
+    const group = this.findGroup(groupId);
+    if (!group) return null;
+    for (const [k, v] of Object.entries(fields)) {
+      if (k === 'id' || k === 'meetings') continue;
+      if (v === undefined) delete group[k]; else group[k] = v;
+    }
+    return group;
+  }
+
+  // Meeting notes in the vault are left alone (design §5).
+  deleteGroup(groupId) {
+    if (!this.data.groups) return;
+    this.data.groups = this.data.groups.filter(g => g.id !== groupId);
+    if (!this.data.groups.length) delete this.data.groups;
+  }
+
+  // Sets the end date to today; the group shows as ended from tomorrow.
+  endGroup(groupId, todayISO = getTodayISO()) {
+    return this.updateGroup(groupId, { endDate: todayISO });
+  }
+
+  // A group's linked class can live in any semester. → { cls, sem } or null.
+  findClassAnywhere(classId) {
+    return findClassInSemesters(this.data.semesters, classId);
+  }
+
+  // Classes a group can be "for": the semester's, plus the class it already
+  // points to when that one lives in another semester, so editing never
+  // drops the link by accident.
+  groupClassChoices(sem, group) {
+    const list = [...((sem && sem.classes) || [])];
+    if (group && group.classId && !list.some(c => c.id === group.classId)) {
+      for (const s of this.data.semesters || []) {
+        const c = (s.classes || []).find(x => x.id === group.classId);
+        if (c) { list.push(c); break; }
+      }
+    }
+    return list;
   }
 
   findClass(semesterId, classId) {
@@ -3786,12 +4482,18 @@ class HoldCoursePlugin extends Plugin {
     return this._exportPath('Hold Course.ics');
   }
 
-  // The current semester's calendar text, or null with no semester.
+  // The current semester's calendar text plus group meetings, or null with
+  // neither a semester nor a group (groups don't belong to a semester).
   calendarText() {
     const sem = this.getCurrentSemester();
-    if (!sem) return null;
+    if (!sem && !(this.data.groups || []).length) return null;
     const skip = new Set(this.data.settings.calendarSkip || []);
-    return icsCalendar(calendarEvents(sem, { skip }), 'Hold Course · ' + (sem.name || 'Semester'), icsStamp(new Date()));
+    const events = calendarEvents(sem, { skip });
+    if (!skip.has('meetings')) {
+      const w = meetingExportWindow(sem, getTodayISO());
+      events.push(...meetingCalendarEvents(this.data, w.from, w.to));
+    }
+    return icsCalendar(events, sem ? 'Hold Course · ' + (sem.name || 'Semester') : 'Hold Course', icsStamp(new Date()));
   }
 
   // Writes (or replaces) Hold Course.ics. Skips the write when only the
@@ -3839,11 +4541,12 @@ class HoldCoursePlugin extends Plugin {
     return path;
   }
 
-  // Every lecture, assignment, and exam in every semester (removed ones left out).
+  // Every lecture, assignment, and exam in every semester (removed ones left
+  // out), then group meetings with a note or topic.
   async exportCsv() {
     try {
       const sems = (this.data.semesters || []).filter(s => !isSemesterRemoved(s));
-      const path = await this._writeNewExport('Hold Course items ' + getTodayISO() + '.csv', itemsCsv(sems));
+      const path = await this._writeNewExport('Hold Course items ' + getTodayISO() + '.csv', itemsCsv(sems, this.data.groups));
       new Notice('CSV saved: ' + path);
       return path;
     } catch (e) {
@@ -3875,10 +4578,31 @@ class HoldCoursePlugin extends Plugin {
 
   // ─── 1.14.0 lecture and assignment notes (#74) ──────────────────────────
 
+  // Whether a saved link points at nothing, for every screen that shows one.
+  // A missing note stays visible as missing, and only the user's own action
+  // (Create note, Browse, Remove) changes the link: a note can look missing
+  // because it hasn't synced yet, so nothing here ever clears it. Before the
+  // layout is ready the vault may not be listed yet, so nothing counts as missing.
+  noteIsMissing(path) {
+    const p = String(path || '').trim();
+    if (!p || !this.app.workspace.layoutReady) return false;
+    return !this.app.vault.getAbstractFileByPath(p);
+  }
+
+  // A folder setting, tidied; absent or blank gives ''.
+  _folderSetting(key) {
+    return String(this.data.settings[key] || '').trim()
+      .replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  }
+
   // Notes folder setting; absent or blank means the vault root.
   notesFolder() {
-    return String(this.data.settings.notesFolder || '').trim()
-      .replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    return this._folderSetting('notesFolder');
+  }
+
+  // #75: meeting notes can have their own folder; blank uses the Notes folder.
+  meetingNotesFolder() {
+    return this._folderSetting('meetingNotesFolder') || this.notesFolder();
   }
 
   // The class's subfolder: "<Notes folder>/<code>".
@@ -3903,6 +4627,25 @@ class HoldCoursePlugin extends Plugin {
     }
   }
 
+  // "Name.md" is taken: "Name 2.md", "Name 3.md"…
+  _nextFreeNotePath(path) {
+    const base = path.replace(/\.md$/, '');
+    let next = path;
+    for (let i = 2; this.app.vault.getAbstractFileByPath(next); i++) next = `${base} ${i}.md`;
+    return next;
+  }
+
+  // A template setting's text, or null for the built-in default: none set, or
+  // the note is gone (with a notice).
+  async _readNoteTemplate(key) {
+    const tplPath = String(this.data.settings[key] || '').trim();
+    if (!tplPath) return null;
+    const tpl = this.app.vault.getAbstractFileByPath(tplPath);
+    if (tpl && tpl.extension) return this.app.vault.read(tpl);
+    new Notice(`Template not found: ${tplPath}. Used the default instead.`);
+    return null;
+  }
+
   // Writes the note and returns its path. When the name is taken, the caller
   // asks first (SyllabusNoteChoiceModal): mode 'existing' returns that path
   // as is; 'new' writes "… 2.md", " 3"… Never overwrites. A template that's
@@ -3911,17 +4654,11 @@ class HoldCoursePlugin extends Plugin {
     let path = this.itemNotePath(kind, cls, item, n);
     if (this.app.vault.getAbstractFileByPath(path)) {
       if (mode !== 'new') return path;
-      const base = path.replace(/\.md$/, '');
-      for (let i = 2; this.app.vault.getAbstractFileByPath(path); i++) path = `${base} ${i}.md`;
+      path = this._nextFreeNotePath(path);
     }
     const tokens = noteTokens(kind, cls, item, n);
-    let content = defaultNoteContent(kind, tokens, item);
-    const tplPath = String(this.data.settings[kind === 'lecture' ? 'lectureTemplate' : 'assignmentTemplate'] || '').trim();
-    if (tplPath) {
-      const tpl = this.app.vault.getAbstractFileByPath(tplPath);
-      if (tpl && tpl.extension) content = fillNoteTemplate(await this.app.vault.read(tpl), tokens);
-      else new Notice(`Template not found: ${tplPath}. Used the default instead.`);
-    }
+    const tpl = await this._readNoteTemplate(kind === 'lecture' ? 'lectureTemplate' : 'assignmentTemplate');
+    const content = tpl !== null ? fillNoteTemplate(tpl, tokens) : defaultNoteContent(kind, tokens, item);
     await this._ensureFolder(path.slice(0, path.lastIndexOf('/')));
     await this.app.vault.create(path, content);
     return path;
@@ -3930,10 +4667,99 @@ class HoldCoursePlugin extends Plugin {
   // The Create button on the lecture and assignment screens: ask if the
   // name is taken, create, onLinked(path), then open the note in a new tab.
   createAndLinkNote(kind, cls, item, n, onLinked) {
+    this._createNoteFlow(
+      this.itemNotePath(kind, cls, item, n),
+      (mode) => this.createItemNote(kind, cls, item, n, mode),
+      onLinked,
+    );
+  }
+
+  // "<Meeting notes folder>/<group name>/<name>.md"
+  meetingNotePath(group, m) {
+    const folder = this.meetingNotesFolder();
+    const sub = safeFileName(group.name);
+    const found = this.findClassAnywhere(group.classId);
+    const pattern = String(this.data.settings.meetingNoteName || '').trim() || MEETING_NOTE_NAME_DEFAULT;
+    const name = fillNoteName(pattern, meetingNoteTokens(group, m, found && found.cls), MEETING_NOTE_TOKENS);
+    return `${folder ? `${folder}/${sub}` : sub}/${name}.md`;
+  }
+
+  // Same promises as createItemNote: never overwrites.
+  async createMeetingNote(group, m, mode) {
+    let path = this.meetingNotePath(group, m);
+    if (this.app.vault.getAbstractFileByPath(path)) {
+      if (mode !== 'new') return path;
+      path = this._nextFreeNotePath(path);
+    }
+    const found = this.findClassAnywhere(group.classId);
+    const tokens = meetingNoteTokens(group, m, found && found.cls);
+    const tpl = await this._readNoteTemplate('meetingTemplate');
+    const content = tpl !== null ? fillNoteTemplate(tpl, tokens, MEETING_TEMPLATE_TOKENS) : defaultMeetingNoteContent(tokens);
+    await this._ensureFolder(path.slice(0, path.lastIndexOf('/')));
+    await this.app.vault.create(path, content);
+    return path;
+  }
+
+  // The Create button on a group page's meeting row.
+  createAndLinkMeetingNote(group, m, onLinked) {
+    this._createNoteFlow(
+      this.meetingNotePath(group, m),
+      (mode) => this.createMeetingNote(group, m, mode),
+      onLinked,
+    );
+  }
+
+  // Closing a tab makes Obsidian show the tab to its right, which is often
+  // unrelated. So a note opened from Hold Course's main view remembers that tab,
+  // and closing the note (while looking at it) comes back. Only when Obsidian
+  // landed in Hold Course's own tab group: a note in a split leaves it visible.
+  async _openWithReturn(open) {
+    const ws = this.app.workspace;
+    const recent = ws.getMostRecentLeaf ? ws.getMostRecentLeaf() : null;
+    const back = recent && recent.view && recent.view.getViewType() === VIEW_TYPE ? recent : null;
+    await open();
+    if (!back) return;
+    const leaf = ws.getMostRecentLeaf();
+    if (!leaf || leaf === back) return;
+    if (!this._noteReturns) this._noteReturns = new Map();
+    this._noteReturns.set(leaf, back);
+    this._lastActiveLeaf = leaf;
+  }
+
+  openNoteFile(file) {
+    return this._openWithReturn(() => this.app.workspace.getLeaf('tab').openFile(file));
+  }
+
+  openNoteLink(path, mode = false) {
+    return this._openWithReturn(() => this.app.workspace.openLinkText(path, '', mode));
+  }
+
+  _leafIsOpen(target) {
+    let found = false;
+    this.app.workspace.iterateAllLeaves((leaf) => { if (leaf === target) found = true; });
+    return found;
+  }
+
+  _onActiveLeafChange(leaf) {
+    const prev = this._lastActiveLeaf;
+    this._lastActiveLeaf = leaf;
+    const returns = this._noteReturns;
+    if (!returns || !returns.size) return;
+    const back = prev && !this._leafIsOpen(prev) ? returns.get(prev) : null;
+    for (const key of [...returns.keys()]) if (!this._leafIsOpen(key)) returns.delete(key);
+    if (back && leaf && leaf !== back && leaf.parent === back.parent && this._leafIsOpen(back)) {
+      // After Obsidian finishes closing the tab, or its choice wins.
+      window.setTimeout(() => {
+        if (this._leafIsOpen(back)) this.app.workspace.setActiveLeaf(back, { focus: true });
+      }, 0);
+    }
+  }
+
+  _createNoteFlow(existing, create, onLinked) {
     const run = async (mode) => {
       let path;
       try {
-        path = await this.createItemNote(kind, cls, item, n, mode);
+        path = await create(mode);
       } catch (e) {
         console.error('Hold Course: create note', e);
         new Notice(`Couldn't create the note: ${e.message || e}`);
@@ -3941,9 +4767,8 @@ class HoldCoursePlugin extends Plugin {
       }
       await onLinked(path);
       const file = this.app.vault.getAbstractFileByPath(path);
-      if (file) await this.app.workspace.getLeaf('tab').openFile(file);
+      if (file) await this.openNoteFile(file);
     };
-    const existing = this.itemNotePath(kind, cls, item, n);
     if (this.app.vault.getAbstractFileByPath(existing)) {
       new SyllabusNoteChoiceModal(this.app, existing, run, {
         title: 'A note with this name already exists',
@@ -3961,7 +4786,7 @@ class HoldCoursePlugin extends Plugin {
       const folder = this.syllabusFolder();
       if (folder && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
       const noteText = await this.readSyllabusNote(cls);
-      const content = syllabusMarkdown(cls, sem, { ...opts, scale: getGradeScale(this, cls), noteText });
+      const content = syllabusMarkdown(cls, sem, { ...opts, scale: getGradeScale(this, cls), noteText, noteExists: (p) => !this.noteIsMissing(p) });
       let path = this.syllabusPath(cls);
       let file = this.app.vault.getAbstractFileByPath(path);
       // Never overwrite the syllabus note itself.
@@ -3972,7 +4797,7 @@ class HoldCoursePlugin extends Plugin {
         for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++) path = `${base} ${n}.md`;
         file = await this.app.vault.create(path, content);
       }
-      await this.app.workspace.getLeaf('tab').openFile(file);
+      await this.openNoteFile(file);
       new Notice(`Syllabus saved: ${file.path}`);
     } catch (e) {
       console.error('Hold Course: syllabus export failed', e);
@@ -4521,15 +5346,28 @@ class HoldCourseSettingTab extends PluginSettingTab {
     // explanation reads as broken.
     new Setting(containerEl)
       .setName('Interface scale')
-      .setDesc('Scales the whole interface together — text, icons, and spacing — rather than just the text. Useful on e-ink/mobile displays or a narrow desktop pane. Works on desktop and Android; has no effect on iOS, which doesn\'t support the underlying CSS property.')
+      .setDesc('Scales the whole interface together — text, icons, and spacing — rather than just the text. Useful on e-ink/mobile displays or a narrow desktop pane. Desktop and mobile each keep their own scale. Works on desktop and Android; has no effect on iOS, which doesn\'t support the underlying CSS property.')
       .addSlider((slider) => slider
         .setLimits(90, 150, 10)
-        .setValue(this.plugin.data.settings.uiScale)
+        .setValue(uiScaleFor(this.plugin.data.settings, !!Platform.isMobile))
         .setDynamicTooltip()
         .onChange(async (value) => {
-          this.plugin.data.settings.uiScale = value;
+          setUiScaleFor(this.plugin.data.settings, value, !!Platform.isMobile);
           this.plugin.applyUiScale();
           await this.plugin.save();
+        }));
+
+    // Presence-only: absent means on, and turning it off stores false.
+    new Setting(containerEl)
+      .setName('Dim finished classes and groups')
+      .setDesc('Fades the Overview cards of completed or dropped classes and ended groups. Their status tag shows either way.')
+      .addToggle(tg => tg
+        .setValue(this.plugin.data.settings.dimFinished !== false)
+        .onChange(async (on) => {
+          if (on) delete this.plugin.data.settings.dimFinished;
+          else this.plugin.data.settings.dimFinished = false;
+          await this.plugin.save();
+          this.plugin.refreshMainView();
         }));
 
     new Setting(containerEl)
@@ -4578,6 +5416,12 @@ class HoldCourseSettingTab extends PluginSettingTab {
     include('Include lectures', 'lectures');
     include('Include assignments', 'assignments');
     include('Include exams', 'exams');
+    // Only once there's a group, like the calendar's Show menu (#75).
+    if ((this.plugin.data.groups || []).length) {
+      include('Include meetings', 'meetings')
+        .setDesc('Group meetings from the semester\'s start (or today, if that\'s earlier) through its end or the next 6 months, whichever is later.')
+        .setClass('hc-setting-wide-desc');
+    }
     new Setting(containerEl)
       .setName('Keep the calendar file up to date')
       .setDesc('Rewrites the calendar file after every change. To subscribe instead of importing, put the export folder in a cloud drive that gives the file a public link, and subscribe to that link in your calendar app.')
@@ -4589,7 +5433,7 @@ class HoldCourseSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('CSV')
-      .setDesc('Every lecture, assignment, and exam in all semesters, one row each, for a spreadsheet.')
+      .setDesc('Every lecture, assignment, and exam in all semesters, plus group meetings with a note or topic, one row each, for a spreadsheet.')
       .addButton(b => b.setButtonText('Export CSV').onClick(() => this.plugin.exportCsv()));
     new Setting(containerEl)
       .setName('Backup')
@@ -4597,8 +5441,9 @@ class HoldCourseSettingTab extends PluginSettingTab {
       .addButton(b => b.setButtonText('Export backup').onClick(() => this.plugin.exportBackup()));
   }
 
-  // 1.14.0 (#74): where Create puts lecture and assignment notes, their
-  // names, and their templates. Blank settings are removed (defaults apply).
+  // 1.14.0 (#74): where Create note puts notes, their names, and their
+  // templates. Blank settings are removed (defaults apply). The meeting
+  // settings show once there's a group (#75).
   _renderNotes(containerEl) {
     const settings = this.plugin.data.settings;
     const text = (name, desc, key, placeholder) => new Setting(containerEl)
@@ -4623,11 +5468,16 @@ class HoldCourseSettingTab extends PluginSettingTab {
       }));
     };
     new Setting(containerEl).setName('Notes').setHeading();
-    text('Notes folder', 'Where Create saves new lecture and assignment notes, in a subfolder for each class. Leave blank for the top of the vault.', 'notesFolder', 'Vault root');
+    text('Notes folder', 'Where Create note saves new notes, in a subfolder for each class or group. Leave blank for the top of the vault.', 'notesFolder', 'Vault root');
     text('Lecture note name', 'Fill-ins: {code}, {class}, {n} (lecture number), {title}, {date}.', 'lectureNoteName', NOTE_NAME_DEFAULTS.lecture);
     text('Assignment note name', 'Same fill-ins. {n} is the number of the assignment\'s lecture, if it has one.', 'assignmentNoteName', NOTE_NAME_DEFAULTS.assignment);
     template('Lecture template', 'A note to copy for new lecture notes. Hold Course fills in {{title}}, {{code}}, {{class}}, {{n}}, {{date}}, and {{professor}}, and leaves everything else, such as Templater code, as written. Leave blank for a short default with course, lecture, date, and type properties.', 'lectureTemplate');
     template('Assignment template', 'The same, for new assignment notes.', 'assignmentTemplate');
+    if ((this.plugin.data.groups || []).length) {
+      text('Meeting notes folder', 'Where Create note saves meeting notes, in a subfolder for each group. Leave blank to use the Notes folder.', 'meetingNotesFolder', 'Notes folder');
+      text('Meeting note name', 'Fill-ins: {group}, {date}, {topic}, {class}.', 'meetingNoteName', MEETING_NOTE_NAME_DEFAULT);
+      template('Meeting template', 'A note to copy for new meeting notes. Hold Course fills in {{group}}, {{date}}, {{time}}, {{where}}, {{topic}}, and {{class}}, and leaves everything else as written. Leave blank for a short default with group, date, and type properties and Agenda, Notes, and Action items headings.', 'meetingTemplate');
+    }
   }
 
   // #44: where exported syllabi go. Absent means the vault root.
@@ -4889,11 +5739,15 @@ class HoldCourseView extends ItemView {
     this.currentAssignmentId = null;
     this.currentExamId = null;
     this.currentResourceId = null;
+    this.currentGroupId = null; // #75
+    this.groupOrigin = null;    // #75: 'courses' when opened from Courses
     // Which semester the current detail screens resolve against. Transient view
     // state, NOT plugin.data.currentSemesterId — deliberately a different name so
     // the two can never be confused. null = fall back to the current semester.
     this.viewedSemesterId = null;
     this.currentTab = 'Lectures';
+    this.dashboardTab = 'Classes'; // #75: Overview's Classes / Groups tabs
+    this.coursesTab = 'Classes';   // #75: the same tabs on Courses
     this.previousScreen = null;
     this.assignmentOrigin = null; // #56
     this.globalAssignFilterClassId = null;
@@ -4930,6 +5784,12 @@ class HoldCourseView extends ItemView {
     // place while innerHeight changed. Debounced because resize also fires
     // repeatedly during keyboard animation. Writes only the custom
     // properties and never touches .hc-root, which #34 depends on.
+    // A screen shows Open note only while the note exists. Only a note on this
+    // screen redraws it, so an unrelated delete can't interrupt typing.
+    // Renames need no handler here: _onVaultRename fixes the links and redraws.
+    this.registerEvent(this.app.vault.on('delete', (file) => {
+      if (this._showsNote(file.path)) this.render(true);
+    }));
     this.registerDomEvent(window, 'resize', () => {
       window.clearTimeout(this._capResizeTimer);
       this._capResizeTimer = window.setTimeout(() => this._updateContentCap(), 100);
@@ -4942,7 +5802,7 @@ class HoldCourseView extends ItemView {
     if (this._filterDropdown) this._filterDropdown.close();
   }
 
-  navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null, resourceId = null, semesterId = null, tab = null) {
+  navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null, resourceId = null, semesterId = null, tab = null, groupId = null) {
     // Which semester the detail screens resolve against. Deliberately gated on
     // classId alone, NOT on screen === 'class': the calendar and the Today
     // sidebar navigate straight to 'lecture'/'assignment' without ever passing
@@ -4988,7 +5848,15 @@ class HoldCourseView extends ItemView {
     this.currentAssignmentId = assignmentId;
     this.currentExamId = examId;
     this.currentResourceId = resourceId;
+    this.currentGroupId = groupId;
     this.render();
+  }
+
+  // #75: groups live outside semesters, so the group page passes no class and
+  // no semester, and the class reset above clears any Courses context.
+  navigateToGroup(groupId, origin = null) {
+    this.groupOrigin = origin;
+    this.navigate('group', null, null, null, null, null, null, null, groupId);
   }
 
   // The semester the detail screens resolve against. Falls back to the current
@@ -5002,6 +5870,86 @@ class HoldCourseView extends ItemView {
       if (sem) return sem;
     }
     return this.plugin.getCurrentSemester();
+  }
+
+  // Whether the current screen shows a link to this path.
+  _showsNote(path) {
+    if (this.screen === 'group') {
+      const group = this.plugin.findGroup(this.currentGroupId);
+      return Object.values((group && group.meetings) || {}).some(m => m && m.note === path);
+    }
+    const sem = this._getViewedSemester();
+    if (!sem) return false;
+    if (this.screen === 'resource') {
+      return (sem.resources || []).some(r => r.id === this.currentResourceId && r.vaultLink === path);
+    }
+    if (!['class', 'lecture', 'assignment'].includes(this.screen)) return false;
+    const cls = (sem.classes || []).find(c => c.id === this.currentClassId);
+    if (!cls) return false;
+    return (cls.lectures || []).some(l => l.vaultLink === path)
+      || this.plugin._allClassAssignments(cls).some(a => a.linkedNote === path);
+  }
+
+  // The note field on the lecture and assignment screens. opts: getPath,
+  // setPath(p), placeholder, create(onLinked), onChange (optional).
+  // #8: once a note is linked, the filename shows as read-only text, not an
+  // input: an unrelated edit there would silently save a folder-less path over
+  // the real one. Browse, Create note, and Remove are the only ways to change it.
+  _renderNoteField(section, opts) {
+    const draw = () => {
+      section.empty();
+      const path = opts.getPath() || '';
+      const missing = this.plugin.noteIsMissing(path);
+      const set = (p) => {
+        opts.setPath(p);
+        this.plugin.save();
+        draw();
+        if (opts.onChange) opts.onChange();
+      };
+
+      const row = section.createDiv('hc-assign-note-row');
+      const textWrap = row.createDiv('hc-assign-note-input-wrap');
+      if (missing) {
+        textWrap.createDiv({ cls: 'hc-assign-link-display hc-note-missing', text: missingNoteText(path) });
+      } else if (path) {
+        textWrap.createDiv({ cls: 'hc-assign-link-display', text: path.split('/').pop() });
+      } else {
+        const input = textWrap.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
+        input.placeholder = opts.placeholder;
+        input.value = path;
+        input.addEventListener('blur', () => set(input.value.trim()));
+      }
+
+      const browseBtn = row.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Browse' });
+      browseBtn.addEventListener('click', () => {
+        new VaultLinkSuggestModal(this.app, (selectedPath) => set(selectedPath)).open();
+      });
+
+      if (path && !missing) {
+        const openBtn = row.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Open note' });
+        openBtn.addEventListener('click', () => {
+          const file = this.app.vault.getAbstractFileByPath(path);
+          if (file) this.plugin.openNoteLink(path);
+          else { new Notice('Note not found in vault.'); draw(); }
+        });
+      }
+      if (!path || missing) {
+        const createBtn = row.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Create note' });
+        createBtn.addEventListener('click', () => {
+          opts.create(async (p) => {
+            opts.setPath(p);
+            await this.plugin.save();
+            draw();
+            if (opts.onChange) opts.onChange();
+          });
+        });
+      }
+      if (path) {
+        const removeBtn = row.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Remove' });
+        removeBtn.addEventListener('click', () => set(''));
+      }
+    };
+    draw();
   }
 
   navigateTab(tab) {
@@ -5044,6 +5992,7 @@ class HoldCourseView extends ItemView {
       case 'assignment':   this._renderAssignmentDetail(content); break;
       case 'exam':         this._renderExamDetail(content); break;
       case 'resource':     this._renderResourceDetail(content); break;
+      case 'group':        this._renderGroupPage(content); break;
       case 'assignments':  this._renderAssignmentsView(content); break;
       case 'calendar':     this._renderCalendarView(content); break;
       case 'courses':      this._renderCoursesView(content); break;
@@ -5121,6 +6070,21 @@ class HoldCourseView extends ItemView {
   }
 
   _renderBreadcrumb(bc) {
+    // #75: Overview › Group name. No semester segment: a group isn't in one.
+    if (this.screen === 'group') {
+      const group = this.plugin.findGroup(this.currentGroupId);
+      if (!group) return;
+      const fromCourses = this.groupOrigin === 'courses';
+      const root = bc.createEl('button', { cls: 'hc-bc-link', text: fromCourses ? 'Courses' : 'Overview' });
+      root.addEventListener('click', () => this.navigate(fromCourses ? 'courses' : 'dashboard'));
+      bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
+      const span = bc.createSpan({ cls: 'hc-bc-current', text: group.name });
+      span.style.color = accentText(getColor(group.colorIndex));
+      span.style.fontWeight = '500';
+      span.style.fontSize = '12px';
+      return;
+    }
+
     const sem = this._getViewedSemester();
     if (!sem || ['dashboard', 'assignments', 'calendar', 'courses'].includes(this.screen)) return;
 
@@ -5145,7 +6109,7 @@ class HoldCourseView extends ItemView {
       const cls = sem.classes.find(c => c.id === this.currentClassId);
       if (cls) {
         bc.createSpan({ cls: 'hc-bc-sep', text: '›' });
-        const span = bc.createSpan({ text: classLabel(cls) });
+        const span = bc.createSpan({ cls: 'hc-bc-current', text: classLabel(cls) });
         span.style.color = accentText(getColor(cls.colorIndex));
         span.style.fontWeight = '500';
         span.style.fontSize = '12px';
@@ -5368,50 +6332,364 @@ class HoldCourseView extends ItemView {
       setTimeout(() => document.addEventListener('click', this._semCloseHandler, true), 0);
     });
 
-    // Add class button
-    const addBtn = header.createEl('button', { cls: 'hc-btn' });
+    // Add class and Add group (#75). The pair wraps on a phone.
+    const actions = header.createDiv('hc-dash-actions');
+    const addBtn = actions.createEl('button', { cls: 'hc-btn' });
     const addIcon = addBtn.createSpan({ cls: 'hc-btn-icon' });
     setIcon(addIcon, 'plus');
     addBtn.createSpan({ text: 'Add class' });
     addBtn.addEventListener('click', () => {
-      if (!sem) { new Notice('Create a semester first.'); return; }
-      new AddClassModal(this.app, this.plugin, sem.id, () => {
-        this.plugin.save();
-        this.render();
-      }).open();
-    });
-
-    // Empty state — no semester
-    if (!sem) {
-      const empty = content.createDiv('hc-empty');
-      empty.createDiv({ cls: 'hc-empty-text', text: 'Create a semester to get started.' });
-      const btn = empty.createEl('button', { cls: 'hc-btn', text: 'Create semester' });
-      btn.addEventListener('click', () => {
-        new AddSemesterModal(this.app, this.plugin, () => {
+      this.plugin.withSemester(NO_SEMESTER_CLASS_INTRO, (s) => {
+        new AddClassModal(this.app, this.plugin, s.id, () => {
+          this.dashboardTab = 'Classes';
           this.plugin.save();
           this.render();
         }).open();
       });
+    });
+    const groupBtn = actions.createEl('button', { cls: 'hc-btn' });
+    setIcon(groupBtn.createSpan({ cls: 'hc-btn-icon' }), 'users');
+    groupBtn.createSpan({ text: 'Add group' });
+    groupBtn.addEventListener('click', () => {
+      this.plugin.withSemester(NO_SEMESTER_GROUP_INTRO, (s) => {
+        new GroupModal(this.app, this.plugin, s, null, (group) => {
+          this.plugin.save();
+          this._showAddedGroup(group, s);
+        }).open();
+      });
+    });
+
+    // Empty state — no semester
+    if (!sem) {
+      this._renderCreateSemester(content);
       return;
     }
 
     // Today strip
     this._renderTodayStrip(content, sem);
 
+    // #75: Classes and Groups are tabs, and the tabs appear only once there's a
+    // group to show (Principle 5). A semester with no groups shows Classes under
+    // its plain label, as it always did. dashboardTab stays as chosen, so a
+    // semester without groups doesn't lose the choice for the next one.
+    const today = getTodayISO();
+    const groups = groupsForSemester(this.plugin.data.groups, sem, today);
+    if (groups.length) {
+      const tab = this.dashboardTab === 'Groups' ? 'Groups' : 'Classes';
+      this._renderClassGroupTabs(content, tab, (name) => { this.dashboardTab = name; });
+      if (tab === 'Groups') {
+        this._renderGroupGrid(content, groups, today);
+        return;
+      }
+    }
+
     // Classes section
     const section = content.createDiv('hc-section');
-    section.createDiv({ cls: 'hc-section-label', text: 'Classes' });
+    if (!groups.length) section.createDiv({ cls: 'hc-section-label', text: 'Classes' });
 
     if (sem.classes.length === 0) {
       const empty = section.createDiv('hc-empty');
       empty.createDiv({ cls: 'hc-empty-text', text: 'No classes yet. Add your first class above.' });
-      return;
+    } else {
+      const grid = section.createDiv('hc-class-grid');
+      for (const cls of sem.classes) {
+        this._renderClassCard(grid, cls, sem.id);
+      }
+    }
+  }
+
+  // The empty state of every screen that can't draw without a semester.
+  _renderCreateSemester(content) {
+    const empty = content.createDiv('hc-empty');
+    empty.createDiv({ cls: 'hc-empty-text', text: 'Create a semester to get started.' });
+    const btn = empty.createEl('button', { cls: 'hc-btn', text: 'Create semester' });
+    btn.addEventListener('click', () => {
+      new AddSemesterModal(this.app, this.plugin, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+  }
+
+  // #75: after Add group, land on the tab that shows it. A group that has
+  // already ended, outside this semester's dates, wouldn't show there, so open
+  // its page instead.
+  _showAddedGroup(group, sem) {
+    this.dashboardTab = 'Groups';
+    if (groupsForSemester([group], sem, getTodayISO()).length) this.render();
+    else this.navigateToGroup(group.id);
+  }
+
+  // #75: the Classes | Groups tabs, on the Overview and Courses.
+  _renderClassGroupTabs(content, tab, onPick) {
+    const tabRow = content.createDiv('hc-tab-row hc-dash-tabs');
+    for (const name of ['Classes', 'Groups']) {
+      const btn = tabRow.createEl('button', { cls: 'hc-tab', text: name });
+      if (name === tab) btn.addClass('hc-tab--active');
+      btn.addEventListener('click', () => {
+        if (name === tab) return;
+        onPick(name);
+        this.render(true);
+      });
+    }
+  }
+
+  // #75: the Groups tab. Running groups first; an ended one stays visible
+  // during its term.
+  _renderGroupGrid(content, groups, today) {
+    const section = content.createDiv('hc-section');
+    // A list under a semester's name that isn't that semester's needs saying.
+    const info = section.createDiv('hc-groups-info');
+    setIcon(info.createSpan({ cls: 'hc-inline-icon' }), 'info');
+    info.createSpan({ text: "Groups aren't part of a semester. This list shows every group that hasn't ended, plus ended groups that ran during this term. All groups are on Courses." });
+    const grid = section.createDiv('hc-class-grid');
+    const ordered = [...groups].sort((a, b) => Number(isGroupEnded(a, today)) - Number(isGroupEnded(b, today)));
+    for (const group of ordered) this._renderGroupCard(grid, group, today);
+  }
+
+  _renderGroupCard(container, group, today) {
+    const color = getColor(group.colorIndex);
+    const ended = isGroupEnded(group, today);
+    const card = container.createDiv('hc-class-card hc-group-card');
+    if (ended && this.plugin.data.settings.dimFinished !== false) card.addClass('hc-class-card--finished');
+    card.createDiv('hc-class-bar').style.background = color.accent;
+    const body = card.createDiv('hc-class-body');
+
+    const nameRow = body.createDiv('hc-class-name-row');
+    nameRow.createSpan({ cls: 'hc-class-name', text: group.name });
+    const endTag = groupEndTag(group, today);
+    if (endTag) nameRow.createSpan({ cls: 'hc-class-status-tag', text: endTag });
+
+    const schedule = groupScheduleLine(group);
+    const linked = this.plugin.findClassAnywhere(group.classId);
+    if (schedule || linked) {
+      const days = body.createDiv('hc-class-days');
+      if (schedule) days.createSpan({ cls: 'hc-group-schedule', text: schedule });
+      if (linked) days.createSpan({ cls: 'hc-day-chip', text: classLabel(linked.cls) }).style.color = accentText(getColor(linked.cls.colorIndex));
     }
 
-    const grid = section.createDiv('hc-class-grid');
-    for (const cls of sem.classes) {
-      this._renderClassCard(grid, cls, sem.id);
+    // How long it runs, so a card answers that without opening the group.
+    const run = groupRunLabel(group);
+    if (group.where || run) {
+      const scheduleRow = body.createDiv('hc-class-schedule-row');
+      if (group.where) this._renderGroupWhere(scheduleRow, group, 'hc-class-schedule-item');
+      if (run) {
+        const runItem = scheduleRow.createDiv('hc-class-schedule-item');
+        setIcon(runItem.createSpan({ cls: 'hc-inline-icon' }), 'calendar');
+        runItem.createSpan({ cls: 'hc-group-run', text: run });
+      }
     }
+
+    body.createDiv('hc-class-divider');
+    const next = ended ? null : getNextGroupMeeting(group, today);
+    body.createDiv({ cls: 'hc-class-next-label', text: next ? 'Next meeting' : 'No meetings coming up' });
+    body.createDiv({ cls: 'hc-class-next-title', text: next ? groupMeetingWhen(next) : '—' });
+    if (next && next.topic) body.createDiv({ cls: 'hc-class-next-due hc-group-topic', text: next.topic });
+
+    card.addEventListener('click', () => this.navigateToGroup(group.id));
+  }
+
+  // Where, on a card or the page header. The link doesn't trigger the card.
+  _renderGroupWhere(container, group, itemCls) {
+    const { text, url } = parseGroupWhere(group.where);
+    if (text) {
+      const item = container.createDiv(itemCls);
+      setIcon(item.createSpan({ cls: 'hc-inline-icon' }), 'map-pin');
+      item.createSpan({ text });
+    }
+    if (url) {
+      const item = container.createDiv(itemCls);
+      setIcon(item.createSpan({ cls: 'hc-inline-icon' }), 'video');
+      const link = item.createEl('a', { text: 'Meeting link', href: url });
+      link.setAttribute('target', '_blank');
+      link.setAttribute('rel', 'noopener noreferrer');
+      link.addEventListener('click', e => e.stopPropagation());
+    }
+  }
+
+  // A class page's header: one line per group that points at the class.
+  _renderStudyGroupLines(meta, cls, color) {
+    const today = getTodayISO();
+    for (const group of (this.plugin.data.groups || []).filter(g => g.classId === cls.id)) {
+      const item = meta.createDiv('hc-class-meta-item');
+      const icon = item.createSpan({ cls: 'hc-inline-icon' });
+      setIcon(icon, 'users');
+      icon.style.color = accentText(color);
+      const link = item.createEl('button', { cls: 'hc-group-class-link', text: studyGroupLine(group, today) });
+      link.style.color = accentText(color);
+      link.addEventListener('click', () => this.navigateToGroup(group.id));
+    }
+  }
+
+  // ─── Group page (#75) ─────────────────────────────────────────────────────
+
+  _renderGroupPage(content) {
+    const group = this.plugin.findGroup(this.currentGroupId);
+    if (!group) { this.navigate('dashboard'); return; }
+    const today = getTodayISO();
+    const color = getColor(group.colorIndex);
+
+    const header = content.createDiv('hc-class-header');
+    const topRow = header.createDiv('hc-class-header-code-row');
+    topRow.createDiv('hc-class-header-accent').style.background = color.accent;
+    topRow.createSpan({ cls: 'hc-class-header-code', text: 'Group' }).style.color = accentText(color);
+
+    const actions = topRow.createDiv('hc-group-actions');
+    const addBtn = actions.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    setIcon(addBtn.createSpan({ cls: 'hc-btn-icon' }), 'plus');
+    addBtn.createSpan({ text: 'Add meeting' });
+    addBtn.addEventListener('click', () => {
+      new GroupMeetingModal(this.app, group, null, '', (date, topic) => {
+        addGroupMeeting(group, date, topic);
+        this._saveAndRefresh();
+      }).open();
+    });
+    const editBtn = actions.createEl('button', { cls: 'hc-btn hc-btn--sm' });
+    setIcon(editBtn.createSpan({ cls: 'hc-btn-icon' }), 'pencil');
+    editBtn.createSpan({ text: 'Edit group' });
+    editBtn.addEventListener('click', () => {
+      new GroupModal(this.app, this.plugin, this.plugin.getCurrentSemester(), group, () => this._saveAndRefresh()).open();
+    });
+    const moreBtn = actions.createEl('button', { cls: 'hc-btn hc-btn--sm hc-group-more', attr: { 'aria-label': 'More group actions' } });
+    setIcon(moreBtn, 'more-horizontal');
+    moreBtn.addEventListener('click', (e) => this._openGroupMenu(e, group, today));
+
+    const nameRow = header.createDiv('hc-class-header-name');
+    nameRow.createSpan({ cls: 'hc-class-header-name-text', text: group.name });
+    const endTag = groupEndTag(group, today);
+    if (endTag) nameRow.createSpan({ cls: 'hc-class-status-tag', text: endTag });
+
+    const meta = header.createDiv('hc-class-header-meta hc-group-meta');
+    const metaItem = (icon, text) => {
+      const item = meta.createDiv('hc-class-meta-item');
+      setIcon(item.createSpan({ cls: 'hc-inline-icon' }), icon);
+      if (text) item.createSpan({ text });
+      return item;
+    };
+    const schedule = groupScheduleLine(group);
+    if (schedule) metaItem('clock', schedule);
+    if (group.where) this._renderGroupWhere(meta, group, 'hc-class-meta-item');
+    const run = groupRunLabel(group);
+    if (run) metaItem('calendar', run);
+    const linked = this.plugin.findClassAnywhere(group.classId);
+    if (linked) {
+      const chip = metaItem('graduation-cap').createEl('button', { cls: 'hc-group-class-link', text: classFullName(linked.cls) });
+      chip.style.color = accentText(getColor(linked.cls.colorIndex));
+      // A class in another semester resolves through the view's semester.
+      const elsewhere = linked.sem.id !== (this.plugin.getCurrentSemester() || {}).id;
+      chip.addEventListener('click', () => this.navigate('class', linked.cls.id, null, null, null, null, elsewhere ? linked.sem.id : null));
+    }
+
+    const { upcoming, past } = groupMeetingLists(group, today);
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Upcoming' });
+    this._renderGroupMeetingList(content, group, upcoming, 'No meetings coming up.');
+    content.createDiv({ cls: 'hc-lecture-section-label', text: 'Past' });
+    this._renderGroupMeetingList(content, group, past, 'No past meetings yet.');
+  }
+
+  _saveAndRefresh() {
+    this.plugin.save();
+    this.render(true);
+  }
+
+  _openGroupMenu(e, group, today) {
+    const menu = new Menu();
+    if (canEndGroup(group, today)) {
+      menu.addItem(item => item.setTitle('End group').setIcon('flag').onClick(() => {
+        this.plugin.endGroup(group.id, today);
+        this._saveAndRefresh();
+        new Notice(`${group.name} ends today. To undo this, use Edit group and change Runs until.`);
+      }));
+      menu.addSeparator();
+    }
+    menu.addItem(item => item.setTitle('Delete group').setIcon('trash-2').onClick(() => {
+      new DeleteGroupModal(this.app, this.plugin, group, () => {
+        this.plugin.save();
+        this.navigate(this.groupOrigin === 'courses' ? 'courses' : 'dashboard');
+      }).open();
+    }));
+    menu.showAtMouseEvent(e);
+  }
+
+  _renderGroupMeetingList(content, group, meetings, emptyText) {
+    const list = content.createDiv('hc-lecture-assign-list');
+    if (!meetings.length) {
+      list.createDiv({ cls: 'hc-lecture-assign-empty hc-empty-text', text: emptyText });
+      return;
+    }
+    for (const m of meetings) this._renderGroupMeetingRow(list, group, m);
+  }
+
+  _renderGroupMeetingRow(list, group, meeting) {
+    // A missing note shows as missing and the row offers a new one. The rest of
+    // the row treats it as having no note (so the date can be skipped or removed).
+    const deadLink = this.plugin.noteIsMissing(meeting.note);
+    const m = deadLink ? { ...meeting, note: '' } : meeting;
+    const row = list.createDiv('hc-group-meeting');
+    if (m.skipped) row.addClass('hc-group-meeting--skipped');
+
+    const main = row.createDiv('hc-group-meeting-main');
+    const when = m.start && m.end ? `${formatDateWithDay(m.date)} · ${formatTimeRange(m.start, m.end)}` : formatDateWithDay(m.date);
+    main.createDiv({ cls: 'hc-group-meeting-when', text: when });
+    if (m.topic) main.createDiv({ cls: 'hc-group-meeting-topic', text: m.topic });
+    if (deadLink) main.createDiv({ cls: 'hc-group-meeting-topic hc-note-missing', text: missingNoteText(meeting.note) });
+
+    const right = row.createDiv('hc-group-meeting-right');
+    if (m.skipped) {
+      right.createSpan({ cls: 'hc-class-status-tag', text: 'SKIPPED' });
+    } else if (m.note) {
+      const openBtn = right.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Open note' });
+      openBtn.addEventListener('click', () => {
+        const file = this.app.vault.getAbstractFileByPath(m.note);
+        if (file) this.plugin.openNoteLink(m.note);
+        else { new Notice('Note not found in vault.'); this.render(true); }
+      });
+    } else {
+      const createBtn = right.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Create note' });
+      createBtn.addEventListener('click', () => {
+        this.plugin.createAndLinkMeetingNote(group, m, async (path) => {
+          setGroupMeetingField(group, m.date, 'note', path);
+          await this.plugin.save();
+          this.render(true);
+        });
+      });
+    }
+
+    const moreBtn = right.createEl('button', { cls: 'hc-btn hc-btn--sm hc-group-more', attr: { 'aria-label': 'More meeting actions' } });
+    setIcon(moreBtn, 'more-horizontal');
+    moreBtn.addEventListener('click', (e) => this._openMeetingMenu(e, group, m, deadLink));
+  }
+
+  _openMeetingMenu(e, group, m, deadLink) {
+    const menu = new Menu();
+    // Skipping or removing a date also drops a dead note link, which would
+    // otherwise keep the date listed.
+    const change = (fn) => () => {
+      if (deadLink) setGroupMeetingField(group, m.date, 'note', '');
+      fn();
+      this._saveAndRefresh();
+    };
+    if (m.skipped) {
+      menu.addItem(item => item.setTitle('Undo skip').setIcon('undo-2').onClick(change(() => setGroupMeetingField(group, m.date, 'skipped', false))));
+    } else if (!m.note) {
+      // A date you added has no schedule to fall back on, so it comes off the
+      // list. A date with a note can't be skipped (getGroupMeetings keeps it).
+      if (m.extra || m.offSchedule) {
+        menu.addItem(item => item.setTitle('Remove this date').setIcon('x').onClick(change(() => removeGroupMeeting(group, m.date))));
+      } else {
+        menu.addItem(item => item.setTitle('Skip this date').setIcon('calendar-x').onClick(change(() => setGroupMeetingField(group, m.date, 'skipped', true))));
+      }
+    }
+    menu.addItem(item => item.setTitle(m.topic ? 'Edit topic' : 'Add topic').setIcon('pencil').onClick(() => {
+      new GroupMeetingModal(this.app, group, m.date, m.topic, (date, topic) => {
+        setGroupMeetingField(group, date, 'topic', topic);
+        this._saveAndRefresh();
+      }).open();
+    }));
+    if (m.note || deadLink) {
+      menu.addItem(item => item.setTitle('Remove note link').setIcon('unlink').onClick(change(() => setGroupMeetingField(group, m.date, 'note', ''))));
+    }
+    menu.showAtMouseEvent(e);
   }
 
   _renderTodayStrip(content, sem) {
@@ -5490,6 +6768,20 @@ class HoldCourseView extends ItemView {
       const emptyRow = rightCol.createDiv('hc-today-row hc-today-empty');
       emptyRow.createSpan({ text: 'Nothing coming up.' });
     }
+
+    // #75: meetings have their own column, since none of them are due. Only
+    // when there's one this week (Principle 5).
+    const meetings = getUpcomingMeetings(this.plugin.data.groups, today, 7, 4);
+    if (meetings.length) {
+      const col = strip.createDiv('hc-today-col');
+      col.createDiv({ cls: 'hc-today-label', text: 'Meetings' });
+      for (const { group, meeting } of meetings) {
+        const row = col.createDiv('hc-today-row');
+        row.createDiv('hc-today-dot').style.background = getColor(group.colorIndex).accent;
+        row.createSpan({ cls: 'hc-today-title', text: group.name });
+        row.createSpan({ cls: 'hc-today-date', text: stripMeetingWhen(meeting, today) });
+      }
+    }
   }
 
   _renderClassCard(container, cls, semesterId) {
@@ -5497,6 +6789,8 @@ class HoldCourseView extends ItemView {
     const next = getNextAssignmentDue(cls);
 
     const card = container.createDiv('hc-class-card');
+    // Completed or dropped: dimmed, on top of the tag below (Settings → Display).
+    if (isClassInactive(cls) && this.plugin.data.settings.dimFinished !== false) card.addClass('hc-class-card--finished');
 
     // Color bar
     const bar = card.createDiv('hc-class-bar');
@@ -5809,6 +7103,8 @@ class HoldCourseView extends ItemView {
       link.style.color = accentText(color);
     }
 
+    this._renderStudyGroupLines(meta, cls, color);
+
     // #72: attendance, when on. Click for the meeting list.
     const att = getAttendanceState(cls);
     if (att) {
@@ -6008,7 +7304,9 @@ class HoldCourseView extends ItemView {
     // Linked-note flag. Silent when absent — no placeholder, no greyed state.
     // Reads lec.vaultLink (the Browse/Open note/Remove field on the lecture
     // detail), not lec.notes (the Key Concepts textarea).
-    if ((lec.vaultLink || '').trim()) {
+    if (this.plugin.noteIsMissing(lec.vaultLink)) {
+      right.createDiv({ cls: 'hc-lecture-note-flag hc-note-missing', text: 'Note missing' });
+    } else if ((lec.vaultLink || '').trim()) {
       right.createDiv({ cls: 'hc-lecture-note-flag', text: 'Linked note' });
     }
 
@@ -6182,70 +7480,13 @@ class HoldCourseView extends ItemView {
     content.createDiv({ cls: 'hc-lecture-section-label', text: 'Lecture Notes' });
     const vaultLinkSection = content.createDiv('hc-assign-note-section');
 
-    const renderVaultLinkSection = () => {
-      vaultLinkSection.empty();
-      const path = lec.vaultLink || '';
-
-      const linkRow = vaultLinkSection.createDiv('hc-assign-note-row');
-      const textWrap = linkRow.createDiv('hc-assign-note-input-wrap');
-
-      if (path) {
-        // #8: once a note is linked, show the friendly filename as
-        // read-only text instead of an editable input. This field's value
-        // used to be saved directly from whatever text sat in the box on
-        // blur — showing just the filename there would let an unrelated
-        // edit silently overwrite the real path with a folder-less
-        // fragment, breaking the link. Browse/Remove are now the only way
-        // to change an existing link, matching how the Resource detail
-        // page's vault link already behaves.
-        textWrap.createDiv({ cls: 'hc-assign-link-display', text: path.split('/').pop() });
-      } else {
-        const linkInput = textWrap.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
-        linkInput.placeholder = 'path/to/notes.md';
-        linkInput.value = path;
-        linkInput.addEventListener('blur', () => {
-          lec.vaultLink = linkInput.value.trim();
-          this.plugin.save();
-          renderVaultLinkSection();
-        });
-      }
-
-      const browseBtn = linkRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Browse' });
-      browseBtn.addEventListener('click', () => {
-        new VaultLinkSuggestModal(this.app, (selectedPath) => {
-          lec.vaultLink = selectedPath;
-          this.plugin.save();
-          renderVaultLinkSection();
-        }).open();
-      });
-
-      if (path) {
-        const openBtn = linkRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Open note' });
-        openBtn.addEventListener('click', () => {
-          const file = this.app.vault.getAbstractFileByPath(path);
-          if (file) this.app.workspace.openLinkText(path, '', false);
-          else new Notice('Note not found in vault.');
-        });
-
-        const removeBtn = linkRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Remove' });
-        removeBtn.addEventListener('click', () => {
-          lec.vaultLink = '';
-          this.plugin.save();
-          renderVaultLinkSection();
-        });
-      } else {
-        // 1.14.0: new note from the lecture template, linked and opened.
-        const createBtn = linkRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Create' });
-        createBtn.addEventListener('click', () => {
-          this.plugin.createAndLinkNote('lecture', cls, lec, num, async (p) => {
-            lec.vaultLink = p;
-            await this.plugin.save();
-            renderVaultLinkSection();
-          });
-        });
-      }
-    };
-    renderVaultLinkSection();
+    // 1.14.0: Create note makes one from the lecture template, linked and opened.
+    this._renderNoteField(vaultLinkSection, {
+      getPath: () => lec.vaultLink,
+      setPath: (p) => { lec.vaultLink = p; },
+      placeholder: 'path/to/notes.md',
+      create: (onLinked) => this.plugin.createAndLinkNote('lecture', cls, lec, num, onLinked),
+    });
 
     // #9: split into Readings and Assignments, mirroring the class-level
     // tabs — "Assignments" here used to mean "everything for this lecture,"
@@ -6652,7 +7893,9 @@ class HoldCourseView extends ItemView {
     const notePath = (assignment.linkedNote || '').trim();
     if (notePath) {
       const noteLine = mid.createDiv('hc-reading-note');
-      noteLine.createSpan({ cls: 'hc-reading-ref-label', text: 'Note:' });
+      const noteGone = this.plugin.noteIsMissing(notePath);
+      if (noteGone) noteLine.addClass('hc-note-missing');
+      noteLine.createSpan({ cls: 'hc-reading-ref-label', text: noteGone ? 'Note missing:' : 'Note:' });
       noteLine.createSpan({ cls: 'hc-reading-ref-value', text: notePath.split('/').pop() });
     }
 
@@ -6973,72 +8216,17 @@ class HoldCourseView extends ItemView {
       content.createDiv({ cls: 'hc-lecture-section-label', text: 'Linked Note' });
       const noteSection = content.createDiv('hc-assign-note-section');
 
-      const renderNoteSection = () => {
-        noteSection.empty();
-        const path = assignment.linkedNote || '';
-
-        const noteRow = noteSection.createDiv('hc-assign-note-row');
-        const textWrap = noteRow.createDiv('hc-assign-note-input-wrap');
-
-        if (path) {
-          // #8: same treatment as the Lecture Notes field — once a note is
-          // linked, show the friendly filename as read-only text instead
-          // of an editable input, so an unrelated edit can't silently save
-          // a folder-less path over the real one. Browse/Remove are the
-          // only way to change an existing link.
-          textWrap.createDiv({ cls: 'hc-assign-link-display', text: path.split('/').pop() });
-        } else {
-          const noteInput = textWrap.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
-          noteInput.placeholder = 'path/to/note.md';
-          noteInput.value = path;
-          noteInput.addEventListener('blur', () => {
-            assignment.linkedNote = noteInput.value.trim();
-            this.plugin.save();
-            renderNoteSection();
-            refreshNoteDependents();
-          });
-        }
-
-        const browseBtn = noteRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Browse' });
-        browseBtn.addEventListener('click', () => {
-          new VaultLinkSuggestModal(this.app, (selectedPath) => {
-            assignment.linkedNote = selectedPath;
-            this.plugin.save();
-            renderNoteSection();
-            refreshNoteDependents();
-          }).open();
-        });
-
-        if (path) {
-          const openBtn = noteRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Open note' });
-          openBtn.addEventListener('click', () => {
-            const file = this.app.vault.getAbstractFileByPath(path);
-            if (file) this.app.workspace.openLinkText(path, '', false);
-            else new Notice('Note not found in vault.');
-          });
-
-          const removeBtn = noteRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Remove' });
-          removeBtn.addEventListener('click', () => {
-            assignment.linkedNote = '';
-            this.plugin.save();
-            renderNoteSection();
-            refreshNoteDependents();
-          });
-        } else {
-          // #74: new note from the assignment template, linked and opened.
-          const createBtn = noteRow.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Create' });
-          createBtn.addEventListener('click', () => {
-            const lecIdx = lectureId ? getLecturesSorted(cls).findIndex(l => l.id === lectureId) : -1;
-            this.plugin.createAndLinkNote('assignment', cls, assignment, lecIdx >= 0 ? lecIdx + 1 : null, async (p) => {
-              assignment.linkedNote = p;
-              await this.plugin.save();
-              renderNoteSection();
-              refreshNoteDependents();
-            });
-          });
-        }
-      };
-      renderNoteSection();
+      // #74: Create note makes one from the assignment template, linked and opened.
+      this._renderNoteField(noteSection, {
+        getPath: () => assignment.linkedNote,
+        setPath: (p) => { assignment.linkedNote = p; },
+        placeholder: 'path/to/note.md',
+        onChange: () => refreshNoteDependents(),
+        create: (onLinked) => {
+          const lecIdx = lectureId ? getLecturesSorted(cls).findIndex(l => l.id === lectureId) : -1;
+          this.plugin.createAndLinkNote('assignment', cls, assignment, lecIdx >= 0 ? lecIdx + 1 : null, onLinked);
+        },
+      });
     }
 
     // #30: reading pace, Reading only. Presence-based: assignment.readingPace
@@ -7796,18 +8984,23 @@ class HoldCourseView extends ItemView {
         vaultInfo.createDiv({ cls: 'hc-resource-source-label', text: 'Vault link' });
         // #8: show just the filename, not the full vault path — raw paths
         // were noisy and unhelpful once nested in subfolders (fastermadman)
-        vaultInfo.createDiv({ cls: 'hc-resource-source-path', text: resource.vaultLink.split('/').pop() });
-        const openIcon = vaultRow.createSpan({ cls: 'hc-resource-source-open' });
-        setIcon(openIcon, 'external-link');
-        vaultRow.addEventListener('click', () => {
-          // #14: guard before opening — openLinkText silently creates a new
-          // empty file at the path when nothing is there. The other two
-          // vault-link call sites (Lecture Notes, Assignment Linked Note)
-          // carry the same check inline.
-          const file = this.app.vault.getAbstractFileByPath(resource.vaultLink);
-          if (file) this.app.workspace.openLinkText(resource.vaultLink, '', false);
-          else new Notice('Note not found in vault.');
-        });
+        // A resource usually points at the user's own existing note, so there's
+        // no Create note here; Edit changes the link.
+        if (this.plugin.noteIsMissing(resource.vaultLink)) {
+          vaultRow.addClass('hc-resource-source-row--missing');
+          vaultInfo.createDiv({ cls: 'hc-resource-source-path hc-note-missing', text: missingNoteText(resource.vaultLink) });
+        } else {
+          vaultInfo.createDiv({ cls: 'hc-resource-source-path', text: resource.vaultLink.split('/').pop() });
+          const openIcon = vaultRow.createSpan({ cls: 'hc-resource-source-open' });
+          setIcon(openIcon, 'external-link');
+          vaultRow.addEventListener('click', () => {
+            // #14: guard before opening — openLinkText silently creates a new
+            // empty file at the path when nothing is there.
+            const file = this.app.vault.getAbstractFileByPath(resource.vaultLink);
+            if (file) this.plugin.openNoteLink(resource.vaultLink);
+            else new Notice('Note not found in vault.');
+          });
+        }
       }
 
       if (hasUrl) {
@@ -7899,8 +9092,7 @@ class HoldCourseView extends ItemView {
   _renderAssignmentsView(content) {
     const sem = this.plugin.getCurrentSemester();
     if (!sem) {
-      const empty = content.createDiv('hc-empty');
-      empty.createDiv({ cls: 'hc-empty-text', text: 'No semester found.' });
+      this._renderCreateSemester(content);
       return;
     }
 
@@ -8358,10 +9550,20 @@ class HoldCourseView extends ItemView {
       }
     }
 
+    // #75: Classes and Groups are tabs once a group exists (Principle 5).
+    const groupCount = (this.plugin.data.groups || []).length;
+    const tab = groupCount && this.coursesTab === 'Groups' ? 'Groups' : 'Classes';
+
     // ── Header ────────────────────────────────────────────────────────────────
     const header = content.createDiv('hc-dash-header');
     const titleWrap = header.createDiv('hc-dash-title-wrap');
     titleWrap.createDiv({ cls: 'hc-courses-title', text: 'Courses' });
+    if (tab === 'Groups') {
+      titleWrap.createDiv({ cls: 'hc-dash-subtitle', text: `${groupCount} ${groupCount === 1 ? 'group' : 'groups'}` });
+      this._renderClassGroupTabs(content, tab, (name) => { this.coursesTab = name; });
+      this._renderCoursesGroups(content);
+      return;
+    }
     // Counts describe what is on screen, so they never disagree with the table.
     const creditTotal = rows.reduce((s, r) => s + (r.dropped || r.credits === null ? 0 : r.credits), 0);
     const creditPart = creditTotal > 0
@@ -8374,17 +9576,11 @@ class HoldCourseView extends ItemView {
             creditPart,
     });
 
+    if (groupCount) this._renderClassGroupTabs(content, tab, (name) => { this.coursesTab = name; });
+
     // ── Empty state — nothing exists at all ───────────────────────────────────
     if (sems.length === 0) {
-      const empty = content.createDiv('hc-empty');
-      empty.createDiv({ cls: 'hc-empty-text', text: 'Create a semester to get started.' });
-      const btn = empty.createEl('button', { cls: 'hc-btn', text: 'Create semester' });
-      btn.addEventListener('click', () => {
-        new AddSemesterModal(this.app, this.plugin, () => {
-          this.plugin.save();
-          this.render();
-        }).open();
-      });
+      this._renderCreateSemester(content);
       return;
     }
 
@@ -8618,13 +9814,43 @@ class HoldCourseView extends ItemView {
     }
   }
 
-  _renderCalendarView(content) {
-    const sem = this.plugin.getCurrentSemester();
-    if (!sem) {
-      const empty = content.createDiv('hc-empty');
-      empty.createDiv({ cls: 'hc-empty-text', text: 'No semester found.' });
-      return;
+  // #75: the Groups tab: every group. Year and term filters don't apply, since
+  // a group isn't in a semester.
+  _renderCoursesGroups(content) {
+    const today = getTodayISO();
+    const groups = coursesGroupOrder(this.plugin.data.groups, today);
+    if (!groups.length) return;
+    const section = content.createDiv('hc-courses-groups');
+    for (const group of groups) {
+      const row = section.createDiv('hc-courses-group-row');
+      if (isGroupEnded(group, today)) row.addClass('hc-courses-group-row--ended');
+      row.createDiv({ cls: 'hc-courses-group-name', text: group.name }).style.color = accentText(getColor(group.colorIndex));
+      const linked = this.plugin.findClassAnywhere(group.classId);
+      row.createDiv({ cls: 'hc-courses-group-cell', text: linked ? classLabel(linked.cls) : '' });
+      row.createDiv({ cls: 'hc-courses-group-cell', text: groupRunLabel(group) });
+      row.createDiv({ cls: 'hc-courses-group-cell', text: groupNoteCountLabel(group, (p) => this.plugin.noteIsMissing(p)) });
+      row.addEventListener('click', () => this.navigateToGroup(group.id, 'courses'));
     }
+  }
+
+  _renderCalendarView(content) {
+    // #75: groups live outside semesters, so they keep the Calendar going
+    // without one.
+    let sem = this.plugin.getCurrentSemester();
+    if (!sem) {
+      if (!(this.plugin.data.groups || []).length) {
+        this._renderCreateSemester(content);
+        return;
+      }
+      sem = { classes: [] };
+    }
+
+    // A class filter left over from another semester or a deleted class would
+    // hide everything while the button reads "All classes".
+    if (this.calFilterClassId && !(sem.classes || []).some(c => c.id === this.calFilterClassId)) this.calFilterClassId = null;
+
+    // The Classes and Meetings choices go when the last group does (they're no longer listed).
+    if ((this.calFilterKind === 'meeting' || this.calFilterKind === 'class') && !(this.plugin.data.groups || []).length) this.calFilterKind = null;
 
     const today = new Date();
     if (this.calYear === null)  this.calYear  = today.getFullYear();
@@ -8683,9 +9909,22 @@ class HoldCourseView extends ItemView {
 
   _renderCalLegend(content, sem) {
     const classes = sem.classes || [];
-    if (classes.length === 0) return;
+    const groups = groupsForSemester(this.plugin.data.groups, sem, getTodayISO());
+    if (classes.length === 0 && groups.length === 0) return;
 
     const legend = content.createDiv('hc-cal-legend');
+
+    // #75: meetings take their group's color.
+    const renderGroupLegend = () => {
+      const groupGroup = legend.createDiv('hc-cal-legend-group');
+      groupGroup.createSpan({ cls: 'hc-cal-legend-grouplabel', text: 'Meetings' });
+      for (const group of groups) {
+        const item = groupGroup.createDiv('hc-cal-legend-item');
+        item.createDiv('hc-cal-legend-dot').style.background = getColor(group.colorIndex).accent;
+        item.createSpan({ cls: 'hc-cal-legend-label', text: group.name });
+      }
+    };
+    if (classes.length === 0) { renderGroupLegend(); return; }
 
     // Lectures group — colored by class
     const classGroup = legend.createDiv('hc-cal-legend-group');
@@ -8713,6 +9952,11 @@ class HoldCourseView extends ItemView {
       const label = type === 'Other' && getCustomTypes(this.plugin).length ? 'Other & custom' : type;
       item.createSpan({ cls: 'hc-cal-legend-label', text: label });
     }
+
+    if (groups.length) {
+      legend.createDiv('hc-cal-legend-sep');
+      renderGroupLegend();
+    }
   }
 
   _renderMonthGrid(content, sem) {
@@ -8733,7 +9977,7 @@ class HoldCourseView extends ItemView {
       const d = new Date(dateISO + 'T12:00:00');
       const inMonth = d.getMonth() === this.calMonth && d.getFullYear() === this.calYear;
       const isToday = dateISO === todayISO;
-      const items   = this._applyCalKindFilter(getItemsForDate(sem, dateISO, this.calFilterClassId));
+      const items   = this._applyCalKindFilter(getDayItems(this.plugin, sem, dateISO, this.calFilterClassId));
 
       const cell = grid.createDiv('hc-cal-cell');
       if (isToday)  cell.addClass('hc-cal-cell--today');
@@ -8757,7 +10001,7 @@ class HoldCourseView extends ItemView {
         const overdue = this._isCalItemOverdue(item);
         const done    = this._isCalItemDone(item);
         let pillCls = 'hc-cal-pill';
-        if (item.kind === 'lecture') pillCls += ' hc-cal-pill--lecture';
+        if (item.kind === 'lecture' || item.kind === 'meeting') pillCls += ' hc-cal-pill--lecture';
         const pill = cell.createDiv(pillCls);
         if (done) {
           pill.style.background = 'var(--background-modifier-border)';
@@ -8797,7 +10041,7 @@ class HoldCourseView extends ItemView {
     for (let i = 0; i < 7; i++) {
       const dateISO = addDaysISO(this.calWeekStart, i);
       const isToday = dateISO === todayISO;
-      const items   = this._applyCalKindFilter(getItemsForDate(sem, dateISO, this.calFilterClassId));
+      const items   = this._applyCalKindFilter(getDayItems(this.plugin, sem, dateISO, this.calFilterClassId));
 
       const cell = grid.createDiv('hc-cal-week-cell');
       if (isToday) cell.addClass('hc-cal-week-cell--today');
@@ -8811,7 +10055,7 @@ class HoldCourseView extends ItemView {
         const overdue = this._isCalItemOverdue(item);
         const done    = this._isCalItemDone(item);
         let weekPillCls = 'hc-cal-week-pill';
-        if (item.kind === 'lecture') weekPillCls += ' hc-cal-week-pill--lecture';
+        if (item.kind === 'lecture' || item.kind === 'meeting') weekPillCls += ' hc-cal-week-pill--lecture';
         const pill = cell.createDiv(weekPillCls);
         if (done) {
           pill.style.background = 'var(--background-modifier-border)';
@@ -8898,7 +10142,8 @@ class HoldCourseView extends ItemView {
       if (kindDropEl) { closeKindDrop(); return; }
       kindDropEl = kindWrap.createDiv('hc-sem-drop hc-cal-filter-drop');
 
-      for (const opt of CAL_KIND_OPTIONS) {
+      const hasGroups = !!(this.plugin.data.groups || []).length;
+      for (const opt of CAL_KIND_OPTIONS.filter(o => (o.value !== 'meeting' && o.value !== 'class') || hasGroups)) {
         const item = kindDropEl.createDiv('hc-sem-drop-item');
         if (opt.value === this.calFilterKind) item.addClass('hc-sem-drop-item--active');
         const icon = item.createSpan({ cls: 'hc-sem-drop-icon' });
@@ -8969,7 +10214,9 @@ class HoldCourseView extends ItemView {
   // stays shared with the Today sidebar, which does not get these filters.
   _applyCalKindFilter(items) {
     let filtered = items;
-    if (this.calFilterKind) {
+    if (this.calFilterKind === 'class') {
+      filtered = filtered.filter(i => i.kind !== 'meeting');
+    } else if (this.calFilterKind) {
       filtered = filtered.filter(i => i.kind === this.calFilterKind);
     }
     if (this.calFilterKind === 'assignment' && this.calFilterType) {
@@ -9004,6 +10251,7 @@ class HoldCourseView extends ItemView {
     if (item.kind === 'lecture')    this.navigate('lecture',    item.cls.id, item.lec.id);
     if (item.kind === 'assignment') this.navigate('assignment', item.cls.id, item.lectureId, item.assignment.id);
     if (item.kind === 'exam')       this.navigate('exam',       item.cls.id, null, null, item.exam.id);
+    if (item.kind === 'meeting')    this.navigateToGroup(item.group.id);
   }
 
   _showCalPopover(items, cellEl, dateISO) {
@@ -9044,6 +10292,7 @@ class HoldCourseView extends ItemView {
 
       const info = row.createDiv('hc-cal-popover-info');
       const kindText = item.kind === 'lecture' ? 'Lecture'
+        : item.kind === 'meeting' ? 'Meeting'
         : item.kind === 'exam' ? getExamType(item.exam)
         : (item.assignment.type || 'Assignment');
       info.createSpan({ cls: 'hc-cal-popover-kind',  text: kindText });
@@ -9054,8 +10303,12 @@ class HoldCourseView extends ItemView {
       const popTime = formatItemTime(itemTimes(item));
       if (popTime) info.createDiv({ cls: 'hc-cal-popover-time', text: popTime });
 
-      // Class code in muted text
-      info.createDiv({ cls: 'hc-cal-popover-class', text: classLabel(item.cls) });
+      if (item.kind === 'meeting' && item.meeting.topic) {
+        info.createDiv({ cls: 'hc-cal-popover-class', text: item.meeting.topic });
+      }
+
+      // Class code in muted text. A meeting may have no class.
+      if (item.cls) info.createDiv({ cls: 'hc-cal-popover-class', text: classLabel(item.cls) });
 
       row.addEventListener('click', () => {
         this._closeCalPopover();
@@ -9126,11 +10379,16 @@ class HoldCourseView extends ItemView {
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
 
+// Shown when Create semester opens on the way to another dialog.
+const NO_SEMESTER_CLASS_INTRO = 'Create a semester first, then you can add your class.';
+const NO_SEMESTER_GROUP_INTRO = 'Create a semester first, then you can add your group.';
+
 class AddSemesterModal extends Modal {
-  constructor(app, plugin, onSave) {
+  constructor(app, plugin, onSave, intro = null) {
     super(app);
     this.plugin = plugin;
     this.onSave = onSave;
+    this.intro = intro;
     this.name = '';
     this.term = '';
     this.year = '';
@@ -9142,6 +10400,7 @@ class AddSemesterModal extends Modal {
     this._makeDraggable(this);
     contentEl.addClass('hc-modal');
     contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'New semester' });
+    if (this.intro) contentEl.createEl('p', { cls: 'hc-modal-body', text: this.intro });
 
     let nameInput = null;
 
@@ -9173,8 +10432,9 @@ class AddSemesterModal extends Modal {
     const year = _parseYearField(this.year);
     if (year === false) { new Notice('Year must be a 4-digit year between 1900 and 2199.'); return; }
     this.plugin.addSemester(this.name, this.term || null, year);
-    this.onSave();
+    // Close first: onSave can open the next dialog.
     this.close();
+    this.onSave();
   }
 
   onClose() { this.contentEl.empty(); }
@@ -9393,6 +10653,8 @@ class DeleteSemesterModal extends Modal {
       cls: 'hc-modal-body',
       text: `Delete "${this.sem.name}" and everything in it: ${parts.join(', ')}. This cannot be undone.`,
     });
+    const groupNote = deleteSemesterGroupNote(this.plugin.data.groups, this.sem);
+    if (groupNote) contentEl.createEl('p', { cls: 'hc-modal-body', text: groupNote });
 
     const footer = contentEl.createDiv('hc-modal-footer');
     const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
@@ -9927,7 +11189,7 @@ class EditClassModal extends Modal {
   // the dialog stays open with the usual notice; a note Create just made is
   // linked in the form, ready for the next Save.
   _saveAndOpenNote(path) {
-    if (this._save()) this.app.workspace.openLinkText(path, '', 'tab');
+    if (this._save()) this.plugin.openNoteLink(path, 'tab');
   }
 
   _renderSyllabusNoteField(contentEl) {
@@ -10507,6 +11769,8 @@ class DeleteClassModal extends Modal {
     ];
     if (toDelete.length) parts.push(`${res(toDelete.length)} used only by this class will be deleted.`);
     if (toUntag.length) parts.push(`${res(toUntag.length)} used by other classes will stay.`);
+    const groupNote = deleteClassGroupNote(this.plugin.data.groups, this.cls.id);
+    if (groupNote) parts.push(groupNote);
     parts.push('This cannot be undone.');
     contentEl.createEl('p', { cls: 'hc-modal-body', text: parts.join(' ') });
 
@@ -10519,6 +11783,229 @@ class DeleteClassModal extends Modal {
       this.onDelete();
       this.close();
     });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// ─── Add group / Edit group (#75) ─────────────────────────────────────────────
+// One dialog for both (design §2). `sem` is the semester it opened in: its
+// classes fill "For a class" and its span gives "End of this term". `group`
+// is null when adding. onSave runs after the change is made.
+class GroupModal extends Modal {
+  constructor(app, plugin, sem, group, onSave) {
+    super(app);
+    this.plugin = plugin;
+    this.sem = sem;
+    this.group = group;
+    this.onSave = onSave;
+    this.span = semesterSpan(sem);
+    this.classes = plugin.groupClassChoices(sem, group);
+    const others = (plugin.data.groups || []).filter(g => g !== group);
+    const defaultColor = firstFreeColorIndex([...((sem && sem.classes) || []), ...others]);
+    this.formData = groupFormData(group, this.span, getTodayISO(), defaultColor);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this._makeDraggable(this);
+    contentEl.addClass('hc-modal');
+    contentEl.addClass('hc-group-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: this.group ? 'Edit group' : 'Add group' });
+    this.fieldsEl = contentEl.createDiv('hc-group-modal-fields');
+    this._renderFields();
+    this._renderFooter(contentEl, this.group ? 'Save' : 'Add group', () => this._save());
+  }
+
+  // Redraw after a choice that changes which fields show, keeping the scroll.
+  _rerender() {
+    const top = this.contentEl.scrollTop;
+    this._renderFields();
+    this.contentEl.scrollTop = top;
+  }
+
+  _renderFields() {
+    const el = this.fieldsEl;
+    const f = this.formData;
+    el.empty();
+
+    new Setting(el).setName('Name').addText(text => {
+      text.setPlaceholder('Romans Reading Group').setValue(f.name).onChange(v => f.name = v);
+      if (!this.group && !this._focused) { text.inputEl.focus(); this._focused = true; }
+    });
+
+    if (this.classes.length) {
+      new Setting(el)
+        .setClass('hc-setting-wide-desc')
+        .setName('For a class')
+        .setDesc('Optional. A study group takes the class’s color and end date.')
+        .addDropdown(dd => {
+          dd.addOption('', 'None');
+          for (const c of this.classes) dd.addOption(c.id, classFullName(c));
+          dd.setValue(f.classId).onChange(v => {
+            applyGroupClassChoice(f, this.classes.find(c => c.id === v) || null, this.span);
+            this._rerender();
+          });
+        });
+    }
+
+    const rep = new Setting(el).setName('Repeats').addDropdown(dd => {
+      dd.addOption('week', 'Weekly');
+      dd.addOption('2weeks', 'Every 2 weeks');
+      dd.addOption('month', 'Monthly');
+      dd.setValue(f.every).onChange(v => { f.every = v; this._rerender(); });
+    });
+    if (f.every === '2weeks') {
+      rep.setClass('hc-setting-wide-desc').setDesc('Counted from the first meeting on or after the start date.');
+    }
+
+    if (f.every === 'month') {
+      new Setting(el).setName('On the')
+        .addDropdown(dd => {
+          for (const n of REPEAT_NTH) dd.addOption(String(n), REPEAT_NTH_LABELS[n]);
+          dd.setValue(String(f.nth)).onChange(v => f.nth = Number(v));
+        })
+        .addDropdown(dd => {
+          for (const d of DAYS) dd.addOption(d, WEEKDAY_FULL[d]);
+          dd.setValue(f.weekday).onChange(v => f.weekday = v);
+        });
+    } else {
+      const days = new Setting(el).setName('Days');
+      const picker = days.controlEl.createDiv('hc-days-picker');
+      for (const day of DAYS) {
+        const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: day, type: 'button' });
+        const on = f.days.includes(day);
+        chip.toggleClass('hc-day-toggle--active', on);
+        chip.setAttr('aria-pressed', on ? 'true' : 'false');
+        chip.addEventListener('click', () => {
+          const i = f.days.indexOf(day);
+          if (i === -1) f.days.push(day); else f.days.splice(i, 1);
+          chip.toggleClass('hc-day-toggle--active', i === -1);
+          chip.setAttr('aria-pressed', i === -1 ? 'true' : 'false');
+        });
+      }
+    }
+
+    renderTimePicker(el, 'Start time', f.startTime, v => f.startTime = v);
+    renderTimePicker(el, 'End time', f.endTime, v => f.endTime = v);
+
+    new Setting(el).setName('Where').addText(text => {
+      text.setPlaceholder('Room 12, or a meeting link').setValue(f.where).onChange(v => f.where = v);
+    });
+
+    new Setting(el).setName('Starts').addText(text => {
+      text.inputEl.type = 'date';
+      text.setValue(f.startDate).onChange(v => f.startDate = v);
+    });
+
+    if (f.until === 'term' && !this.span) f.until = 'ongoing';
+    new Setting(el).setName('Runs until').addDropdown(dd => {
+      if (this.span) dd.addOption('term', `End of this term (${formatDateYear(this.span.end)})`);
+      dd.addOption('date', 'A date');
+      dd.addOption('ongoing', 'Ongoing');
+      dd.setValue(f.until).onChange(v => { f.until = v; this._rerender(); });
+    });
+    if (f.until === 'date') {
+      new Setting(el).setName('End date').addText(text => {
+        text.inputEl.type = 'date';
+        text.setValue(f.endDate).onChange(v => f.endDate = v);
+      });
+    }
+
+    renderColorPicker(el, (this.sem && this.sem.classes) || [], null, f.colorIndex, i => f.colorIndex = i);
+  }
+
+  _save() {
+    const err = validateGroupForm(this.formData, this.span);
+    if (err) { new Notice(err); return; }
+    const fields = groupFieldsFromForm(this.formData, this.span);
+    if (this.group) {
+      this.plugin.updateGroup(this.group.id, fields);
+      this.onSave();
+    } else {
+      this.onSave(this.plugin.addGroup(fields));
+    }
+    this.close();
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// Delete group: confirm. Meeting notes stay in the vault.
+class DeleteGroupModal extends Modal {
+  constructor(app, plugin, group, onDelete) {
+    super(app);
+    this.plugin = plugin;
+    this.group = group;
+    this.onDelete = onDelete;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Delete group' });
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: `Delete "${this.group.name}"? Its schedule, topics, and skipped dates will be removed. Meeting notes in your vault stay. This cannot be undone.`,
+    });
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const deleteBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Delete group' });
+    deleteBtn.addEventListener('click', () => {
+      this.plugin.deleteGroup(this.group.id);
+      this.onDelete();
+      this.close();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// Add meeting (dateISO null: date + topic) or Edit topic (dateISO set: topic
+// only). onSave(dateISO, topic) runs after the check passes.
+class GroupMeetingModal extends Modal {
+  constructor(app, group, dateISO, topic, onSave) {
+    super(app);
+    this.group = group;
+    this.adding = !dateISO;
+    this.date = dateISO || getTodayISO();
+    this.topic = topic || '';
+    this.onSave = onSave;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    this._makeDraggable(this);
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', {
+      cls: 'hc-modal-title',
+      text: this.adding ? 'Add meeting' : `Topic for ${formatDate(this.date)}`,
+    });
+    if (this.adding) {
+      new Setting(contentEl).setName('Date').addText(text => {
+        text.inputEl.type = 'date';
+        text.setValue(this.date).onChange(v => this.date = v);
+      });
+    }
+    new Setting(contentEl).setName('Topic').setDesc('Optional.').addText(text => {
+      text.setPlaceholder('Romans 8 discussion').setValue(this.topic).onChange(v => this.topic = v);
+      text.inputEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); this._save(); } });
+      if (!this.adding) text.inputEl.focus();
+    });
+    this._renderFooter(contentEl, this.adding ? 'Add meeting' : 'Save', () => this._save());
+  }
+
+  _save() {
+    if (this.adding) {
+      const err = groupMeetingDateProblem(this.group, this.date, this.topic);
+      if (err) { new Notice(err); return; }
+    }
+    this.onSave(this.date, this.topic.trim());
+    this.close();
   }
 
   onClose() { this.contentEl.empty(); }
@@ -12549,8 +14036,9 @@ class HoldCourseTodayView extends ItemView {
     const root = contentEl.createDiv('hc-today-root');
 
     const sem = this.plugin.getCurrentSemester();
-    if (!sem) {
-      root.createDiv({ cls: 'hc-today-empty', text: 'No semester found.' });
+    // #75: groups don't belong to a semester, so their meetings still show.
+    if (!sem && !(this.plugin.data.groups || []).length) {
+      root.createDiv({ cls: 'hc-today-empty', text: 'Nothing scheduled.' });
       return;
     }
 
@@ -12562,7 +14050,7 @@ class HoldCourseTodayView extends ItemView {
   }
 
   _renderSection(root, sem, dateISO, label) {
-    const items = getItemsForDate(sem, dateISO, null);
+    const items = getDayItems(this.plugin, sem, dateISO, null);
 
     const section = root.createDiv('hc-today-section');
     section.createDiv({ cls: 'hc-today-section-label', text: label });
@@ -12577,7 +14065,12 @@ class HoldCourseTodayView extends ItemView {
     // Band labels only earn their place when there's an actual split to
     // announce — a single unadorned list otherwise, no header hanging over
     // a one-item section.
-    const showBandLabels = untimed.length > 0 && timed.length > 0;
+    // #75: a meeting with no time isn't due, so it goes above that label.
+    const allDayMeetings = untimed.filter(i => i.kind === 'meeting');
+    const dueItems = untimed.filter(i => i.kind !== 'meeting');
+    const showBandLabels = dueItems.length > 0 && (timed.length > 0 || allDayMeetings.length > 0);
+    const open = (item) => this.plugin.openItem(item);
+    for (const item of allDayMeetings) renderTodayItem(section, item, open);
 
     if (showBandLabels) {
       section.createDiv({
@@ -12585,9 +14078,8 @@ class HoldCourseTodayView extends ItemView {
         text: label === 'Today' ? 'Due today' : 'Due tomorrow',
       });
     }
-    const open = (item) => this.plugin.openItem(item);
-    for (const item of untimed) renderTodayItem(section, item, open);
-    for (const item of timed)   renderTodayItem(section, item, open);
+    for (const item of dueItems) renderTodayItem(section, item, open);
+    for (const item of timed)    renderTodayItem(section, item, open);
   }
 }
 
@@ -12649,7 +14141,7 @@ const DRAGGABLE_MODALS = [
   AddLectureModal, EditLectureModal, BulkAddLecturesModal,
   AddAssignmentModal, BulkAddAssignmentsModal, EditAssignmentModal,
   ReadingPaceSetupModal, ReadingPaceLogModal, WritingGoalModal,
-  AddExamModal, EditExamModal,
+  AddExamModal, EditExamModal, GroupModal, GroupMeetingModal,
   QuickAddResourceModal, AddResourceModal, EditResourceModal, BulkAddResourcesModal,
 ];
 for (const Cls of DRAGGABLE_MODALS) {
@@ -12673,6 +14165,8 @@ AddExamModal.prototype._renderFooter        = _renderFooter;
 EditExamModal.prototype._renderFooter       = _renderFooter;
 AddResourceModal.prototype._renderFooter    = _renderFooter;
 EditResourceModal.prototype._renderFooter   = _renderFooter;
+GroupModal.prototype._renderFooter          = _renderFooter;
+GroupMeetingModal.prototype._renderFooter   = _renderFooter;
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 
