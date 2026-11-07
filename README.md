@@ -75,13 +75,25 @@ Hold Course runs on desktop and mobile.
 
 <img src="screenshots/1.14.0-library-bulk-add.jpg" width="700" alt="Bulk-adding resources">
 
+**Groups**
+
+<img src="screenshots/1.15.0-overview-groups-tab.jpg" width="700" alt="Groups">
+
+**Adding a group**
+
+<img src="screenshots/1.15.0-add-group.jpg" width="700" alt="Adding a group">
+
+**Group page**
+
+<img src="screenshots/1.15.0-group-page.jpg" width="700" alt="Group page">
+
 **Calendar (month)**
 
-<img src="screenshots/1.13.0-calendar-monthly.jpg" width="700" alt="Calendar (month)">
+<img src="screenshots/1.15.0-calendar-meetings.jpg" width="700" alt="Calendar (month)">
 
 **Calendar (week)**
 
-<img src="screenshots/1.13.0-calendar-weekly.jpg" width="700" alt="Calendar (week)">
+<img src="screenshots/1.15.0-calendar-weekly-meetings.jpg" width="700" alt="Calendar (week)">
 
 **Assignments view**
 
@@ -98,6 +110,10 @@ Hold Course runs on desktop and mobile.
 **Exported syllabus**
 
 <img src="screenshots/1.13.0-syllabus-exported.jpg" width="700" alt="Exported syllabus">
+
+**Settings: Notes**
+
+<img src="screenshots/1.15.0-settings-notes.jpg" width="700" alt="Settings: Notes">
 
 **Settings: Export**
 
