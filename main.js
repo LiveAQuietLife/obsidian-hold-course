@@ -1,4 +1,4 @@
-/* --- Hold Course --- v1.15.0 */
+/* --- Hold Course --- v1.16.0 */
 'use strict';
 
 const {
@@ -481,6 +481,34 @@ function forEachAssignment(semesters, fn) {
   }
 }
 
+// ─── The saved-meeting walker (Principle 3) ──────────────────────────────────
+// #75: a group keeps what's saved on a meeting (note, topic, extra, skipped)
+// in group.meetings, keyed by date. One way to walk them: fn(meeting, dateISO),
+// oldest first, empty entries skipped. Saved dates only: a schedule date with
+// nothing saved isn't stored, so what shows comes from getGroupMeetings().
+// Rename following, the note count, the CSV, and backup restore and relink
+// (1.16.0) all walk through here. (1.16.0)
+function forEachGroupMeeting(group, fn) {
+  const map = (group && group.meetings) || {};
+  for (const date of Object.keys(map).sort()) {
+    if (map[date]) fn(map[date], date);
+  }
+}
+
+// The same walk over every group: fn(meeting, dateISO, group).
+function forEachSavedMeeting(groups, fn) {
+  for (const group of (groups || [])) {
+    forEachGroupMeeting(group, (m, date) => fn(m, date, group));
+  }
+}
+
+// A group's first and last saved dates, or null with nothing saved.
+function groupSavedSpan(group) {
+  let first = '', last = '';
+  forEachGroupMeeting(group, (m, date) => { if (!first) first = date; last = date; });
+  return first ? { first, last } : null;
+}
+
 // ─── F2 Export layer (#44) ───────────────────────────────────────────────────
 // One walk over everything in a class that can carry a date, kept apart from
 // any output format (syllabus first; ICS, CSV, course packs later). Each entry:
@@ -527,7 +555,8 @@ function calendarEvents(sem, opts = {}) {
         const wd = WEEKDAY_NAMES[new Date(e.date + 'T12:00:00').getDay()];
         if (!stamped.has(e.date) && classMeetsOnDate(cls, e.date, wd)) {
           stamped.add(e.date);
-          times = itemTimes({ kind: 'lecture', meetingStartTime: cls.meetingStartTime, meetingEndTime: cls.meetingEndTime });
+          const t = classTimesOn(cls, wd);
+          times = itemTimes({ kind: 'lecture', meetingStartTime: t.start, meetingEndTime: t.end });
         }
         // A title that's only "Lecture 3" isn't repeated ("Lecture 3: Lecture 3").
         const lt = /^lecture\s*\d+$/i.test(String(it.title || '').trim()) ? '' : it.title;
@@ -652,6 +681,110 @@ function icsCalendar(events, name, stamp) {
 // accents; a leading = + @ gets a ' so spreadsheets don't run it as a formula.
 const CSV_COLUMNS = ['Semester', 'Class code', 'Class', 'Kind', 'Lecture', 'Title', 'Type', 'Date', 'Start time', 'End time', 'Status', 'Grade'];
 
+// ─── 1.16.0 backup restore (F1, first part: parse → preview → commit) ─────────
+// exportBackup wraps the data as { holdCourseBackup: 1, pluginVersion,
+// exported, data }. A file with a higher format number, a newer
+// pluginVersion, or a newer dataVersion came from a newer Hold Course and is
+// refused: this version could drop what it doesn't know. Restore replaces
+// everything, settings included; merging waits for duplicate detection
+// (1.17.0). Design: ROADMAP 2026-11-10 (design).
+const BACKUP_FORMAT = 1;
+
+// -1, 0, or 1 for two "1.16.0"-style versions; a missing part counts as 0.
+function compareVersions(a, b) {
+  const pa = String(a || '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+// A backup file's text → { backup: { pluginVersion, exported, data } }, or
+// { error } with a message for the user.
+function parseBackup(text, installedVersion) {
+  let obj;
+  try { obj = JSON.parse(text); } catch (e) { return { error: 'This file isn’t a Hold Course backup: it isn’t valid JSON.' }; }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj) || !('holdCourseBackup' in obj)) {
+    return { error: 'This file isn’t a Hold Course backup. Make one with Export backup.' };
+  }
+  const data = obj.data;
+  const ver = String(obj.pluginVersion || '');
+  const newer = (typeof obj.holdCourseBackup === 'number' && obj.holdCourseBackup > BACKUP_FORMAT)
+    || (!!ver && !!installedVersion && compareVersions(ver, installedVersion) > 0)
+    || (!!data && typeof data.dataVersion === 'number' && data.dataVersion > CURRENT_DATA_VERSION);
+  if (newer) {
+    const from = ver ? `Hold Course ${ver}` : 'a newer Hold Course';
+    const have = installedVersion ? ` This vault has ${installedVersion}.` : '';
+    return { error: `This backup was made with ${from}, which is newer than the one installed.${have} Update Hold Course first, then restore.` };
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !Array.isArray(data.semesters)) {
+    return { error: 'This backup has no Hold Course data in it.' };
+  }
+  return { backup: { pluginVersion: ver, exported: String(obj.exported || ''), data } };
+}
+
+// What the restore preview counts, for the current data or a backup's.
+// Removed (hidden) semesters count too: a restore brings them back as well.
+function backupCounts(data) {
+  const sems = (data && data.semesters) || [];
+  const c = { semesters: sems.length, classes: 0, lectures: 0, assignments: 0, exams: 0, resources: 0, groups: ((data && data.groups) || []).length, meetings: 0 };
+  for (const sem of sems) {
+    c.resources += (sem.resources || []).length;
+    for (const cls of (sem.classes || [])) {
+      c.classes++;
+      c.lectures += (cls.lectures || []).length;
+      c.exams += (cls.exams || []).length;
+    }
+  }
+  forEachAssignment(sems, () => { c.assignments++; });
+  forEachSavedMeeting(data && data.groups, () => { c.meetings++; });
+  return c;
+}
+
+const BACKUP_COUNT_ROWS = [
+  ['semesters', 'Semesters'], ['classes', 'Classes'], ['lectures', 'Lectures'],
+  ['assignments', 'Assignments and readings'], ['exams', 'Exams'], ['resources', 'Library resources'],
+  ['groups', 'Groups'], ['meetings', 'Meetings with a note, topic, or change'],
+];
+
+// Every note path the data links to, once each: syllabus, lecture,
+// assignment, resource, and meeting notes (the same fields rename following
+// keeps up to date).
+function backupNotePaths(data) {
+  const out = new Set();
+  const add = p => { const v = String(p || '').trim(); if (v) out.add(v); };
+  for (const sem of ((data && data.semesters) || [])) {
+    for (const cls of (sem.classes || [])) {
+      add(cls.syllabusNote);
+      for (const lec of (cls.lectures || [])) add(lec.vaultLink);
+    }
+    for (const r of (sem.resources || [])) add(r.vaultLink);
+  }
+  forEachAssignment(data && data.semesters, a => add(a.linkedNote));
+  forEachSavedMeeting(data && data.groups, m => add(m.note));
+  return [...out];
+}
+
+// The preview's line about where the backup came from.
+function backupSourceText(path, backup) {
+  const d = backup.exported ? new Date(backup.exported) : null;
+  const when = d && !isNaN(d) ? d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '';
+  const ver = backup.pluginVersion;
+  if (ver && when) return `${path}: made with Hold Course ${ver} on ${when}.`;
+  if (ver) return `${path}: made with Hold Course ${ver}.`;
+  if (when) return `${path}: made on ${when}.`;
+  return path;
+}
+
+function backupMissingNotesText(n) {
+  if (!n) return '';
+  return n === 1
+    ? '1 note the backup links to isn’t in this vault. Its link will show as missing.'
+    : `${n} notes the backup links to aren’t in this vault. Their links will show as missing.`;
+}
+
 function csvCell(v) {
   let s = v === null || v === undefined ? '' : String(v);
   if (/^[=+@\t\r]/.test(s)) s = "'" + s;
@@ -664,10 +797,10 @@ function csvCell(v) {
 function meetingCsvRows(semesters, groups) {
   const rows = [];
   for (const group of groups || []) {
-    const dates = Object.keys(group.meetings || {}).sort();
-    if (!dates.length) continue;
+    const span = groupSavedSpan(group);
+    if (!span) continue;
     const found = findClassInSemesters(semesters, group.classId);
-    for (const m of getGroupMeetings(group, dates[0], dates[dates.length - 1], { includeAfterEnd: true })) {
+    for (const m of getGroupMeetings(group, span.first, span.last, { includeAfterEnd: true })) {
       if (!hasMeetingContent(m)) continue;
       rows.push([
         found ? found.sem.name || '' : '', found ? found.cls.code || '' : '', found ? found.cls.name || '' : '',
@@ -704,6 +837,239 @@ function itemsCsv(semesters, groups) {
   }
   rows.push(...meetingCsvRows(semesters, groups));
   return '\uFEFF' + rows.map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+
+// ─── Task sync (#73, 1.16.0) ─────────────────────────────────────────────────
+// One note Hold Course owns, with a checkbox per assignment, reading, and
+// exam in the current semester that isn't done (plus items ticked today).
+// Ticking or unticking there changes the item's status; nothing else is read
+// back. Each line ends with ^hc-<id>, the item's permanent id, so a line is
+// tied to its item whatever happens to the text.
+// The first line is a hidden comment with a hash of the rest of the note, as
+// Hold Course wrote it. A note whose hash still matches is untouched (written
+// by Hold Course here or on another device), so nothing is read back from
+// it: the device that wrote it has saved the same statuses, and they arrive
+// in data.json. Only a note someone edited (hash no longer matches) is read
+// back. That keeps two devices from both saving the same tick (#2, #46).
+// Settings keys, all absent by default: taskSync (true when on),
+// taskSyncName, taskSyncFolder, taskSyncGroupBy ('class'), taskSyncFormat
+// ('dataview' | 'plain').
+const TASK_SYNC_NAME_DEFAULT = 'Hold Course Tasks';
+// The stamp comes after the note's properties: Obsidian reads properties only
+// at the very top. A note from before the properties block (no frontmatter)
+// still counts as Hold Course's.
+const TASK_SYNC_STAMP = /^(?:---\r?\n[\s\S]*?\r?\n---\r?\n)?%% hold-course-tasks ([0-9a-f]{8}) %%\r?\n/;
+// cssclasses puts hc-tasks on the note's view, so styles.css hides the
+// ^hc- block IDs in this note only (Live Preview shows them; Reading view
+// already hides them). The IDs stay in the file: sync still reads them.
+const TASK_SYNC_FRONTMATTER = '---\ncssclasses:\n  - hc-tasks\n---\n';
+const TASK_FORMATS = { tasks: 'Tasks', dataview: 'Dataview', plain: 'Plain' };
+const TASK_GROUP_BY = { due: 'Due date', class: 'Class' };
+const TASKS_PLUGIN_ID = 'obsidian-tasks-plugin';
+// Block IDs allow letters, numbers, and dashes only.
+const TASK_ID_OK = /^[A-Za-z0-9-]+$/;
+
+// FNV-1a, 32 bits, as 8 hex digits. Not for security: it only tells
+// "as Hold Course wrote it" from "edited since".
+function taskSyncHash(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+function taskSyncFolder(settings) {
+  return String((settings && settings.taskSyncFolder) || '').trim()
+    .replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+// The note's name without .md; blank or unusable means the default.
+function taskSyncName(settings) {
+  const raw = String((settings && settings.taskSyncName) || '').trim().replace(/\.md$/i, '');
+  return (raw && safeFileName(raw)) || TASK_SYNC_NAME_DEFAULT;
+}
+
+function taskSyncPath(settings) {
+  const folder = taskSyncFolder(settings);
+  const name = taskSyncName(settings) + '.md';
+  return folder ? folder + '/' + name : name;
+}
+
+// Sets taskSyncName and taskSyncFolder from a vault path, removing each key
+// when it's back at its default.
+function setTaskSyncPath(settings, path) {
+  const p = String(path || '').replace(/\.md$/i, '');
+  const slash = p.lastIndexOf('/');
+  const folder = slash >= 0 ? p.slice(0, slash) : '';
+  const name = slash >= 0 ? p.slice(slash + 1) : p;
+  if (folder) settings.taskSyncFolder = folder; else delete settings.taskSyncFolder;
+  if (name && name !== TASK_SYNC_NAME_DEFAULT) settings.taskSyncName = name; else delete settings.taskSyncName;
+}
+
+// What the note holds, from one semester: assignments and readings (the
+// walker) and exams, in classes that are still going (#55). Items whose id
+// can't be a block ID are left out.
+function taskSyncEntries(sem) {
+  const out = [];
+  for (const cls of ((sem && sem.classes) || [])) {
+    if (isClassInactive(cls)) continue;
+    forEachClassAssignment(cls, (a) => {
+      if (a && TASK_ID_OK.test(String(a.id || ''))) out.push({ kind: 'assignment', item: a, cls });
+    });
+    for (const ex of (cls.exams || [])) {
+      if (ex && TASK_ID_OK.test(String(ex.id || ''))) out.push({ kind: 'exam', item: ex, cls });
+    }
+  }
+  return out;
+}
+
+// { ours, intact }: ours when the note starts with Hold Course's stamp (an
+// empty note counts too: nothing to lose); intact when the rest still
+// matches the stamp's hash.
+function taskFileState(text) {
+  const t = String(text || '');
+  if (!t.trim()) return { ours: true, intact: true };
+  const m = t.match(TASK_SYNC_STAMP);
+  if (!m) return { ours: false, intact: false };
+  const rest = t.slice(m[0].length).replace(/\r\n/g, '\n');
+  return { ours: true, intact: taskSyncHash(rest) === m[1] };
+}
+
+// Every task line with a ^hc- block ID: Map id → { mark, doneDate }. mark is
+// the character in the box; doneDate is a done date in any of the three
+// formats, or ''.
+function parseTaskLines(text) {
+  const out = new Map();
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = line.match(/^\s*[-*+] \[(.)\]/);
+    if (!m) continue;
+    const id = line.match(/\^hc-([A-Za-z0-9-]+)\s*$/);
+    if (!id) continue;
+    const done = line.match(/✅ (\d{4}-\d{2}-\d{2})/)
+      || line.match(/\[completion::\s*(\d{4}-\d{2}-\d{2})\s*\]/)
+      || line.match(/· done (\d{4}-\d{2}-\d{2})/);
+    out.set(id[1], { mark: m[1], doneDate: done ? done[1] : '' });
+  }
+  return out;
+}
+
+// The status a box asks for, or null for no change. [x] → done; [/] → in
+// progress (assignments only: exams are done or not); [ ] on a done item →
+// not started, and on an in-progress one leaves it alone, since [ ] is how
+// in progress is written without the Tasks plugin. Anything else: no change.
+function taskMarkStatus(mark, status, kind) {
+  if (mark === 'x' || mark === 'X') return isDoneLike(status) ? null : 'done';
+  if (mark === '/') return (kind === 'assignment' && status !== 'in-progress') ? 'in-progress' : null;
+  if (mark === ' ') return isDoneLike(status) ? 'not-started' : null;
+  return null;
+}
+
+// The changes an edited note asks for: [{ entry, status }].
+function taskReadBack(sem, parsed) {
+  const out = [];
+  for (const entry of taskSyncEntries(sem)) {
+    const line = parsed.get(entry.item.id);
+    if (!line) continue;
+    const status = taskMarkStatus(line.mark, entry.item.status, entry.kind);
+    if (status) out.push({ entry, status });
+  }
+  return out;
+}
+
+// A done item stays in the note only on the day it was ticked. The note is
+// where that day is kept (not on the item, Principle 1): a line already
+// ticked carries its done date; one ticked just now (in Hold Course, or in
+// the note without a date) gets today's. Returns the date, or '' to leave
+// the item out. Done before it was ever in the note: left out.
+function taskDoneDate(prior, todayISO) {
+  if (!prior) return '';
+  const ticked = prior.mark === 'x' || prior.mark === 'X';
+  if (!ticked || !prior.doneDate) return todayISO;
+  return prior.doneDate === todayISO ? todayISO : '';
+}
+
+function taskLineTitle(entry) {
+  const title = String(entry.item.title || '').replace(/\s+/g, ' ').trim() || 'Untitled';
+  return `${title} (${classLabel(entry.cls)})`;
+}
+
+// One line. The due and done dates in the chosen format; the block ID last.
+function taskLine(entry, mark, doneDate, format) {
+  const due = entry.item.dueDate || '';
+  let s = `- [${mark}] ${taskLineTitle(entry)}`;
+  if (format === 'dataview') {
+    if (due) s += ` [due:: ${due}]`;
+    if (doneDate) s += ` [completion:: ${doneDate}]`;
+  } else if (format === 'plain') {
+    if (due) s += ` · due ${due}`;
+    if (doneDate) s += ` · done ${doneDate}`;
+  } else {
+    if (due) s += ` 📅 ${due}`;
+    if (doneDate) s += ` ✅ ${doneDate}`;
+  }
+  return s + ` ^hc-${entry.item.id}`;
+}
+
+function compareTaskRows(a, b) {
+  const da = a.entry.item.dueDate || '', db = b.entry.item.dueDate || '';
+  if (da !== db) return !da ? 1 : !db ? -1 : da.localeCompare(db);
+  const ca = classLabel(a.entry.cls), cb = classLabel(b.entry.cls);
+  if (ca !== cb) return ca.localeCompare(cb);
+  return String(a.entry.item.title || '').localeCompare(String(b.entry.item.title || ''));
+}
+
+// The whole note. prior: parseTaskLines of the note as it is (for done
+// dates). opts: { todayISO, format, groupBy, inProgress } where inProgress
+// says [/] may be written (the Tasks plugin is on).
+function taskSyncMarkdown(sem, prior, opts) {
+  const today = opts.todayISO;
+  const weekEnd = addDaysISO(today, 7);
+  const rows = [];
+  for (const entry of taskSyncEntries(sem)) {
+    const status = entry.item.status;
+    if (isDoneLike(status)) {
+      const doneDate = taskDoneDate(prior.get(entry.item.id), today);
+      if (doneDate) rows.push({ entry, mark: 'x', doneDate, done: true });
+    } else {
+      const mark = (status === 'in-progress' && opts.inProgress && entry.kind === 'assignment') ? '/' : ' ';
+      rows.push({ entry, mark, doneDate: '', done: false });
+    }
+  }
+  rows.sort(compareTaskRows);
+
+  const sections = [];
+  if (opts.groupBy === 'class') {
+    for (const cls of ((sem && sem.classes) || [])) {
+      const list = rows.filter(r => r.entry.cls === cls);
+      if (list.length) sections.push([classFullName(cls), list]);
+    }
+  } else {
+    const bucket = (r) => {
+      if (r.done) return 'Done today';
+      const d = r.entry.item.dueDate;
+      if (!d) return 'No due date';
+      if (d < today) return 'Overdue';
+      if (d === today) return 'Today';
+      if (d <= weekEnd) return 'Next 7 days';
+      return 'Later';
+    };
+    for (const name of ['Overdue', 'Today', 'Next 7 days', 'Later', 'No due date', 'Done today']) {
+      const list = rows.filter(r => bucket(r) === name);
+      if (list.length) sections.push([name, list]);
+    }
+  }
+
+  const lines = [];
+  const term = sem ? (sem.name || 'this semester') : 'no semester yet';
+  lines.push(`*Hold Course keeps this note (${term}). Tick a task here or in Hold Course and the other follows. Other changes here are replaced.*`);
+  for (const [heading, list] of sections) {
+    lines.push('', `## ${heading}`, '');
+    for (const r of list) lines.push(taskLine(r.entry, r.mark, r.doneDate, opts.format));
+  }
+  const body = lines.join('\n') + '\n';
+  return TASK_SYNC_FRONTMATTER + `%% hold-course-tasks ${taskSyncHash(body)} %%\n` + body;
 }
 
 // Monday of the week holding an ISO date.
@@ -800,9 +1166,7 @@ function syllabusMarkdown(cls, sem, opts) {
   if (isClassOnline(cls)) {
     br(`**Format:** Online${cls.location ? ' · ' + cls.location : ''}`);
   } else if ((cls.meetingDays || []).length) {
-    const bits = [cls.meetingDays.join(', ')];
-    if (cls.meetingStartTime && cls.meetingEndTime) bits.push(formatTimeRange(cls.meetingStartTime, cls.meetingEndTime));
-    else if (cls.meetingStartTime) bits.push(formatTimeShort(cls.meetingStartTime));
+    const bits = [classScheduleText(cls, ', ', { startOnly: true })];
     if (cls.location) bits.push(cls.location);
     br(`**Meets:** ${bits.join(' · ')}`);
   } else if (cls.location) {
@@ -1335,6 +1699,95 @@ const ATTENDANCE_STATUSES = ['present', 'absent', 'excused', 'cancelled'];
 const ATTENDANCE_LABELS = { present: 'Present', absent: 'Absent', excused: 'Excused', cancelled: 'Cancelled' };
 const ATTENDANCE_NEAR_POINTS = 5;
 
+// ─── Per-day class times (1.16.0) ─────────────────────────────────────────
+// A class's usual time is meetingStartTime/meetingEndTime. Days that differ
+// are in meetingDayTimes, e.g. { Fri: { start: '13:00', end: '14:15' } },
+// present only when some day differs (Principle 1). Every reader of a class's
+// time goes through classTimesOn (Principle 4).
+
+// A class's time on one weekday ('Mon'...): that day's own time if it has
+// one, otherwise the usual time. → { start, end }, '' when unset.
+function classTimesOn(cls, weekday) {
+  const own = cls && cls.meetingDayTimes && cls.meetingDayTimes[weekday];
+  if (own && own.start && own.end) return { start: own.start, end: own.end };
+  return { start: (cls && cls.meetingStartTime) || '', end: (cls && cls.meetingEndTime) || '' };
+}
+
+// The class's meeting days grouped by time, in the class's day order.
+//   → [{ days: ['Mon', 'Wed'], start, end }]; one entry when all days match.
+function classTimeGroups(cls) {
+  const groups = [];
+  for (const day of (cls && cls.meetingDays) || []) {
+    const t = classTimesOn(cls, day);
+    const g = groups.find(x => x.start === t.start && x.end === t.end);
+    if (g) g.days.push(day);
+    else groups.push({ days: [day], start: t.start, end: t.end });
+  }
+  return groups;
+}
+
+// A time range for display: both times as a range, a start alone, or ''.
+// opts.startOnly: show a start with no end (the syllabus export does).
+function classTimeText(start, end, opts = {}) {
+  if (start && end) return formatTimeRange(start, end);
+  return start && opts.startOnly ? formatTimeShort(start) : '';
+}
+
+// When a class meets, as text: "Mon · Wed · 9:00–10:15" with one time (as
+// before 1.16.0), "Mon · Wed 9:00–10:15 · Fri 1:00–2:15" with mixed times.
+// daySep joins days that share a time; the syllabus export uses ', '.
+function classScheduleText(cls, daySep = ' · ', opts = {}) {
+  const groups = classTimeGroups(cls);
+  if (groups.length <= 1) {
+    const days = (cls && cls.meetingDays) || [];
+    const time = groups.length ? classTimeText(groups[0].start, groups[0].end, opts) : '';
+    return [days.join(daySep), time].filter(Boolean).join(' · ');
+  }
+  return groups.map(g => [g.days.join(daySep), classTimeText(g.start, g.end, opts)].filter(Boolean).join(' ')).join(' · ');
+}
+
+// The class dialog's per-day rows. formData.dayTimes holds only rows the
+// user has changed; others show the usual time, so changing the usual time
+// moves every day that wasn't changed.
+function formDayTimes(formData, day) {
+  const own = formData.dayTimes && formData.dayTimes[day];
+  return own ? { start: own.start || '', end: own.end || '' } : { start: formData.meetingStartTime || '', end: formData.meetingEndTime || '' };
+}
+
+function setFormDayTime(formData, day, key, value) {
+  if (!formData.dayTimes) formData.dayTimes = {};
+  formData.dayTimes[day] = { ...formDayTimes(formData, day), [key]: value };
+}
+
+// The switch shows only with two or more meeting days: with one, there's no
+// other day to differ from, so its time is just the usual time.
+function classDayTimesAvailable(formData) {
+  return !!formData && !formData.online && DAYS.filter(d => (formData.meetingDays || []).includes(d)).length >= 2;
+}
+
+// What the dialog saves as meetingDayTimes: the meeting days whose time
+// differs from the usual one, or null (switch off or hidden, or none differ).
+function classDayTimesForSave(formData) {
+  if (!classDayTimesAvailable(formData) || !formData.dayTimesOn) return null;
+  const out = {};
+  for (const day of DAYS) {
+    if (!(formData.meetingDays || []).includes(day)) continue;
+    const t = formDayTimes(formData, day);
+    if (t.start !== (formData.meetingStartTime || '') || t.end !== (formData.meetingEndTime || '')) out[day] = { start: t.start, end: t.end };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// The dialog's starting values from a saved class (Edit class).
+function classDayTimesFormData(cls) {
+  const saved = (cls && cls.meetingDayTimes) || {};
+  const dayTimes = {};
+  for (const [day, t] of Object.entries(saved)) {
+    if (t && t.start && t.end) dayTimes[day] = { start: t.start, end: t.end };
+  }
+  return { dayTimesOn: Object.keys(dayTimes).length > 0, dayTimes };
+}
+
 // A full schedule: meeting days, both times, and both dates.
 function hasMeetingSchedule(cls) {
   return !!(cls && cls.meetingDays && cls.meetingDays.length &&
@@ -1564,17 +2017,21 @@ function addTypeDropdown(setting, plugin, { value, exclude = [], onChange, kind 
 // #53: the automatic color for a class arriving in `classes` — the lowest
 // palette index no other class there uses. Count-based assignment
 // (classes.length % N) repeated a color as soon as a class was deleted or
-// moved out. Falls back to the count only when all six are taken, where a
-// repeat is unavoidable. `skip` excludes a class already in the list.
+// moved out. When all six are taken a repeat is unavoidable, so it takes the
+// least-used color, the lowest index on a tie (1.16.0; it used the count,
+// which could land on a color used twice while another was used once).
+// `skip` excludes a class already in the list. Groups pass their list too.
 function firstFreeColorIndex(classes, skip) {
-  const used = new Set();
+  const n = COLOR_PALETTE.length;
+  const counts = new Array(n).fill(0);
   for (const c of classes || []) {
-    if (c !== skip && typeof c.colorIndex === 'number') used.add(c.colorIndex % COLOR_PALETTE.length);
+    if (c !== skip && typeof c.colorIndex === 'number') counts[((c.colorIndex % n) + n) % n]++;
   }
-  for (let i = 0; i < COLOR_PALETTE.length; i++) {
-    if (!used.has(i)) return i;
+  let best = 0;
+  for (let i = 1; i < n; i++) {
+    if (counts[i] < counts[best]) best = i;
   }
-  return (classes || []).length % COLOR_PALETTE.length;
+  return best;
 }
 
 function isDarkTheme() {
@@ -2489,7 +2946,14 @@ function renderColorPicker(contentEl, classes, self, initialIndex, onPick) {
 // emits '' and disables the rest again.
 function renderTimePicker(contentEl, labelText, initialValue, onChange) {
   const setting = new Setting(contentEl).setName(labelText);
-  const wrap = setting.controlEl.createDiv('hc-time-picker');
+  buildTimePicker(setting.controlEl, labelText, initialValue, onChange);
+  return setting;
+}
+
+// The picker itself, in parentEl (1.16.0: split out so a per-day row can hold
+// two). labelText names the hour menu for screen readers.
+function buildTimePicker(parentEl, labelText, initialValue, onChange) {
+  const wrap = parentEl.createDiv('hc-time-picker');
 
   const parsed = parse24hTo12h(initialValue);
   let isSet = !!parsed;
@@ -2679,6 +3143,211 @@ function describeRepeat(r) {
   return list;
 }
 
+// ─── Recurring assignments (1.16.0) ─────────────────────────────────────────
+// A series is a way to create ordinary assignments. Each occurrence is a
+// normal assignment plus seriesId and seriesN; the rule is kept once in
+// cls.series so the series can be edited or ended. Nothing else reads the
+// rule: every other reader sees plain assignments. Design: `Recurring
+// assignments design.md`.
+//   series = { id, title ('… #{n}'), type, anchor: 'meetings' | 'repeat',
+//     repeat (week / 2weeks only), startDate, endDate | count, dueTime,
+//     atClassStart, linkedBook, skipped: ['YYYY-MM-DD'] }
+const SERIES_MAX = 150;
+
+function findSeries(cls, seriesId) {
+  return ((cls && cls.series) || []).find(s => s.id === seriesId) || null;
+}
+
+// "Every class meeting" needs the full schedule and a class that meets.
+function seriesMeetingsAvailable(cls) {
+  return hasMeetingSchedule(cls) && !isClassOnline(cls);
+}
+
+// The last day a series can reach: its end date, else the class's, else a
+// year from its start (a count series in a class with no end date).
+function seriesLastDate(series, cls) {
+  if (series.endDate) return series.endDate;
+  if (cls && cls.endDate) return cls.endDate;
+  return series.startDate ? addDaysISO(series.startDate, 365) : '';
+}
+
+// Every date the rule lands on, skipped ones included, oldest first.
+function seriesRuleDates(series, cls) {
+  if (!series || !series.startDate) return [];
+  const last = seriesLastDate(series, cls);
+  if (!last || last < series.startDate) return [];
+  if (series.anchor === 'meetings') {
+    if (!seriesMeetingsAvailable(cls)) return [];
+    return getMeetingDates(cls, last).filter(d => d >= series.startDate);
+  }
+  if (!series.repeat || series.repeat.every === 'month') return [];
+  return repeatDates(series.repeat, series.startDate, series.startDate, last);
+}
+
+function seriesTitle(pattern, n) {
+  return String(pattern || '').replace(/\{n\}/g, String(n)).trim();
+}
+
+// The first lecture (in display order) dated dateISO, or null.
+function lectureOnDate(cls, dateISO) {
+  return getLecturesSorted(cls).find(l => l.date === dateISO) || null;
+}
+
+// The assignment fields for one occurrence. At class start reads that day's
+// own time, so per-day class times come through.
+function seriesOccurrence(series, cls, dateISO, n) {
+  const out = {
+    title: seriesTitle(series.title, n),
+    type: series.type || 'Other',
+    dueDate: dateISO,
+    seriesId: series.id,
+    seriesN: n,
+  };
+  let time = series.dueTime || '';
+  if (series.atClassStart && series.anchor === 'meetings') {
+    time = classTimesOn(cls, WEEKDAY_NAMES[new Date(dateISO + 'T12:00:00').getDay()]).start || '';
+  }
+  if (time) out.dueTime = time;
+  if (series.type === 'Reading' && series.linkedBook) out.linkedBook = series.linkedBook;
+  return out;
+}
+
+// Untouched = nothing of yours on it yet, so Edit series and End series may
+// replace or remove it. One rule (Principle 4).
+function isOccurrenceUntouched(a) {
+  if (!a) return false;
+  if (a.status && a.status !== 'not-started') return false;
+  if (String(a.grade || '').trim() || String(a.notes || '').trim() || a.linkedNote) return false;
+  const rp = a.readingPace;
+  if (rp && ((rp.pagesRead || 0) > 0 || (rp.wordsRead || 0) > 0 || rp.wordMark)) return false;
+  return true;
+}
+
+// A series' occurrences in the class: [{ assignment, lecture }], by due date.
+function seriesOccurrences(cls, seriesId) {
+  const out = [];
+  forEachClassAssignment(cls, (a, lec) => { if (a.seriesId === seriesId) out.push({ assignment: a, lecture: lec }); });
+  return out.sort((x, y) => (x.assignment.dueDate || '').localeCompare(y.assignment.dueDate || '')
+    || (x.assignment.seriesN || 0) - (y.assignment.seriesN || 0));
+}
+
+// What a create or an edit would do. existing = seriesOccurrences() for an
+// edit, [] for a new series. Touched occurrences are kept as they are (and a
+// rule date matching one isn't added again); untouched ones are replaced.
+// Numbers re-flow past skipped dates and continue after the highest kept
+// number before each date. A count counts kept and new together.
+//   → { rows: [{ date, skipped, n, fields, lecture, examDay }], kept, remove, capped }
+function planSeries(series, cls, existing = []) {
+  const kept = existing.filter(o => !isOccurrenceUntouched(o.assignment));
+  const remove = existing.filter(o => isOccurrenceUntouched(o.assignment));
+  const keptDates = new Set(kept.map(o => o.assignment.dueDate).filter(Boolean));
+  const skipped = new Set(series.skipped || []);
+  const examDates = new Set(((cls && cls.exams) || []).map(e => e.dueDate).filter(Boolean));
+  const limit = series.count > 0 ? Math.min(series.count, SERIES_MAX) : SERIES_MAX;
+  const events = seriesRuleDates(series, cls)
+    .filter(d => !keptDates.has(d))
+    .map(d => ({ date: d, kind: skipped.has(d) ? 'skip' : 'new' }))
+    .concat(kept.map(o => ({ date: o.assignment.dueDate || '', kind: 'kept', n: o.assignment.seriesN || 0 })))
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.kind === 'kept' ? -1 : 1));
+  const rows = [];
+  let n = 0, total = 0, capped = false;
+  for (const ev of events) {
+    if (ev.kind === 'kept') { total++; n = Math.max(n, ev.n); continue; }
+    if (total >= limit) { if (ev.kind === 'new') { capped = !(series.count > 0); break; } continue; }
+    const lecture = lectureOnDate(cls, ev.date);
+    const row = { date: ev.date, skipped: ev.kind === 'skip', n: null, fields: null, lecture, examDay: examDates.has(ev.date) };
+    if (!row.skipped) {
+      n++; total++;
+      row.n = n;
+      row.fields = seriesOccurrence(series, cls, ev.date, n);
+    }
+    rows.push(row);
+  }
+  return { rows, kept, remove, capped };
+}
+
+// "Every class meeting" · "Weekly on Mondays" · "Every other Monday"
+function describeSeries(series) {
+  if (!series) return '';
+  if (series.anchor === 'meetings') return 'Every class meeting';
+  const r = describeRepeat(series.repeat);
+  if (!r) return '';
+  return series.repeat.every === 'week' ? `Weekly on ${r}` : r;
+}
+
+// The dialog's fields for a new series (series null) or an existing one.
+function seriesFormData(cls, series, todayISO, type) {
+  if (series) {
+    const meetings = series.anchor === 'meetings';
+    return {
+      title: series.title || '',
+      type: series.type || type || 'Other',
+      every: meetings ? 'meetings' : series.repeat.every,
+      days: meetings ? [] : [...(series.repeat.days || [])],
+      due: series.atClassStart ? 'class' : (series.dueTime ? 'time' : 'none'),
+      dueTime: series.dueTime || '',
+      startDate: series.startDate || '',
+      ends: series.count > 0 ? 'count' : (cls && cls.endDate && series.endDate === cls.endDate ? 'class' : 'date'),
+      endDate: series.endDate || '',
+      count: series.count > 0 ? String(series.count) : '',
+      linkedBook: series.linkedBook || '',
+      skipped: [...(series.skipped || [])],
+    };
+  }
+  const meetings = seriesMeetingsAvailable(cls);
+  return {
+    title: '',
+    type: type || 'Other',
+    every: meetings ? 'meetings' : 'week',
+    days: [],
+    due: meetings ? 'class' : 'none',
+    dueTime: '',
+    startDate: cls && cls.startDate && cls.startDate > todayISO ? cls.startDate : todayISO,
+    ends: cls && cls.endDate ? 'class' : 'date',
+    endDate: '',
+    count: '',
+    linkedBook: '',
+    skipped: [],
+  };
+}
+
+// A message for the first problem, or ''.
+function validateSeriesForm(f, cls) {
+  if (!String(f.title || '').trim()) return 'Title is required.';
+  if (f.every === 'meetings') {
+    if (!seriesMeetingsAvailable(cls)) return 'This class has no meeting schedule. Choose Weekly or Every 2 weeks.';
+  } else if (!f.days.length) return 'Choose at least one day.';
+  if (f.due === 'class' && f.every !== 'meetings') return 'At class start needs Every class meeting.';
+  if (f.due === 'time' && !f.dueTime) return 'Choose a due time.';
+  if (!f.startDate) return 'Choose a start date.';
+  if (f.ends === 'class' && !(cls && cls.endDate)) return 'This class has no end date. Choose a date or a number of times.';
+  if (f.ends === 'date') {
+    if (!f.endDate) return 'Choose an end date.';
+    if (f.endDate < f.startDate) return 'The end date is before the start date.';
+  }
+  if (f.ends === 'count') {
+    const n = Number(f.count);
+    if (!Number.isInteger(n) || n < 1) return 'Enter how many times.';
+    if (n > SERIES_MAX) return `At most ${SERIES_MAX} times.`;
+  }
+  return '';
+}
+
+// The series record from the dialog (id added by the caller).
+function seriesFromForm(f, cls) {
+  const s = { title: String(f.title).trim(), type: f.type || 'Other', startDate: f.startDate };
+  if (f.every === 'meetings') s.anchor = 'meetings';
+  else { s.anchor = 'repeat'; s.repeat = { every: f.every, days: DAYS.filter(d => f.days.includes(d)) }; }
+  if (f.due === 'class') s.atClassStart = true;
+  else if (f.due === 'time' && f.dueTime) s.dueTime = f.dueTime;
+  if (f.ends === 'count') s.count = Number(f.count);
+  else s.endDate = f.ends === 'class' ? cls.endDate : f.endDate;
+  if (s.type === 'Reading' && f.linkedBook) s.linkedBook = f.linkedBook;
+  const skipped = (f.skipped || []).filter(d => d >= s.startDate).sort();
+  if (skipped.length) s.skipped = skipped;
+  return s;
+}
+
 // Whether a group's run [startDate, endDate] overlaps [fromISO, toISO].
 // No endDate = ongoing.
 function groupRunsDuring(group, fromISO, toISO) {
@@ -2718,10 +3387,10 @@ function getGroupMeetings(group, fromISO, toISO, opts = {}) {
   const hi = group.endDate && group.endDate < toISO ? group.endDate : toISO;
   const scheduled = new Set(lo <= hi ? repeatDates(group.repeat, group.startDate, lo, hi) : []);
   const dates = new Set(scheduled);
-  for (const [d, m] of Object.entries(saved)) {
-    if (group.endDate && d > group.endDate && !opts.includeAfterEnd) continue;
-    if (d >= fromISO && d <= toISO && m && (m.extra || hasMeetingContent(m))) dates.add(d);
-  }
+  forEachGroupMeeting(group, (m, d) => {
+    if (group.endDate && d > group.endDate && !opts.includeAfterEnd) return;
+    if (d >= fromISO && d <= toISO && (m.extra || hasMeetingContent(m))) dates.add(d);
+  });
   const out = [];
   for (const date of [...dates].sort()) {
     const m = saved[date] || {};
@@ -2780,6 +3449,25 @@ function groupsForSemester(groups, sem, todayISO) {
     if (!g.startDate) return false;
     return !isGroupEnded(g, todayISO) || (!!span && groupRunsDuring(g, span.start, span.end));
   });
+}
+
+// The Calendar's month grid: 6 weeks from the Monday on or before the 1st.
+// month is 0-based, as calMonth is.
+const MONTH_GRID_DAYS = 42;
+function monthGridStartISO(year, month) {
+  const firstISO = makeISO(year, month + 1, 1);
+  const offset = (new Date(firstISO + 'T12:00:00').getDay() + 6) % 7;
+  return addDaysISO(firstISO, -offset);
+}
+
+// The Calendar legend's Meetings: the groups with a meeting drawn in
+// [fromISO, toISO], in saved order (1.16.0). The legend explains the pills on
+// screen, so it follows the grid, not groupsForSemester(): an ended group from
+// another term is listed in a month it met in, and a group with nothing in
+// view (not started yet, or ended) is left out.
+function calendarLegendGroups(groups, fromISO, toISO) {
+  if (!fromISO || !toISO) return [];
+  return (groups || []).filter(g => getGroupMeetings(g, fromISO, toISO).length > 0);
 }
 
 // What the Delete semester dialog says about groups: they aren't part of a
@@ -2947,9 +3635,9 @@ function parseGroupWhere(where) {
 // before today, newest first; it reaches back past startDate so an older saved
 // note stays listed after the start date moves.
 function groupMeetingLists(group, todayISO) {
-  const savedDates = Object.keys(group.meetings || {});
+  const span = groupSavedSpan(group);
   let latest = addDaysISO(todayISO, 400);
-  for (const d of savedDates) if (d > latest) latest = d;
+  if (span && span.last > latest) latest = span.last;
   let counted = 0;
   const upcoming = getGroupMeetings(group, todayISO, latest, { includeSkipped: true, includeAfterEnd: true }).filter(m => {
     const keep = m.skipped || m.extra || hasMeetingContent(m) || counted < GROUP_UPCOMING_SHOWN;
@@ -2957,7 +3645,7 @@ function groupMeetingLists(group, todayISO) {
     return keep;
   });
   let earliest = group.startDate || todayISO;
-  for (const d of savedDates) if (d < earliest) earliest = d;
+  if (span && span.first < earliest) earliest = span.first;
   const past = getGroupMeetings(group, earliest, addDaysISO(todayISO, -1), { includeSkipped: true, includeAfterEnd: true }).reverse();
   return { upcoming, past };
 }
@@ -3029,10 +3717,11 @@ function defaultMeetingNoteContent(tokens) {
 // missing means no meeting today — this is what keeps every existing vault
 // unchanged until all five §1.3 fields are filled in.
 function classMeetsOnDate(cls, dateISO, weekdayName) {
+  const t = classTimesOn(cls, weekdayName); // 1.16.0: that day's own time
   return !!(
     !isClassOnline(cls) &&
     cls.meetingDays?.includes(weekdayName) &&
-    cls.meetingStartTime && cls.meetingEndTime &&
+    t.start && t.end &&
     cls.startDate && cls.endDate &&
     dateISO >= cls.startDate && dateISO <= cls.endDate
   );
@@ -3080,8 +3769,9 @@ function getItemsForDate(sem, dateISO, filterClassId) {
     // and a makeup lecture on an off-schedule day stays untimed, same as
     // lectures always have.
     if (firstLectureItemToday && classMeetsOnDate(cls, dateISO, weekdayName)) {
-      firstLectureItemToday.meetingStartTime = cls.meetingStartTime;
-      firstLectureItemToday.meetingEndTime   = cls.meetingEndTime;
+      const t = classTimesOn(cls, weekdayName);
+      firstLectureItemToday.meetingStartTime = t.start;
+      firstLectureItemToday.meetingEndTime   = t.end;
     }
   }
   return items;
@@ -3162,7 +3852,8 @@ function coursesGroupOrder(groups, todayISO) {
 
 // "3 notes", "1 note", "No notes". A link to a missing file doesn't count.
 function groupNoteCountLabel(group, isMissing) {
-  const n = Object.values(group.meetings || {}).filter(m => m && m.note && !isMissing(m.note)).length;
+  let n = 0;
+  forEachGroupMeeting(group, m => { if (m.note && !isMissing(m.note)) n++; });
   return n === 0 ? 'No notes' : n === 1 ? '1 note' : `${n} notes`;
 }
 
@@ -3291,13 +3982,7 @@ function itemMetaText(item) {
 //   Assignments due before the date and not done, oldest first: "overdue as
 //   of that day", read live, so items finished since then drop off.
 function getAgendaForDate(plugin, dateISO) {
-  const all = [];
-  for (const sem of (plugin.data.semesters || [])) {
-    if (isSemesterRemoved(sem)) continue;
-    all.push(...getItemsForDate(sem, dateISO, null));
-  }
-  all.push(...getMeetingItemsForDate(plugin.data, dateISO, null));
-  const { untimed, timed } = orderDayItems(all);
+  const { untimed, timed } = orderDayItems(getAllItemsForDate(plugin, dateISO));
 
   const overdue = [];
   const cur = plugin.getCurrentSemester();
@@ -3312,11 +3997,357 @@ function getAgendaForDate(plugin, dateISO) {
   return { date: dateISO, overdue, items: [...untimed, ...timed] };
 }
 
+// Every semester's items for a date (removed semesters left out), plus every
+// group's meetings. The agenda and reminders (1.16.0) both read this.
+function getAllItemsForDate(plugin, dateISO) {
+  const all = [];
+  for (const sem of (plugin.data.semesters || [])) {
+    if (isSemesterRemoved(sem)) continue;
+    all.push(...getItemsForDate(sem, dateISO, null));
+  }
+  all.push(...getMeetingItemsForDate(plugin.data, dateISO, null));
+  return all;
+}
+
 // The pace or word goal line for an agenda item, or null.
 function agendaSubline(item) {
   if (item.kind !== 'assignment') return null;
   const line = getReadingPaceLine(item.assignment) || getWritingGoalLine(item.assignment);
   return line ? line.text : null;
+}
+
+// ─── Reminders (1.16.0) ──────────────────────────────────────────────────────
+// Obsidian notices only: a daily summary, and "coming up" alerts a set time
+// before a timed item. Everything is read from getAllItemsForDate and
+// itemTimes (Principles 3 and 4), so reminders add no fields to items. Off
+// by default. What has been shown is kept on this device (Obsidian's local
+// storage), not in data.json, so a reminder never sets off a sync.
+// Settings, each absent = default (Principle 1):
+//   reminders: true                  turned on
+//   reminderSummary: false           daily summary off
+//   reminderSummaryTime: 'HH:MM'     default 08:00
+//   reminderUpcoming: false          coming-up alerts off
+//   reminderLeadClass / Due / Exam   minutes before; defaults 15, 60, 1440
+//   reminderSkip: ['lectures', ...]  kinds left out, like calendarSkip
+//   reminderSound: true              a chime with coming-up alerts
+const REMINDER_STORE_KEY = 'hold-course-reminders';
+const REMINDER_SUMMARY_DEFAULT = '08:00';
+const REMINDER_LEADS = {
+  class: { key: 'reminderLeadClass', def: 15, options: [5, 10, 15, 30, 60] },
+  due:   { key: 'reminderLeadDue', def: 60, options: [15, 30, 60, 120, 180, 1440] },
+  exam:  { key: 'reminderLeadExam', def: 1440, options: [30, 60, 120, 1440, 2880] },
+};
+const REMINDER_KIND_KEYS = { lecture: 'lectures', assignment: 'assignments', exam: 'exams', meeting: 'meetings' };
+const REMINDER_NOTICE_MAX = 3; // more at once are joined into one notice
+const REMINDER_DAY_MAX = 4;    // items named per day in the summary
+
+function reminderSummaryOn(settings) { return settings.reminderSummary !== false; }
+function reminderUpcomingOn(settings) { return settings.reminderUpcoming !== false; }
+function reminderSummaryTime(settings) {
+  return /^\d{2}:\d{2}$/.test(settings.reminderSummaryTime || '') ? settings.reminderSummaryTime : REMINDER_SUMMARY_DEFAULT;
+}
+
+// Which lead time an item uses: due work, exams, or classes and meetings.
+function reminderLeadGroup(item) {
+  return item.kind === 'assignment' ? 'due' : item.kind === 'exam' ? 'exam' : 'class';
+}
+function reminderLead(settings, group) {
+  const g = REMINDER_LEADS[group];
+  const v = Number(settings[g.key]);
+  return v > 0 ? v : g.def;
+}
+
+// "5 min", "1 hour", "3 hours", "1 day", "2 days".
+function formatLeadMinutes(m) {
+  if (m < 60) return `${m} min`;
+  if (m < 1440) { const h = m / 60; return `${h} hour${h === 1 ? '' : 's'}`; }
+  const d = m / 1440;
+  return `${d} day${d === 1 ? '' : 's'}`;
+}
+
+// An item kind turned on, and the item not done.
+function reminderWants(settings, item) {
+  const skip = new Set(settings.reminderSkip || []);
+  return !skip.has(REMINDER_KIND_KEYS[item.kind]) && !isItemDone(item);
+}
+
+function dateOfISOTime(dateISO, hhmm) {
+  const [y, m, d] = dateISO.split('-').map(Number);
+  const [h, mi] = hhmm.split(':').map(Number);
+  return new Date(y, m - 1, d, h, mi);
+}
+function isoOfDate(d) { return makeISO(d.getFullYear(), d.getMonth() + 1, d.getDate()); }
+function hhmmOfDate(d) { return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }
+
+// One key per item and occurrence. The start time is part of it, so moving
+// an item to a new time reminds again; a new lead time doesn't.
+function reminderKey(item, dateISO, start) {
+  const id = item.kind === 'lecture' ? item.lec.id
+    : item.kind === 'assignment' ? item.assignment.id
+    : item.kind === 'exam' ? item.exam.id
+    : item.group.id;
+  return `${item.kind}:${id}:${dateISO}:${start}`;
+}
+
+// "in 15 min", "in 1 hour", "at 2:00 PM", "tomorrow at 9:00 AM", "Fri at 9:00 AM".
+function reminderWhen(at, now) {
+  const mins = Math.ceil((at - now) / 60000);
+  if (mins < 60) return `in ${mins} min`;
+  if (mins === 60) return 'in 1 hour';
+  const time = formatTimeShort(hhmmOfDate(at));
+  const day = isoOfDate(at), today = isoOfDate(now);
+  if (day === today) return `at ${time}`;
+  if (day === addDaysISO(today, 1)) return `tomorrow at ${time}`;
+  return `${at.toLocaleDateString('en-US', { weekday: 'short' })} at ${time}`;
+}
+
+// The alert's lines: what and when, then the lecture's title or the
+// meeting's place when there is one.
+function reminderLines(item, at, now) {
+  const when = reminderWhen(at, now);
+  const code = item.cls ? classLabel(item.cls) : '';
+  if (item.kind === 'lecture') {
+    return [`${code} starts ${when}`, item.lec.title || ''].filter(Boolean);
+  }
+  if (item.kind === 'meeting') {
+    return [`${item.group.name || 'Group'} meets ${when}`, parseGroupWhere(item.group.where).text].filter(Boolean);
+  }
+  const what = code ? `${item.title} (${code})` : item.title;
+  return [`${what} ${item.kind === 'assignment' ? 'is due' : 'starts'} ${when}`];
+}
+
+// The coming-up alerts due at `now` that `fired` hasn't seen: the item has a
+// time, its lead time has begun, and it hasn't started yet (one that has is
+// already on Today). Soonest first.
+//   → [{ key, date, item, at, lines }]
+function getDueReminders(plugin, now, fired) {
+  const settings = plugin.data.settings;
+  const maxLead = Math.max(...Object.keys(REMINDER_LEADS).map(g => reminderLead(settings, g)));
+  const today = isoOfDate(now);
+  const out = [];
+  for (let d = 0; d <= Math.ceil(maxLead / 1440); d++) {
+    const date = addDaysISO(today, d);
+    for (const item of getAllItemsForDate(plugin, date)) {
+      if (!reminderWants(settings, item)) continue;
+      const t = itemTimes(item);
+      if (!t || !t.start) continue;
+      const at = dateOfISOTime(date, t.start);
+      const from = new Date(at.getTime() - reminderLead(settings, reminderLeadGroup(item)) * 60000);
+      if (now < from || now >= at) continue;
+      const key = reminderKey(item, date, t.start);
+      if (fired && fired[key]) continue;
+      out.push({ key, date, item, at, lines: reminderLines(item, at, now) });
+    }
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+// A summary line's text for one item: class, title, and time.
+function reminderSummaryLabel(item) {
+  const time = formatItemTime(itemTimes(item));
+  const code = item.cls ? classLabel(item.cls) : '';
+  let what;
+  if (item.kind === 'lecture') what = code;
+  else if (item.kind === 'meeting') what = item.group.name || 'Group';
+  else what = code ? `${item.title} (${code})` : item.title;
+  if (item.kind === 'assignment' && !time) return `${what} due`;
+  return time ? `${what} ${time}` : what;
+}
+
+// The daily summary: today's and tomorrow's items not done (kinds turned off
+// left out), and the overdue count. null when there's nothing (Principle 5).
+// nowHHMM: a class, meeting, or exam that has already ended today is left
+// out, for a summary shown late in the day. Work due earlier today stays.
+//   → { lines: ['Today: …', 'Tomorrow: …', '2 overdue'] } or null
+function getReminderSummary(plugin, todayISO, nowHHMM) {
+  const settings = plugin.data.settings;
+  const lines = [];
+  const day = (label, items) => {
+    const list = items.filter(i => reminderWants(settings, i));
+    if (!list.length) return;
+    const names = list.slice(0, REMINDER_DAY_MAX).map(reminderSummaryLabel);
+    if (list.length > REMINDER_DAY_MAX) names.push(`${list.length - REMINDER_DAY_MAX} more`);
+    lines.push(`${label}: ${names.join(' · ')}`);
+  };
+  const ag = getAgendaForDate(plugin, todayISO);
+  day('Today', ag.items.filter(i => {
+    const t = itemTimes(i);
+    if (!nowHHMM || !t || t.due) return true;
+    return (t.end || t.start) > nowHHMM;
+  }));
+  const next = orderDayItems(getAllItemsForDate(plugin, addDaysISO(todayISO, 1)));
+  day('Tomorrow', [...next.untimed, ...next.timed]);
+  const skip = new Set(settings.reminderSkip || []);
+  if (ag.overdue.length && !skip.has('assignments')) lines.push(`${ag.overdue.length} overdue`);
+  const heavy = plugin.visibleHeavyWeeks ? plugin.visibleHeavyWeeks() : [];
+  if (heavy.length) lines.push(heavyWeekTitle(heavy[0], todayISO));
+  return lines.length ? { lines } : null;
+}
+
+// A short two-note chime, made in code (no sound file), at the device's
+// volume. Returns false where there's no Web Audio.
+function playReminderChime() {
+  const AC = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+  if (!AC) return false;
+  try {
+    const ctx = new AC();
+    const t0 = ctx.currentTime;
+    for (const [freq, delay] of [[880, 0], [1318.5, 0.18]]) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t0 + delay);
+      gain.gain.exponentialRampToValueAtTime(0.25, t0 + delay + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + 0.6);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0 + delay);
+      osc.stop(t0 + delay + 0.65);
+    }
+    window.setTimeout(() => { if (ctx.close) ctx.close(); }, 1500);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// ─── Heavy-week warning (1.16.0) ─────────────────────────────────────────────
+// A week's score: 1 point for each assignment due, an exam 2 (1–3 in
+// Settings), counting only what isn't done, so finishing early clears it.
+// Lectures and meetings don't count: they're the same every week. Weeks run
+// Monday to Sunday, like the Calendar. Read from the F2 walker
+// (collectClassEntries) over a semester's active classes (Principle 3).
+// A week is heavy when what's left in it reaches the threshold:
+//   Automatic (default): 1.5× the semester's usual week (the median of weeks
+//     with anything due, past and future, done or not), and at least 5;
+//   Fixed: heavyWeekThreshold points (default 6).
+// Settings, absent = default (Principle 1): heavyWeek: false (off),
+// heavyWeekMode: 'fixed', heavyWeekThreshold, heavyExamPoints (1 or 3).
+const HEAVY_WEEKS_AHEAD = 3;
+const HEAVY_RATIO = 1.5;
+const HEAVY_FLOOR = 5;
+const HEAVY_FIXED_DEFAULT = 6;
+const HEAVY_EXAM_DEFAULT = 2;
+const HEAVY_DISMISS_KEY = 'hold-course-heavy-dismissed';
+
+function heavyWeekOn(settings) { return settings.heavyWeek !== false; }
+function heavyExamPoints(settings) {
+  const v = Number(settings.heavyExamPoints);
+  return [1, 2, 3].includes(v) ? v : HEAVY_EXAM_DEFAULT;
+}
+function heavyFixedThreshold(settings) {
+  const v = parseInt(settings.heavyWeekThreshold, 10);
+  return v > 0 ? v : HEAVY_FIXED_DEFAULT;
+}
+
+// Each week with anything due, by its Monday:
+//   Map(mondayISO → { week, total, items: [{ kind, item, cls, lecture, date, points }] })
+// total counts everything (the usual week); items are only those not done.
+function semesterWeekLoads(sem, settings) {
+  const examPts = heavyExamPoints(settings);
+  const weeks = new Map();
+  for (const cls of (sem && sem.classes) || []) {
+    if (isClassInactive(cls)) continue;
+    for (const e of collectClassEntries(cls)) {
+      if (e.kind === 'lecture' || !e.date) continue;
+      const points = e.kind === 'exam' ? examPts : 1;
+      const week = getWeekStartISO(e.date);
+      let w = weeks.get(week);
+      if (!w) { w = { week, total: 0, items: [] }; weeks.set(week, w); }
+      w.total += points;
+      if (!isDoneLike(e.item.status)) w.items.push({ kind: e.kind, item: e.item, cls, lecture: e.lecture, date: e.date, points });
+    }
+  }
+  return weeks;
+}
+
+function medianOf(nums) {
+  const a = [...nums].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
+// The points a week needs to be heavy. Infinity with nothing due at all.
+function heavyThreshold(weeks, settings) {
+  if (settings.heavyWeekMode === 'fixed') return heavyFixedThreshold(settings);
+  const totals = [...weeks.values()].map(w => w.total).filter(n => n > 0);
+  if (!totals.length) return Infinity;
+  return Math.max(HEAVY_FLOOR, medianOf(totals) * HEAVY_RATIO);
+}
+
+// Heavy weeks from this week on, soonest first: the next `weeksAhead` weeks
+// (3 by default; the Calendar passes more). This week counts only what's due
+// from today on; what's already overdue is shown as overdue.
+//   → [{ week, end, points, count, exams, busiest, classes, minutes, items }]
+function getHeavyWeeks(sem, settings, todayISO, weeksAhead = HEAVY_WEEKS_AHEAD) {
+  if (!sem || !heavyWeekOn(settings)) return [];
+  const weeks = semesterWeekLoads(sem, settings);
+  const threshold = heavyThreshold(weeks, settings);
+  const first = getWeekStartISO(todayISO);
+  const last = addDaysISO(first, 7 * (weeksAhead - 1));
+  const out = [];
+  for (const week of [...weeks.keys()].sort()) {
+    if (week < first || week > last) continue;
+    const items = weeks.get(week).items.filter(i => week !== first || i.date >= todayISO);
+    const points = items.reduce((n, i) => n + i.points, 0);
+    if (points >= threshold) out.push(heavyWeekInfo(week, items, points));
+  }
+  return out;
+}
+
+// The details a warning shows: counts, the busiest day, the classes, and
+// reading time where it's already known (reading pace by words, F6).
+function heavyWeekInfo(week, items, points) {
+  const byDay = new Map();
+  for (const i of items) byDay.set(i.date, (byDay.get(i.date) || 0) + i.points);
+  let busiest = null;
+  for (const [date, n] of [...byDay.entries()].sort()) if (!busiest || n > busiest.points) busiest = { date, points: n };
+  // Named only when one day clearly has the most, and at least 2 points.
+  if (busiest && (busiest.points < 2 || [...byDay.values()].filter(n => n === busiest.points).length > 1)) busiest = null;
+  const classes = [...new Set(items.map(i => classLabel(i.cls)))];
+  let minutes = 0;
+  for (const i of items) {
+    if (i.kind !== 'assignment') continue;
+    const st = getReadingPaceState(i.item);
+    if (st && st.unit === 'words' && st.status === 'ok' && st.remaining > 0) minutes += st.remaining;
+  }
+  return {
+    week, end: addDaysISO(week, 6), points, items,
+    count: items.length, exams: items.filter(i => i.kind === 'exam').length,
+    busiest: busiest ? busiest.date : null, classes, minutes,
+  };
+}
+
+// "this week", "next week (Nov 23–29)", "Nov 30–Dec 6".
+function heavyWeekRange(w, todayISO) {
+  const first = getWeekStartISO(todayISO);
+  const end = w.week.slice(0, 7) === w.end.slice(0, 7)
+    ? String(new Date(w.end + 'T12:00:00').getDate()) : formatDate(w.end);
+  const range = `${formatDate(w.week)}–${end}`;
+  if (w.week === first) return 'this week';
+  if (w.week === addDaysISO(first, 7)) return `next week (${range})`;
+  return range;
+}
+
+// "Heavy week: next week (Nov 23–29)" and "7 items due (2 exams), busiest Thu ·
+// HIST 210, BIB 501 · ~4 h reading known".
+function heavyWeekTitle(w, todayISO) { return `Heavy week: ${heavyWeekRange(w, todayISO)}`; }
+function heavyWeekDetail(w) {
+  const parts = [];
+  let what = `${w.count} item${w.count === 1 ? '' : 's'} due`;
+  if (w.exams) what += ` (${w.exams} exam${w.exams === 1 ? '' : 's'})`;
+  if (w.busiest) what += `, busiest ${new Date(w.busiest + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })}`;
+  parts.push(what);
+  if (w.classes.length) parts.push(w.classes.join(', '));
+  if (w.minutes) parts.push(`~${formatMinutes(w.minutes)} reading known`);
+  return parts.join(' · ');
+}
+
+// Shown keys older than two days are dropped, so the store stays small.
+function pruneReminderFired(fired, todayISO) {
+  const keep = addDaysISO(todayISO, -2);
+  for (const k of Object.keys(fired)) if (!(fired[k] >= keep)) delete fired[k];
 }
 
 function getDailyNoteFormat(app) {
@@ -3445,14 +4476,17 @@ class HoldCoursePlugin extends Plugin {
     // harmless: the second finds nothing changed. (LiveAQuietLife, 2026-10-03)
     this.registerDomEvent(window, 'focus', () => this._reloadIfChanged());
     this.registerDomEvent(document, 'visibilitychange', () => {
-      if (document.visibilityState === 'visible') this._reloadIfChanged();
+      if (document.visibilityState === 'visible') { this._reloadIfChanged(); this._reminderCheck(); }
     });
-    this.registerInterval(window.setInterval(() => this._reloadIfChanged(), 60 * 1000));
+    this.registerInterval(window.setInterval(() => { this._reloadIfChanged(); this._taskDayCheck(); this._reminderCheck(); }, 60 * 1000));
 
     // #49: keep stored note paths pointing at their notes when a note or
     // folder is moved or renamed. (LiveAQuietLife, 2026-10-03)
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => this._onVaultRename(file, oldPath)));
     this.registerEvent(this.app.workspace.on('active-leaf-change', (leaf) => this._onActiveLeafChange(leaf)));
+    // #73: the tasks note edited here, or arriving by sync.
+    this.registerEvent(this.app.vault.on('modify', (file) => this._onTaskFileEvent(file)));
+    this.registerEvent(this.app.vault.on('create', (file) => this._onTaskFileEvent(file)));
 
     this.registerView(VIEW_TYPE, (leaf) => new HoldCourseView(leaf, this));
     this.registerView(TODAY_VIEW_TYPE, (leaf) => new HoldCourseTodayView(leaf, this));
@@ -3470,6 +4504,7 @@ class HoldCoursePlugin extends Plugin {
     this.addCommand({ id: 'export-calendar', name: 'Export calendar (.ics)', callback: () => this.writeCalendar(false) });
     this.addCommand({ id: 'export-csv', name: 'Export items as CSV', callback: () => this.exportCsv() });
     this.addCommand({ id: 'export-backup', name: 'Export backup (JSON)', callback: () => this.exportBackup() });
+    this.addCommand({ id: 'restore-backup', name: 'Restore backup (JSON)', callback: () => this.startRestore() }); // 1.16.0
 
     // #71: daily note agenda. The block is live: nothing is written into the
     // note. Each rendered block registers itself and is dropped when Obsidian
@@ -3518,7 +4553,11 @@ class HoldCoursePlugin extends Plugin {
       id: 'hc-add-class',
       name: 'Add a class',
       callback: () => this.withSemester(NO_SEMESTER_CLASS_INTRO, (sem) => {
-        new AddClassModal(this.app, this, sem.id, () => this.save()).open();
+        // The Overview lands on Classes, as its Add class button does. (1.16.0)
+        new AddClassModal(this.app, this, sem.id, () => {
+          this.save();
+          this.redrawViews(v => { v.dashboardTab = 'Classes'; });
+        }).open();
       }),
     });
 
@@ -3553,7 +4592,10 @@ class HoldCoursePlugin extends Plugin {
       callback: () => {
         const sem = this._getActiveSemester();
         if (!sem) { new Notice('No active semester. Create one in Hold Course first.'); return; }
-        new AddResourceModal(this.app, this, sem.id, sem.classes, () => this.save()).open();
+        new AddResourceModal(this.app, this, sem.id, sem.classes, () => {
+          this.save();
+          this.redrawViews(); // so an open Library shows it (1.16.0)
+        }).open();
       },
     });
 
@@ -3601,6 +4643,29 @@ class HoldCoursePlugin extends Plugin {
       },
     });
 
+    // 1.16.0: recurring assignments; from the Readings tab it adds readings.
+    this.addCommand({
+      id: 'hc-add-recurring-assignment',
+      name: 'Add a recurring assignment',
+      callback: () => {
+        const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+        const view = leaf?.view instanceof HoldCourseView ? leaf.view : null;
+        if (!view || view.screen !== 'class' || !view.currentClassId) {
+          new Notice('Navigate to a class first to add a recurring assignment.');
+          return;
+        }
+        const sem = view._getViewedSemester();
+        if (!sem) { new Notice('No active semester. Create one in Hold Course first.'); return; }
+        const cls = (sem.classes || []).find(c => c.id === view.currentClassId);
+        if (!cls) { new Notice('Could not find the current class.'); return; }
+        const opts = view.currentTab === 'Readings' ? { lockedType: 'Reading' } : { defaultType: 'Writing', excludeTypes: ['Reading'] };
+        new RecurringAssignmentModal(this.app, this, sem.id, cls, null, opts, () => {
+          this.save();
+          view.render();
+        }).open();
+      },
+    });
+
     // #7: exports the on-disk data.json to a timestamped file in the plugin
     // folder — a one-click version of the manual backup already recommended
     // in the README. Reads the persisted file directly rather than
@@ -3637,6 +4702,8 @@ class HoldCoursePlugin extends Plugin {
       window.setTimeout(() => {
         this.tidyTodayLeaves();
         if (!this.data.settings.skipTodayOnStartup) this.activateTodayView();
+        if (this.data.settings.taskSync) this.syncTasks(); // #73
+        this._reminderCheck(); // 1.16.0
       }, 0);
     });
   }
@@ -3644,6 +4711,7 @@ class HoldCoursePlugin extends Plugin {
   onunload() {
     window.clearTimeout(this._recheckTimer);
     clearTimeout(this._calTimer);
+    clearTimeout(this._taskTimer);
     document.body.classList.remove('hc-eink');
     document.body.classList.remove('hc-scaled');
     document.body.style.removeProperty('--hc-ui-scale');
@@ -3695,6 +4763,13 @@ class HoldCoursePlugin extends Plugin {
   // (LiveAQuietLife, 2026-10-03)
   async _loadAndNormalize() {
     this.data = await this.loadData() || { currentSemesterId: null, semesters: [] };
+    return this._normalizeData();
+  }
+
+  // Settings defaults and additive migrations on this.data, shared by a load
+  // and a backup restore (1.16.0), so restored data gets the same treatment.
+  // Returns true if anything changed.
+  _normalizeData() {
     this.data.settings = this.data.settings || { einkMode: false };
     // #13: additive — existing users' settings object already exists, so the
     // `||` above never runs for them. uiScale needs its own explicit check,
@@ -3842,6 +4917,17 @@ class HoldCoursePlugin extends Plugin {
     return this.data.semesters.find(s => s.id === id) || null;
   }
 
+  // Redraw every open Hold Course tab after a command changes data, keeping
+  // the scroll position; each tab stays on its screen. `before` runs on each
+  // view first. Commands have no view of their own to redraw. (1.16.0)
+  redrawViews(before) {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (!(leaf.view instanceof HoldCourseView)) continue;
+      if (before) before(leaf.view);
+      leaf.view.render(true);
+    }
+  }
+
   refreshTodayView() {
     const leaves = this.app.workspace.getLeavesOfType(TODAY_VIEW_TYPE);
     for (const leaf of leaves) {
@@ -3928,10 +5014,12 @@ class HoldCoursePlugin extends Plugin {
       for (const r of (sem.resources || [])) fix(r, 'vaultLink');
     }
     // #75: meeting notes. Groups live outside semesters.
-    for (const group of (this.data.groups || [])) {
-      for (const m of Object.values(group.meetings || {})) {
-        if (m) fix(m, 'note');
-      }
+    forEachSavedMeeting(this.data.groups, m => fix(m, 'note'));
+    // #73: the tasks note, renamed or moved in Obsidian (or its folder): follow
+    // it while sync is on. Renamed to something that isn't a note: let it go.
+    if (this.data.settings && this.data.settings.taskSync) {
+      const next = remap(taskSyncPath(this.data.settings));
+      if (next && /\.md$/i.test(next)) { setTaskSyncPath(this.data.settings, next); count++; }
     }
     // #44: the syllabus folder setting follows a renamed folder too.
     if (this.data.settings) fix(this.data.settings, 'syllabusFolder');
@@ -3942,6 +5030,12 @@ class HoldCoursePlugin extends Plugin {
     if (count) {
       await this.save();
       this.refreshMainView();
+    } else {
+      // Bug #3 (1.16.0): no link followed the rename, but a note may have been
+      // renamed onto a link that was missing. Redraw only a screen that shows it.
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+        if (leaf.view instanceof HoldCourseView && leaf.view._showsNote(newPath)) leaf.view.render(true);
+      }
     }
   }
 
@@ -3958,6 +5052,7 @@ class HoldCoursePlugin extends Plugin {
     }
     this.refreshTodayView();
     if (this.data.settings && this.data.settings.calendarAutoUpdate) this._queueCalendar();
+    if (this.data.settings && this.data.settings.taskSync) this._queueTasks(2000); // #73
   }
 
   // ─── Semester helpers ──────────────────────────────────────────────────────
@@ -4175,6 +5270,8 @@ class HoldCoursePlugin extends Plugin {
     if (classData.online) cls.online = true; // #25
     if (classData.audit) cls.audit = true; // 1.14.0
     if (classData.selfPaced) cls.selfPaced = true;
+    const dayTimes = classDayTimesForSave(classData); // 1.16.0
+    if (dayTimes) cls.meetingDayTimes = dayTimes;
     // Presence-based like notGraded: absent = automatic color.
     if (picked) cls.colorPicked = true;
     sem.classes.push(cls);
@@ -4530,6 +5627,297 @@ class HoldCoursePlugin extends Plugin {
     this._calTimer = setTimeout(() => { this._calTimer = null; this.writeCalendar(true); }, 2000);
   }
 
+  // ─── #73 task sync (1.16.0) ────────────────────────────────────────────────
+
+  taskSyncPath() {
+    return taskSyncPath(this.data.settings);
+  }
+
+  // [/] is written only when the Tasks plugin is on: it shows [/] as in
+  // progress, and without it Obsidian draws any filled box as checked.
+  _tasksPluginOn() {
+    const on = this.app.plugins && this.app.plugins.enabledPlugins;
+    return !!(on && typeof on.has === 'function' && on.has(TASKS_PLUGIN_ID));
+  }
+
+  // Reads ticks back from the note if someone edited it, then writes it
+  // fresh (only when the text would change). One run at a time: a call
+  // during a run runs once more after it. A reload from disk mid-run (#46)
+  // swaps this.data, so the run starts over on the new data.
+  // opts.fromFile: the run comes only from the note changing. An untouched
+  // note (hash intact) is then left as it is: it's Hold Course's own write,
+  // here or from another device, and that device's data.json, with the same
+  // ticks, is on its way. Writing it over from this device's older data
+  // would undo them.
+  async syncTasks(opts = {}) {
+    if (!this.data.settings.taskSync) return;
+    if (this._taskBusy) { this._taskRerun(opts.fromFile); return; }
+    this._taskBusy = true;
+    try {
+      const data = this.data;
+      const settings = data.settings;
+      const vault = this.app.vault;
+      const path = taskSyncPath(settings);
+      const file = vault.getAbstractFileByPath(path);
+      if (file && file.children) { this._taskWarn(path, 'folder'); return; }
+      let prior = new Map();
+      let current = null;
+      if (file) {
+        current = await vault.read(file);
+        if (this.data !== data) { this._taskRerun(opts.fromFile); return; }
+        const state = taskFileState(current);
+        if (!state.ours) { this._taskWarn(path, 'taken'); return; }
+        if (state.intact && opts.fromFile) return;
+        prior = parseTaskLines(current);
+        if (!state.intact) {
+          const changes = taskReadBack(this.getCurrentSemester(), prior);
+          for (const c of changes) c.entry.item.status = c.status;
+          if (changes.length) {
+            await this.save();
+            this.refreshMainView();
+            if (this.data !== data) { this._taskRerun(false); return; }
+          }
+        }
+      }
+      const today = getTodayISO();
+      const text = taskSyncMarkdown(this.getCurrentSemester(), prior, {
+        todayISO: today,
+        format: settings.taskSyncFormat,
+        groupBy: settings.taskSyncGroupBy,
+        inProgress: this._tasksPluginOn(),
+      });
+      this._taskDay = today;
+      if (current === text) return;
+      if (file) {
+        await vault.modify(file, text);
+      } else {
+        await this._ensureFolder(taskSyncFolder(settings));
+        await vault.create(path, text);
+      }
+    } catch (e) {
+      console.error('Hold Course: task sync failed', e);
+    } finally {
+      this._taskBusy = false;
+      const again = this._taskAgain;
+      this._taskAgain = null;
+      if (again) this.syncTasks({ fromFile: again === 'file' });
+    }
+  }
+
+  // Runs once more after this run; a local change anywhere in the queue wins
+  // over note-only changes.
+  _taskRerun(fromFile) {
+    this._taskAgain = (this._taskAgain === 'local' || !fromFile) ? 'local' : 'file';
+  }
+
+  // Once per path and reason, so a paused sync doesn't nag on every save.
+  _taskWarn(path, why) {
+    const key = why + ':' + path;
+    if (this._taskWarned === key) return;
+    this._taskWarned = key;
+    new Notice(why === 'folder'
+      ? `Task sync is paused: "${path}" is a folder. Choose another note name in Settings → Export.`
+      : `Task sync is paused: "${path}" is a note Hold Course didn't make, so it's left alone. Choose another note name or folder in Settings → Export.`, 10000);
+  }
+
+  // A save queues a local run; the note changing queues a fromFile one. A
+  // local one already waiting stays local.
+  _queueTasks(delay, fromFile = false) {
+    const local = !fromFile || (!!this._taskTimer && this._taskQueuedLocal);
+    clearTimeout(this._taskTimer);
+    this._taskQueuedLocal = local;
+    this._taskTimer = setTimeout(() => {
+      this._taskTimer = null;
+      this.syncTasks({ fromFile: !this._taskQueuedLocal });
+    }, delay);
+  }
+
+  // The note changed (an edit here, or a copy arriving by sync). Read it a
+  // moment later, so a plugin that writes twice is read once, and soon, so
+  // the fresh note is written before a sync tool sends the edited one on.
+  // Our own writes come through here too; they find nothing to do. Before
+  // the layout is ready, Obsidian sends 'create' for every file it indexes.
+  _onTaskFileEvent(file) {
+    if (!this.data.settings.taskSync || !file || !this.app.workspace.layoutReady) return;
+    if (file.path !== this.taskSyncPath()) return;
+    this._queueTasks(300, true);
+  }
+
+  // Reminders (1.16.0): run by the once-a-minute timer, on startup, and when
+  // the app comes back to the front (timers pause while a phone is in the
+  // background). The summary counts as shown on a day with nothing to say.
+  _reminderCheck() {
+    const settings = this.data.settings;
+    if (!settings.reminders || !this.app.workspace.layoutReady) return;
+    const now = new Date();
+    const today = isoOfDate(now);
+    const store = this._reminderStore();
+    let changed = false;
+    if (reminderSummaryOn(settings) && store.summaryDay !== today && hhmmOfDate(now) >= reminderSummaryTime(settings)) {
+      store.summaryDay = today;
+      changed = true;
+      const sum = getReminderSummary(this, today, hhmmOfDate(now));
+      if (sum) this._showReminder(['Hold Course', ...sum.lines], 'Open Today', () => this.activateTodayView());
+    }
+    if (reminderUpcomingOn(settings)) {
+      const due = getDueReminders(this, now, store.fired);
+      for (const r of due) { store.fired[r.key] = r.date; changed = true; }
+      if (due.length && settings.reminderSound) this._playReminderSound(); // one chime, however many
+      if (due.length > REMINDER_NOTICE_MAX) {
+        this._showReminder([`${due.length} reminders`, ...due.map(r => r.lines[0])], 'Open Today', () => this.activateTodayView());
+      } else {
+        for (const r of due) this._showReminder(r.lines, 'Open', () => this.openItem(r.item));
+      }
+    }
+    if (changed) {
+      pruneReminderFired(store.fired, today);
+      this._saveReminderStore();
+    }
+  }
+
+  _playReminderSound() { return playReminderChime(); }
+
+  // Heavy weeks (1.16.0) for the current semester, less those dismissed with
+  // "Got it" on this device (local storage, like reminders).
+  visibleHeavyWeeks() {
+    const sem = this.getCurrentSemester();
+    const gone = this._heavyDismissed();
+    return getHeavyWeeks(sem, this.data.settings, getTodayISO()).filter(w => !gone[w.week]);
+  }
+  _heavyDismissed() {
+    if (!this._heavyGone) {
+      let saved = null;
+      try { saved = this.app.loadLocalStorage ? this.app.loadLocalStorage(HEAVY_DISMISS_KEY) : null; } catch (e) { saved = null; }
+      this._heavyGone = saved && typeof saved === 'object' ? saved : {};
+    }
+    return this._heavyGone;
+  }
+  dismissHeavyWeek(week) {
+    const gone = this._heavyDismissed();
+    const keep = getWeekStartISO(getTodayISO());
+    for (const k of Object.keys(gone)) if (k < keep) delete gone[k];
+    gone[week] = true;
+    try { if (this.app.saveLocalStorage) this.app.saveLocalStorage(HEAVY_DISMISS_KEY, gone); } catch (e) { /* kept in memory */ }
+  }
+
+  // What this device has shown, from Obsidian's local storage for this vault.
+  _reminderStore() {
+    if (!this._reminderMem) {
+      let saved = null;
+      try { saved = this.app.loadLocalStorage ? this.app.loadLocalStorage(REMINDER_STORE_KEY) : null; } catch (e) { saved = null; }
+      this._reminderMem = saved && typeof saved === 'object' ? saved : {};
+    }
+    if (!this._reminderMem.fired || typeof this._reminderMem.fired !== 'object') this._reminderMem.fired = {};
+    return this._reminderMem;
+  }
+  _saveReminderStore() {
+    try { if (this.app.saveLocalStorage) this.app.saveLocalStorage(REMINDER_STORE_KEY, this._reminderMem); } catch (e) { /* kept in memory */ }
+  }
+
+  // A notice that stays until clicked. Clicking anywhere closes it; the
+  // button also opens the item (or Today).
+  _showReminder(lines, buttonText, open) {
+    const msg = typeof createFragment === 'function'
+      ? createFragment(f => {
+          lines.forEach((l, i) => f.createDiv({ cls: i ? 'hc-reminder-line' : 'hc-reminder-head', text: l }));
+          const b = f.createEl('button', { cls: 'hc-reminder-open', text: buttonText });
+          b.addEventListener('click', () => open());
+        })
+      : lines.join('\n');
+    const n = new Notice(msg, 0);
+    const el = n && n.noticeEl;
+    if (el && el.addClass) el.addClass('hc-reminder');
+    return n;
+  }
+
+  // Due-date headings move at midnight (Today, Overdue), and yesterday's
+  // ticks leave the note.
+  _taskDayCheck() {
+    if (this.data.settings.taskSync && this._taskDay && this._taskDay !== getTodayISO()) this.syncTasks();
+  }
+
+  // Changing the note's name or folder moves Hold Course's note there
+  // through Obsidian, so links to it follow and its tasks never show twice
+  // in Tasks or Dataview searches. A note already at the new path is left
+  // alone, and so is the setting. Returns true when the setting changed.
+  async setTaskSyncLocation(name, folder) {
+    const s = this.data.settings;
+    const next = Object.assign({}, s);
+    if (String(name || '').trim()) next.taskSyncName = String(name).trim(); else delete next.taskSyncName;
+    if (String(folder || '').trim()) next.taskSyncFolder = String(folder).trim(); else delete next.taskSyncFolder;
+    const from = taskSyncPath(s), to = taskSyncPath(next);
+    const apply = () => {
+      for (const k of ['taskSyncName', 'taskSyncFolder']) {
+        if (k in next) s[k] = next[k]; else delete s[k];
+      }
+    };
+    if (from !== to) {
+      const vault = this.app.vault;
+      if (vault.getAbstractFileByPath(to)) {
+        new Notice(`"${to}" already exists, so Hold Course left both notes alone and is still using "${from}".`, 10000);
+        return false;
+      }
+      const file = s.taskSync ? vault.getAbstractFileByPath(from) : null;
+      if (file && !file.children && taskFileState(await vault.read(file)).ours) {
+        try {
+          await this._ensureFolder(taskSyncFolder(next));
+          await this.app.fileManager.renameFile(file, to);
+        } catch (e) {
+          console.error('Hold Course: moving the tasks note failed', e);
+          new Notice('Couldn\'t move the tasks note: ' + (e.message || e));
+          return false;
+        }
+      }
+    }
+    apply();
+    this._taskWarned = null;
+    await this.save();
+    if (s.taskSync) this.syncTasks();
+    return true;
+  }
+
+  async startTaskSync() {
+    this.data.settings.taskSync = true;
+    this._taskWarned = null;
+    await this.save();
+    await this.syncTasks();
+  }
+
+  // Turning sync off asks what to do with the note: keep it (the default) or
+  // move it to Obsidian's trash. No note, or not Hold Course's: nothing to
+  // ask. onDone runs either way, chosen or cancelled.
+  async turnOffTaskSync(onDone) {
+    const file = this.app.vault.getAbstractFileByPath(this.taskSyncPath());
+    let ours = false;
+    if (file && !file.children) {
+      try { ours = taskFileState(await this.app.vault.read(file)).ours; } catch (e) { ours = false; }
+    }
+    if (!ours) {
+      await this.stopTaskSync(false);
+      if (onDone) onDone();
+      return;
+    }
+    new TaskSyncOffModal(this.app, file.path, async (choice) => {
+      if (choice) await this.stopTaskSync(choice === 'trash');
+      if (onDone) onDone();
+    }).open();
+  }
+
+  async stopTaskSync(trash) {
+    const file = this.app.vault.getAbstractFileByPath(this.taskSyncPath());
+    delete this.data.settings.taskSync;
+    clearTimeout(this._taskTimer);
+    this._taskTimer = null;
+    await this.save();
+    if (!trash || !file) return;
+    try {
+      await this.app.vault.trash(file, false);
+    } catch (e) {
+      console.error('Hold Course: trashing the tasks note failed', e);
+      new Notice('Couldn\'t move the tasks note to the trash: ' + (e.message || e));
+    }
+  }
+
   // A new file each time: "<name> 2.<ext>" and so on if the name is taken.
   async _writeNewExport(name, text) {
     await this._ensureFolder(this.exportFolder());
@@ -4556,17 +5944,11 @@ class HoldCoursePlugin extends Plugin {
     }
   }
 
-  // All of Hold Course's data, wrapped so a later restore (1.16.0) can tell
+  // All of Hold Course's data, wrapped so a restore (1.16.0) can tell
   // what it is and which version wrote it.
   async exportBackup() {
     try {
-      const wrapped = {
-        holdCourseBackup: 1,
-        pluginVersion: (this.manifest && this.manifest.version) || '',
-        exported: new Date().toISOString(),
-        data: this.data,
-      };
-      const path = await this._writeNewExport('Hold Course backup ' + getTodayISO() + '.json', JSON.stringify(wrapped, null, 2));
+      const path = await this._writeNewExport('Hold Course backup ' + getTodayISO() + '.json', this._backupText());
       new Notice('Backup saved: ' + path);
       return path;
     } catch (e) {
@@ -4574,6 +5956,78 @@ class HoldCoursePlugin extends Plugin {
       new Notice('Backup failed: ' + (e.message || e));
       return null;
     }
+  }
+
+  // The backup file's text; also the snapshot taken before a restore.
+  _backupText() {
+    return JSON.stringify({
+      holdCourseBackup: BACKUP_FORMAT,
+      pluginVersion: (this.manifest && this.manifest.version) || '',
+      exported: new Date().toISOString(),
+      data: this.data,
+    }, null, 2);
+  }
+
+  // 1.16.0: the vault's Hold Course backups, newest first: .json files that
+  // carry the backup wrapper. Newer ones are listed too, so choosing one
+  // says why it can't be restored.
+  async findBackupFiles() {
+    const out = [];
+    for (const f of this.app.vault.getFiles()) {
+      if (f.extension !== 'json') continue;
+      try {
+        if ((await this.app.vault.cachedRead(f)).includes('"holdCourseBackup"')) out.push(f);
+      } catch (e) { /* unreadable: not offered */ }
+    }
+    return out.sort((a, b) => ((b.stat && b.stat.mtime) || 0) - ((a.stat && a.stat.mtime) || 0));
+  }
+
+  // Restore backup: pick a file, check it, then the preview. onDone runs
+  // after a restore (Settings redraws itself with it).
+  async startRestore(onDone) {
+    const files = await this.findBackupFiles();
+    if (!files.length) {
+      new Notice('No Hold Course backups in this vault. Export backup makes one. To use a backup from somewhere else, copy it into the vault first.', 10000);
+      return;
+    }
+    new BackupPickSuggestModal(this.app, files, f => this.previewRestore(f, onDone)).open();
+  }
+
+  async previewRestore(file, onDone) {
+    let text;
+    try {
+      text = await this.app.vault.read(file);
+    } catch (e) {
+      new Notice('Couldn’t read ' + file.path + ': ' + (e.message || e));
+      return;
+    }
+    const res = parseBackup(text, (this.manifest && this.manifest.version) || '');
+    if (res.error) { new Notice(res.error, 10000); return; }
+    new RestoreBackupModal(this.app, this, file, res.backup, onDone).open();
+  }
+
+  // Replaces everything, settings included, with the backup's data. The
+  // current data is saved as a new backup first; if that can't be written,
+  // nothing changes. Open tabs go back to the Overview, since the screen
+  // they showed may not exist in the backup. Returns the snapshot's path, or
+  // null.
+  async restoreBackup(backup) {
+    let snapshot;
+    try {
+      snapshot = await this._writeNewExport('Hold Course backup before restore ' + getTodayISO() + '.json', this._backupText());
+    } catch (e) {
+      console.error('Hold Course: snapshot before restore failed', e);
+      new Notice('Restore stopped: your current data couldn’t be saved first (' + (e.message || e) + '). Nothing changed.', 10000);
+      return null;
+    }
+    this.data = JSON.parse(JSON.stringify(backup.data));
+    this._normalizeData();
+    await this.save();
+    this.applyEinkClass();
+    this.applyUiScale();
+    this.redrawViews(v => v.resetToOverview());
+    new Notice('Backup restored. Your data from before the restore is in ' + snapshot + '.', 10000);
+    return snapshot;
   }
 
   // ─── 1.14.0 lecture and assignment notes (#74) ──────────────────────────
@@ -4874,6 +6328,7 @@ class HoldCoursePlugin extends Plugin {
     this.data.settings.customTypes = list;
     let n = 0;
     this._forEachAssignment(a => { if (a.type === oldName) { a.type = newName; n++; } });
+    this._forEachSeries(s => { if (s.type === oldName) s.type = newName; }); // 1.16.0
     this._retargetTypeFilters(oldName, newName);
     this._retargetGradeWeights(oldName, newName);
     return n;
@@ -4884,6 +6339,7 @@ class HoldCoursePlugin extends Plugin {
     this.data.settings.customTypes = getCustomTypes(this).filter(t => t !== name);
     let n = 0;
     this._forEachAssignment(a => { if (a.type === name) { a.type = 'Other'; n++; } });
+    this._forEachSeries(s => { if (s.type === name) s.type = 'Other'; }); // 1.16.0
     this._retargetTypeFilters(name, null);
     this._retargetGradeWeights(name, null);
     return n;
@@ -5013,6 +6469,13 @@ class HoldCoursePlugin extends Plugin {
       ex.dueDate = moveDate(ex.dueDate);
       if (!keepNotes) ex.notes = '';
     }
+    // 1.16.0: a series' dates move with its occurrences; Clear empties them.
+    for (const s of (cls.series || [])) {
+      if (mode === 'clear') { s.startDate = ''; delete s.endDate; delete s.skipped; continue; }
+      s.startDate = moveDate(s.startDate);
+      if (s.endDate) s.endDate = moveDate(s.endDate);
+      if (s.skipped) s.skipped = s.skipped.map(moveDate);
+    }
 
     // Library: the books the class depends on, tagged or only linked — same
     // set moveClass() uses. Same semester: tag the existing records to the
@@ -5040,6 +6503,10 @@ class HoldCoursePlugin extends Plugin {
       }
       for (const a of this._allClassAssignments(cls)) {
         if (a.linkedBook) a.linkedBook = idMap.get(a.linkedBook) || '';
+      }
+      for (const s of (cls.series || [])) {
+        if (s.linkedBook) s.linkedBook = idMap.get(s.linkedBook) || '';
+        if (!s.linkedBook) delete s.linkedBook;
       }
     }
 
@@ -5121,6 +6588,108 @@ class HoldCoursePlugin extends Plugin {
     for (const lec of (cls.lectures || [])) {
       const lecIdx = (lec.assignments || []).findIndex(a => a.id === assignmentId);
       if (lecIdx !== -1) { lec.assignments.splice(lecIdx, 1); return; }
+    }
+  }
+
+  // ─── Recurring assignments (1.16.0) ────────────────────────────────────────
+  // Saves a series from a plan (planSeries): the record is added, or replaced
+  // in place when one with its id exists; untouched occurrences in plan.remove
+  // go; every row not skipped becomes an ordinary assignment, on the lecture
+  // of the same date when there is one. Returns the number created.
+  saveSeries(semesterId, classId, series, plan) {
+    const cls = this.findClass(semesterId, classId);
+    if (!cls) return 0;
+    if (!cls.series) cls.series = [];
+    const existing = findSeries(cls, series.id);
+    if (existing) {
+      for (const k of Object.keys(existing)) delete existing[k];
+      Object.assign(existing, series);
+    } else {
+      cls.series.push(series);
+    }
+    for (const o of plan.remove) this.deleteAssignment(semesterId, classId, o.assignment.id);
+    let created = 0;
+    for (const row of plan.rows) {
+      if (row.skipped || !row.fields) continue;
+      const f = row.fields;
+      const a = this.addAssignment(semesterId, classId, row.lecture ? row.lecture.id : null, f);
+      if (!a) continue;
+      a.seriesId = series.id;
+      a.seriesN = f.seriesN;
+      if (f.linkedBook) a.linkedBook = f.linkedBook;
+      created++;
+    }
+    this._pruneSeries(cls);
+    return created;
+  }
+
+  // A series with no occurrences left is dropped; no list left, no key.
+  _pruneSeries(cls) {
+    if (!cls || !cls.series) return;
+    const used = new Set();
+    forEachClassAssignment(cls, a => { if (a.seriesId) used.add(a.seriesId); });
+    cls.series = cls.series.filter(s => used.has(s.id));
+    if (!cls.series.length) delete cls.series;
+  }
+
+  // Untouched occurrences of a series due after dateISO.
+  _seriesUntouchedAfter(cls, seriesId, dateISO) {
+    return seriesOccurrences(cls, seriesId)
+      .filter(o => o.assignment.dueDate && o.assignment.dueDate > dateISO && isOccurrenceUntouched(o.assignment));
+  }
+
+  countSeriesUntouchedAfter(semesterId, classId, seriesId, dateISO) {
+    const cls = this.findClass(semesterId, classId);
+    return cls ? this._seriesUntouchedAfter(cls, seriesId, dateISO).length : 0;
+  }
+
+  // End series: it ends today; untouched occurrences after today go.
+  // Returns the number removed.
+  endSeries(semesterId, classId, seriesId, todayISO) {
+    const cls = this.findClass(semesterId, classId);
+    const series = findSeries(cls, seriesId);
+    if (!series) return 0;
+    const gone = this._seriesUntouchedAfter(cls, seriesId, todayISO);
+    for (const o of gone) this.deleteAssignment(semesterId, classId, o.assignment.id);
+    series.endDate = todayISO;
+    delete series.count;
+    this._pruneSeries(cls);
+    return gone.length;
+  }
+
+  // Delete one occurrence ('one'), or it and the untouched ones after it
+  // ('later'). 'one' remembers the date as skipped (and a count series counts
+  // one less), so Edit series doesn't bring it back; 'later' ends the series
+  // the day before. Returns the number deleted.
+  deleteSeriesOccurrence(semesterId, classId, assignment, mode) {
+    const cls = this.findClass(semesterId, classId);
+    if (!cls) return 0;
+    const series = findSeries(cls, assignment.seriesId);
+    let n = 0;
+    if (series && mode === 'later' && assignment.dueDate) {
+      for (const o of this._seriesUntouchedAfter(cls, series.id, assignment.dueDate)) {
+        this.deleteAssignment(semesterId, classId, o.assignment.id);
+        n++;
+      }
+      series.endDate = addDaysISO(assignment.dueDate, -1);
+      delete series.count;
+    } else if (series && assignment.dueDate) {
+      const skipped = new Set(series.skipped || []);
+      skipped.add(assignment.dueDate);
+      series.skipped = [...skipped].sort();
+      if (series.count > 1) series.count--;
+    }
+    this.deleteAssignment(semesterId, classId, assignment.id);
+    this._pruneSeries(cls);
+    return n + 1;
+  }
+
+  // Every class's series, for type renames: fn(series, cls).
+  _forEachSeries(fn) {
+    for (const sem of (this.data.semesters || [])) {
+      for (const cls of (sem.classes || [])) {
+        for (const s of (cls.series || [])) fn(s, cls);
+      }
     }
   }
 
@@ -5301,11 +6870,13 @@ class HoldCourseSettingTab extends PluginSettingTab {
         this._renderGrades(el);
         this._renderAssignmentTypes(el);
         this._renderExamTypes(el);
+        this._renderHeavyWeeks(el);
       },
       Notes: el => {
         this._renderNotes(el);
         this._renderSyllabus(el);
       },
+      Reminders: el => this._renderReminders(el),
       Export: el => this._renderExport(el),
     };
     if (!tabs[this.plugin._settingsTab]) this.plugin._settingsTab = 'Display';
@@ -5437,8 +7008,195 @@ class HoldCourseSettingTab extends PluginSettingTab {
       .addButton(b => b.setButtonText('Export CSV').onClick(() => this.plugin.exportCsv()));
     new Setting(containerEl)
       .setName('Backup')
-      .setDesc('All of Hold Course\'s data in one JSON file. Keep it somewhere safe.')
-      .addButton(b => b.setButtonText('Export backup').onClick(() => this.plugin.exportBackup()));
+      .setDesc('All of Hold Course\'s data in one JSON file. Keep it somewhere safe. Restore replaces everything, settings included, with a backup in this vault; your current data is saved as a backup first.')
+      .addButton(b => b.setButtonText('Export backup').onClick(() => this.plugin.exportBackup()))
+      .addButton(b => b.setButtonText('Restore…').onClick(() => this.plugin.startRestore(() => this.display())));
+    this._renderTaskSync(containerEl);
+  }
+  // #73 (1.16.0): the tasks note. Its options show once it's on (Principle 5).
+  // Name and folder are saved when the box is left, not per keystroke, since
+  // a change moves the note.
+  _renderTaskSync(containerEl) {
+    const settings = this.plugin.data.settings;
+    new Setting(containerEl).setName('Tasks note').setHeading();
+    new Setting(containerEl)
+      .setName('Sync tasks to a note')
+      .setDesc('Keeps a note with a checkbox for each assignment, reading, and exam in the current semester that isn\'t done. Tick one in the note and it\'s done in Hold Course, and the other way round. Items ticked today stay until tomorrow, so a mistake can be unticked. Works with the Tasks or Dataview plugin, or neither.')
+      .addToggle(tg => tg.setValue(!!settings.taskSync).onChange(async on => {
+        if (on) {
+          await this.plugin.startTaskSync();
+          this.display();
+        } else {
+          await this.plugin.turnOffTaskSync(() => this.display());
+        }
+      }));
+    if (!settings.taskSync) return;
+
+    const onLeave = (t, apply) => t.inputEl.addEventListener('change', async () => {
+      await apply(t.getValue());
+      this.display();
+    });
+    new Setting(containerEl)
+      .setName('Note name')
+      .setDesc('Changing it renames the note.')
+      .addText(t => {
+        t.setPlaceholder(TASK_SYNC_NAME_DEFAULT);
+        t.setValue(settings.taskSyncName || '');
+        onLeave(t, v => this.plugin.setTaskSyncLocation(v, settings.taskSyncFolder || ''));
+      });
+    new Setting(containerEl)
+      .setName('Note folder')
+      .setDesc('Leave blank for the top of the vault. Changing it moves the note.')
+      .addText(t => {
+        t.setPlaceholder('Vault root');
+        t.setValue(settings.taskSyncFolder || '');
+        onLeave(t, v => this.plugin.setTaskSyncLocation(settings.taskSyncName || '', v));
+      });
+    const choice = (name, desc, key, options, def) => new Setting(containerEl)
+      .setName(name).setDesc(desc)
+      .addDropdown(dd => {
+        for (const [value, label] of Object.entries(options)) dd.addOption(value, label);
+        dd.setValue(settings[key] || def);
+        dd.onChange(async v => {
+          if (v === def) delete settings[key]; else settings[key] = v;
+          await this.plugin.save();
+          this.plugin.syncTasks();
+        });
+      });
+    choice('Group tasks by', 'Due date: Overdue, Today, Next 7 days, Later, No due date. Class: a heading for each class.', 'taskSyncGroupBy', TASK_GROUP_BY, 'due');
+    choice('Task format', 'How due dates are written. Tasks: 📅 2026-11-20, which the Tasks plugin reads (and is readable without it). Dataview: [due:: 2026-11-20]. Plain: due 2026-11-20. Every format syncs the same way.', 'taskSyncFormat', TASK_FORMATS, 'tasks');
+  }
+
+  // 1.16.0: the heavy-week warning. On by default; options show while it's on.
+  _renderHeavyWeeks(containerEl) {
+    const settings = this.plugin.data.settings;
+    const plugin = this.plugin;
+    const saved = async () => { await plugin.save(); plugin.refreshMainView(); };
+    new Setting(containerEl).setName('Heavy weeks').setHeading();
+    new Setting(containerEl)
+      .setName('Warn about heavy weeks')
+      .setDesc('Looks three weeks ahead. A heavy week shows on the Overview and in the Calendar, and in the daily summary when reminders are on. Each assignment due counts 1 point and each exam more; only what isn\'t done counts.')
+      .addToggle(tg => tg.setValue(heavyWeekOn(settings)).onChange(async on => {
+        if (on) delete settings.heavyWeek; else settings.heavyWeek = false;
+        await saved();
+        this.display();
+      }));
+    if (!heavyWeekOn(settings)) return;
+    new Setting(containerEl)
+      .setName('A heavy week is')
+      .setDesc('Automatic: half again your usual week this semester, and at least 5 points. Fixed: a number you choose.')
+      .addDropdown(dd => {
+        dd.addOption('auto', 'Automatic');
+        dd.addOption('fixed', 'A fixed number');
+        dd.setValue(settings.heavyWeekMode === 'fixed' ? 'fixed' : 'auto');
+        dd.onChange(async v => {
+          if (v === 'fixed') settings.heavyWeekMode = 'fixed'; else { delete settings.heavyWeekMode; delete settings.heavyWeekThreshold; }
+          await saved();
+          this.display();
+        });
+      });
+    if (settings.heavyWeekMode === 'fixed') {
+      new Setting(containerEl)
+        .setName('Points for a heavy week')
+        .setDesc(`A week with this many points or more is heavy. Default ${HEAVY_FIXED_DEFAULT}.`)
+        .addText(t => {
+          t.inputEl.type = 'number';
+          t.inputEl.min = '1';
+          t.setPlaceholder(String(HEAVY_FIXED_DEFAULT));
+          t.setValue(settings.heavyWeekThreshold ? String(settings.heavyWeekThreshold) : '');
+          t.inputEl.addEventListener('change', async () => {
+            const n = parseInt(t.getValue(), 10);
+            if (n > 0 && n !== HEAVY_FIXED_DEFAULT) settings.heavyWeekThreshold = n; else delete settings.heavyWeekThreshold;
+            await saved();
+          });
+        });
+    }
+    new Setting(containerEl)
+      .setName('An exam counts as')
+      .addDropdown(dd => {
+        for (const n of [1, 2, 3]) dd.addOption(String(n), `${n} point${n === 1 ? '' : 's'}`);
+        dd.setValue(String(heavyExamPoints(settings)));
+        dd.onChange(async v => {
+          if (Number(v) === HEAVY_EXAM_DEFAULT) delete settings.heavyExamPoints; else settings.heavyExamPoints = Number(v);
+          await saved();
+        });
+      });
+  }
+
+  // 1.16.0: reminders. Options show once it's on (Principle 5); defaults are
+  // stored as absent.
+  _renderReminders(containerEl) {
+    const settings = this.plugin.data.settings;
+    const plugin = this.plugin;
+    const onOff = (name, desc, key, flip) => new Setting(containerEl)
+      .setName(name).setDesc(desc)
+      .addToggle(tg => tg.setValue(flip ? settings[key] !== false : !!settings[key]).onChange(async on => {
+        if (flip) { if (on) delete settings[key]; else settings[key] = false; }
+        else { if (on) settings[key] = true; else delete settings[key]; }
+        await plugin.save();
+        if (on) plugin._reminderCheck();
+        this.display();
+      }));
+    new Setting(containerEl).setName('Reminders').setHeading();
+    onOff('Show reminders', 'Obsidian notices for what\'s coming up. They show only while Obsidian is open, and on a phone only while it\'s in front. Each one shows once on each device.', 'reminders', false);
+    if (!settings.reminders) return;
+
+    onOff('Daily summary', 'Once a day, the first time Obsidian is open after the time below: what\'s on today and tomorrow, and how many assignments are overdue.', 'reminderSummary', true);
+    if (reminderSummaryOn(settings)) {
+      new Setting(containerEl)
+        .setName('Summary time')
+        .addText(t => {
+          t.inputEl.type = 'time';
+          t.setValue(reminderSummaryTime(settings));
+          t.inputEl.addEventListener('change', async () => {
+            const v = t.getValue();
+            if (!/^\d{2}:\d{2}$/.test(v) || v === REMINDER_SUMMARY_DEFAULT) delete settings.reminderSummaryTime;
+            else settings.reminderSummaryTime = v;
+            await plugin.save();
+          });
+        });
+    }
+
+    onOff('Coming up', 'A notice a set time before a class, meeting, due time, or exam. It stays until you click it. Only items with a time get one; a class has a time on days with a lecture. The daily summary covers the rest.', 'reminderUpcoming', true);
+    if (reminderUpcomingOn(settings)) {
+      const lead = (name, group) => {
+        const g = REMINDER_LEADS[group];
+        new Setting(containerEl).setName(name).addDropdown(dd => {
+          for (const m of g.options) dd.addOption(String(m), formatLeadMinutes(m));
+          dd.setValue(String(reminderLead(settings, group)));
+          dd.onChange(async v => {
+            if (Number(v) === g.def) delete settings[g.key]; else settings[g.key] = Number(v);
+            await plugin.save();
+            plugin._reminderCheck();
+          });
+        });
+      };
+      lead('Before classes and meetings', 'class');
+      lead('Before due times', 'due');
+      lead('Before exams', 'exam');
+      new Setting(containerEl)
+        .setName('Play a sound')
+        .setDesc('A short chime with each coming-up notice, at your device\'s volume. Not with the daily summary.')
+        .addButton(b => b.setButtonText('Try it').onClick(() => plugin._playReminderSound()))
+        .addToggle(tg => tg.setValue(!!settings.reminderSound).onChange(async on => {
+          if (on) settings.reminderSound = true; else delete settings.reminderSound;
+          await plugin.save();
+        }));
+    }
+
+    new Setting(containerEl).setName('Remind me about').setHeading();
+    const skip = new Set(settings.reminderSkip || []);
+    const kind = (name, key) => new Setting(containerEl)
+      .setName(name)
+      .addToggle(tg => tg.setValue(!skip.has(key)).onChange(async on => {
+        if (on) skip.delete(key); else skip.add(key);
+        if (skip.size) settings.reminderSkip = [...skip]; else delete settings.reminderSkip;
+        await plugin.save();
+      }));
+    kind('Classes', 'lectures');
+    kind('Assignments', 'assignments');
+    kind('Exams', 'exams');
+    if ((plugin.data.groups || []).length) kind('Group meetings', 'meetings');
   }
 
   // 1.14.0 (#74): where Create note puts notes, their names, and their
@@ -5786,8 +7544,13 @@ class HoldCourseView extends ItemView {
     // properties and never touches .hc-root, which #34 depends on.
     // A screen shows Open note only while the note exists. Only a note on this
     // screen redraws it, so an unrelated delete can't interrupt typing.
-    // Renames need no handler here: _onVaultRename fixes the links and redraws.
+    // Bug #3 (1.16.0): the same for a note that appears, such as one arriving
+    // by sync after its link: the screen said "Note missing" until something
+    // else redrew it. Renames are handled in _onVaultRename.
     this.registerEvent(this.app.vault.on('delete', (file) => {
+      if (this._showsNote(file.path)) this.render(true);
+    }));
+    this.registerEvent(this.app.vault.on('create', (file) => {
       if (this._showsNote(file.path)) this.render(true);
     }));
     this.registerDomEvent(window, 'resize', () => {
@@ -5800,6 +7563,16 @@ class HoldCourseView extends ItemView {
     this._closeSemDrop();
     this._closeCalPopover();
     if (this._filterDropdown) this._filterDropdown.close();
+  }
+
+  // After a backup restore the old ids may be gone: back to the Overview,
+  // with nothing pointing into the old data. (1.16.0)
+  resetToOverview() {
+    this.screen = 'dashboard';
+    this.currentClassId = this.currentLectureId = this.currentAssignmentId = null;
+    this.currentExamId = this.currentResourceId = this.currentGroupId = null;
+    this.viewedSemesterId = this.previousScreen = this.groupOrigin = this.assignmentOrigin = null;
+    this.globalAssignFilterClassId = this.libraryFilterClassId = this.calFilterClassId = null;
   }
 
   navigate(screen, classId = null, lectureId = null, assignmentId = null, examId = null, resourceId = null, semesterId = null, tab = null, groupId = null) {
@@ -5876,7 +7649,9 @@ class HoldCourseView extends ItemView {
   _showsNote(path) {
     if (this.screen === 'group') {
       const group = this.plugin.findGroup(this.currentGroupId);
-      return Object.values((group && group.meetings) || {}).some(m => m && m.note === path);
+      let shown = false;
+      forEachGroupMeeting(group, m => { if (m.note === path) shown = true; });
+      return shown;
     }
     const sem = this._getViewedSemester();
     if (!sem) return false;
@@ -5917,7 +7692,14 @@ class HoldCourseView extends ItemView {
         const input = textWrap.createEl('input', { cls: 'hc-assign-link-input', type: 'text' });
         input.placeholder = opts.placeholder;
         input.value = path;
-        input.addEventListener('blur', () => set(input.value.trim()));
+        // Bug #1 (1.15.0 review): leaving the box unchanged must not redraw.
+        // blur fires on mousedown, so a redraw here replaced Browse or Create
+        // note under the pointer and that first click was lost.
+        input.addEventListener('blur', () => {
+          const typed = input.value.trim();
+          if (typed === path) return;
+          set(typed);
+        });
       }
 
       const browseBtn = row.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Browse' });
@@ -6365,6 +8147,9 @@ class HoldCourseView extends ItemView {
       return;
     }
 
+    // 1.16.0: the next heavy week, above the Today strip
+    if (sem === this.plugin.getCurrentSemester()) this._renderHeavyBanner(content);
+
     // Today strip
     this._renderTodayStrip(content, sem);
 
@@ -6552,7 +8337,7 @@ class HoldCourseView extends ItemView {
     });
     const moreBtn = actions.createEl('button', { cls: 'hc-btn hc-btn--sm hc-group-more', attr: { 'aria-label': 'More group actions' } });
     setIcon(moreBtn, 'more-horizontal');
-    moreBtn.addEventListener('click', (e) => this._openGroupMenu(e, group, today));
+    moreBtn.addEventListener('click', (e) => this._openGroupMenu(e, group));
 
     const nameRow = header.createDiv('hc-class-header-name');
     nameRow.createSpan({ cls: 'hc-class-header-name-text', text: group.name });
@@ -6592,10 +8377,16 @@ class HoldCourseView extends ItemView {
     this.render(true);
   }
 
-  _openGroupMenu(e, group, today) {
+  // Today is read when the menu opens and again on the click, not taken from
+  // the page: a page left open overnight would otherwise end the group on the
+  // day it was drawn (1.16.0). If midnight passes while the menu is open and
+  // the group's end date has now arrived, there is nothing to end: redraw.
+  _openGroupMenu(e, group) {
     const menu = new Menu();
-    if (canEndGroup(group, today)) {
+    if (canEndGroup(group, getTodayISO())) {
       menu.addItem(item => item.setTitle('End group').setIcon('flag').onClick(() => {
+        const today = getTodayISO();
+        if (!canEndGroup(group, today)) { this.render(true); return; }
         this.plugin.endGroup(group.id, today);
         this._saveAndRefresh();
         new Notice(`${group.name} ends today. To undo this, use Edit group and change Runs until.`);
@@ -6690,6 +8481,30 @@ class HoldCourseView extends ItemView {
       menu.addItem(item => item.setTitle('Remove note link').setIcon('unlink').onClick(change(() => setGroupMeetingField(group, m.date, 'note', ''))));
     }
     menu.showAtMouseEvent(e);
+  }
+
+  // The soonest heavy week not dismissed, or nothing (Principle 5). Show
+  // week opens it in the Calendar; Got it hides it on this device.
+  _renderHeavyBanner(content) {
+    const weeks = this.plugin.visibleHeavyWeeks();
+    if (!weeks.length) return;
+    const w = weeks[0];
+    const today = getTodayISO();
+    const banner = content.createDiv('hc-heavy-banner');
+    const text = banner.createDiv('hc-heavy-banner-text');
+    text.createDiv({ cls: 'hc-heavy-banner-title', text: heavyWeekTitle(w, today) });
+    text.createDiv({ cls: 'hc-heavy-banner-detail', text: heavyWeekDetail(w) });
+    if (weeks.length > 1) text.createDiv({ cls: 'hc-heavy-banner-more', text: `${weeks.length - 1} more heavy week${weeks.length === 2 ? '' : 's'} after it` });
+    const btns = banner.createDiv('hc-heavy-banner-btns');
+    btns.createEl('button', { cls: 'hc-btn', text: 'Show week' }).addEventListener('click', () => {
+      this.calView = 'week';
+      this.calWeekStart = w.week;
+      this.navigate('calendar');
+    });
+    btns.createEl('button', { cls: 'hc-btn', text: 'Got it' }).addEventListener('click', () => {
+      this.plugin.dismissHeavyWeek(w.week);
+      this.render(true);
+    });
   }
 
   _renderTodayStrip(content, sem) {
@@ -6879,12 +8694,14 @@ class HoldCourseView extends ItemView {
       daysRow.createSpan({ cls: 'hc-day-chip hc-online-chip', text: 'Online' });
     } else if (cls.meetingDays?.length) {
       daysRow = body.createDiv('hc-class-days');
-      for (const day of cls.meetingDays) {
-        daysRow.createSpan({ cls: 'hc-day-chip', text: day });
-      }
-      if (cls.meetingStartTime && cls.meetingEndTime) {
-        daysRow.createSpan({ cls: 'hc-class-days-time', text: formatTimeRange(cls.meetingStartTime, cls.meetingEndTime) });
-      }
+      // 1.16.0: days that share a time, then that time; one group as before.
+      const groups = classTimeGroups(cls);
+      groups.forEach((g, i) => {
+        if (i > 0) daysRow.createSpan({ cls: 'hc-class-days-sep', text: '·' });
+        for (const day of g.days) daysRow.createSpan({ cls: 'hc-day-chip', text: day });
+        const time = classTimeText(g.start, g.end);
+        if (time) daysRow.createSpan({ cls: 'hc-class-days-time', text: time });
+      });
     }
     if (modes.length) {
       if (!daysRow) daysRow = body.createDiv('hc-class-days');
@@ -7057,11 +8874,7 @@ class HoldCourseView extends ItemView {
       const icon = item.createSpan({ cls: 'hc-inline-icon' });
       setIcon(icon, 'clock');
       icon.style.color = accentText(color);
-      let clockText = cls.meetingDays.join(' · ');
-      if (cls.meetingStartTime && cls.meetingEndTime) {
-        clockText += ' · ' + formatTimeRange(cls.meetingStartTime, cls.meetingEndTime);
-      }
-      item.createSpan({ text: clockText });
+      item.createSpan({ text: classScheduleText(cls) }); // 1.16.0: per-day times
     }
 
     // 1.14.0: Audit / Self-paced, after when the class meets. Silent when absent.
@@ -7677,6 +9490,17 @@ class HoldCourseView extends ItemView {
       }, null, 'Writing', null, ['Reading']).open();
     });
 
+    // 1.16.0: recurring assignments.
+    const repeatBtn = controlRow.createEl('button', { cls: 'hc-btn' });
+    setIcon(repeatBtn.createSpan({ cls: 'hc-btn-icon' }), 'repeat');
+    repeatBtn.createSpan({ text: 'Repeat…' });
+    repeatBtn.addEventListener('click', () => {
+      new RecurringAssignmentModal(this.app, this.plugin, sem.id, cls, null, { defaultType: 'Writing', excludeTypes: ['Reading'] }, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+
     const list = content.createDiv('hc-assign-list');
 
     if (items.length === 0) {
@@ -7708,6 +9532,7 @@ class HoldCourseView extends ItemView {
     // Middle: title, lecture, grade (once done)
     const mid = row.createDiv('hc-assign-mid');
     const titleRow = mid.createDiv('hc-title-flag-row');
+    renderSeriesIcon(titleRow, cls, assignment); // 1.16.0
     titleRow.createDiv({ cls: 'hc-assign-title', text: assignment.title });
     renderTermWindowFlag(titleRow, assignment.dueDate, cls, isDoneLike(assignment.status));
     mid.createDiv({
@@ -7835,6 +9660,17 @@ class HoldCourseView extends ItemView {
       }, null, 'Reading', 'Reading').open();
     });
 
+    // 1.16.0: recurring assignments.
+    const repeatBtn = controlRow.createEl('button', { cls: 'hc-btn' });
+    setIcon(repeatBtn.createSpan({ cls: 'hc-btn-icon' }), 'repeat');
+    repeatBtn.createSpan({ text: 'Repeat…' });
+    repeatBtn.addEventListener('click', () => {
+      new RecurringAssignmentModal(this.app, this.plugin, sem.id, cls, null, { lockedType: 'Reading' }, () => {
+        this.plugin.save();
+        this.render();
+      }).open();
+    });
+
     const list = content.createDiv('hc-reading-list');
 
     if (items.length === 0) {
@@ -7864,6 +9700,7 @@ class HoldCourseView extends ItemView {
 
     const mid = row.createDiv('hc-reading-mid');
     const titleRow = mid.createDiv('hc-title-flag-row');
+    renderSeriesIcon(titleRow, cls, assignment); // 1.16.0
     titleRow.createDiv({ cls: 'hc-reading-title', text: assignment.title });
     renderTermWindowFlag(titleRow, assignment.dueDate, cls, isDoneLike(assignment.status));
     mid.createDiv({ cls: 'hc-reading-context', text: lectureLabel || 'Class-level' });
@@ -8074,6 +9911,37 @@ class HoldCourseView extends ItemView {
         const chip = dueRow.createSpan({ cls: 'hc-assign-detail-due-chip', text: info.note });
         chip.style.color = info.color;
       }
+    }
+
+    // 1.16.0: part of a series.
+    const series = assignment.seriesId ? findSeries(cls, assignment.seriesId) : null;
+    if (series) {
+      const occ = seriesOccurrences(cls, series.id);
+      const seriesRow = content.createDiv('hc-assign-detail-series');
+      setIcon(seriesRow.createSpan({ cls: 'hc-series-icon' }), 'repeat');
+      seriesRow.createSpan({ text: `Part of a series: ${describeSeries(series)}, ${occ.findIndex(o => o.assignment === assignment) + 1} of ${occ.length}` });
+      const btns = seriesRow.createDiv('hc-assign-detail-series-btns');
+      const editSeries = btns.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'Edit series' });
+      editSeries.addEventListener('click', () => {
+        const date = assignment.dueDate;
+        const opts = series.type === 'Reading' ? { lockedType: 'Reading' } : { excludeTypes: ['Reading'] };
+        new RecurringAssignmentModal(this.app, this.plugin, sem.id, cls, series, opts, () => {
+          this.plugin.save();
+          // An untouched occurrence is replaced: stay on the one for this date.
+          if (!this.plugin.findAssignment(sem.id, cls.id, assignment.id)) {
+            const o = seriesOccurrences(cls, series.id).find(x => x.assignment.dueDate === date);
+            if (o) this.currentAssignmentId = o.assignment.id;
+          }
+          this.render();
+        }).open();
+      });
+      const endSeries = btns.createEl('button', { cls: 'hc-btn hc-btn--sm', text: 'End series' });
+      endSeries.addEventListener('click', () => {
+        new EndSeriesModal(this.app, this.plugin, sem.id, cls, series, () => {
+          this.plugin.save();
+          this.render();
+        }).open();
+      });
     }
 
     // Actions row
@@ -9890,7 +11758,8 @@ class HoldCourseView extends ItemView {
         if (this.calMonth > 11) { this.calMonth = 0; this.calYear++; }
         this.render();
       });
-      this._renderCalLegend(content, sem);
+      const gridStart = monthGridStartISO(this.calYear, this.calMonth);
+      this._renderCalLegend(content, sem, gridStart, addDaysISO(gridStart, MONTH_GRID_DAYS - 1));
       this._renderMonthGrid(content, sem);
     } else {
       const weekEndISO = addDaysISO(this.calWeekStart, 6);
@@ -9900,16 +11769,33 @@ class HoldCourseView extends ItemView {
       titleEl.setText(`${fmt(ws)} – ${fmt(we)}`);
       prevBtn.addEventListener('click', () => { this.calWeekStart = addDaysISO(this.calWeekStart, -7); this.render(); });
       nextBtn.addEventListener('click', () => { this.calWeekStart = addDaysISO(this.calWeekStart,  7); this.render(); });
-      this._renderCalLegend(content, sem);
+      this._renderCalLegend(content, sem, this.calWeekStart, weekEndISO);
+      const heavy = this._calHeavyWeeks(sem).find(w => w.week === this.calWeekStart);
+      if (heavy) {
+        const note = content.createDiv('hc-cal-heavy-note');
+        note.createSpan({ cls: 'hc-cal-heavy-tag', text: 'Heavy week' });
+        note.createSpan({ text: heavyWeekDetail(heavy) });
+      }
       this._renderWeekGrid(content, sem);
     }
 
     this._renderCalFilterBar(content, sem);
   }
 
-  _renderCalLegend(content, sem) {
+  // 1.16.0: heavy weeks from this week to the semester's end, for marking the
+  // Calendar. Every one is marked, dismissed or not: Got it only hides the
+  // Overview banner. The whole load counts, whatever the class filter shows.
+  _calHeavyWeeks(sem) {
+    const today = getTodayISO();
+    const end = sem && sem.endDate && sem.endDate > today ? sem.endDate : addDaysISO(today, 7 * 26);
+    const weeks = Math.ceil((daysBetweenISO(getWeekStartISO(today), end) + 1) / 7);
+    return getHeavyWeeks(sem, this.plugin.data.settings, today, Math.max(HEAVY_WEEKS_AHEAD, weeks));
+  }
+
+  // fromISO..toISO: the dates the grid draws (42 days for a month, 7 for a week).
+  _renderCalLegend(content, sem, fromISO, toISO) {
     const classes = sem.classes || [];
-    const groups = groupsForSemester(this.plugin.data.groups, sem, getTodayISO());
+    const groups = calendarLegendGroups(this.plugin.data.groups, fromISO, toISO);
     if (classes.length === 0 && groups.length === 0) return;
 
     const legend = content.createDiv('hc-cal-legend');
@@ -9961,10 +11847,8 @@ class HoldCourseView extends ItemView {
 
   _renderMonthGrid(content, sem) {
     const todayISO = getTodayISO();
-    const firstISO = makeISO(this.calYear, this.calMonth + 1, 1);
-    const firstD   = new Date(firstISO + 'T12:00:00');
-    const startOffset = (firstD.getDay() + 6) % 7;
-    const gridStartISO = addDaysISO(firstISO, -startOffset);
+    const gridStartISO = monthGridStartISO(this.calYear, this.calMonth);
+    const heavyWeeks = new Map(this._calHeavyWeeks(sem).map(w => [w.week, w]));
 
     const grid = content.createDiv('hc-cal-grid');
 
@@ -9972,7 +11856,7 @@ class HoldCourseView extends ItemView {
       grid.createDiv({ cls: 'hc-cal-day-header', text: d });
     }
 
-    for (let i = 0; i < 42; i++) {
+    for (let i = 0; i < MONTH_GRID_DAYS; i++) {
       const dateISO = addDaysISO(gridStartISO, i);
       const d = new Date(dateISO + 'T12:00:00');
       const inMonth = d.getMonth() === this.calMonth && d.getFullYear() === this.calYear;
@@ -9990,6 +11874,16 @@ class HoldCourseView extends ItemView {
       const dateNum = cell.createDiv('hc-cal-date-num');
       dateNum.setText(String(d.getDate()));
       if (isToday) dateNum.addClass('hc-cal-date-num--today');
+
+      // 1.16.0: a heavy week gets a band across its row, and a tag on Monday.
+      const heavy = heavyWeeks.get(getWeekStartISO(dateISO));
+      if (heavy) {
+        cell.addClass('hc-cal-cell--heavy');
+        if (dateISO === heavy.week) {
+          const tag = cell.createDiv({ cls: 'hc-cal-heavy-tag', text: 'Heavy' });
+          tag.setAttr('aria-label', `Heavy week: ${heavyWeekDetail(heavy)}`);
+        }
+      }
 
       // Type-colored pills — display only, no individual click listeners
       const maxPills = 3;
@@ -10690,10 +12584,50 @@ function validateClassSchedule(formData) {
       return 'Start and end date are required once meeting times are set.';
     }
   }
+  // 1.16.0: each day's own time, when the switch shows and is on.
+  if (classDayTimesAvailable(formData) && formData.dayTimesOn) {
+    if (!meetingStartTime || !meetingEndTime) {
+      return 'Set the usual start and end time first.';
+    }
+    for (const day of DAYS) {
+      if (!(formData.meetingDays || []).includes(day)) continue;
+      const t = formDayTimes(formData, day);
+      if (!t.start || !t.end) return `${day}: both start and end time are required.`;
+      if (t.end <= t.start) return `${day}: end time must be after start time.`;
+    }
+  }
   if (startDate && endDate && endDate < startDate) {
     return 'End date must be after start date.';
   }
   return null;
+}
+
+// 1.16.0: the "Different times on some days" switch under the usual time, and
+// when it's on, a start and end for each meeting day (the usual time until
+// changed). Shared by AddClassModal and EditClassModal. Returns a redraw for
+// when the days or the usual time change. Hidden with fewer than two days.
+function renderClassDayTimes(contentEl, formData) {
+  const box = contentEl.createDiv('hc-class-day-times');
+  const draw = () => {
+    box.empty();
+    if (!classDayTimesAvailable(formData)) return;
+    const days = DAYS.filter(d => (formData.meetingDays || []).includes(d));
+    new Setting(box)
+      .setName('Different times on some days')
+      .setDesc(formData.dayTimesOn ? 'Change only the days that differ.' : 'For a class that meets at another time on some days.')
+      .addToggle(t => t.setValue(!!formData.dayTimesOn).onChange(v => { formData.dayTimesOn = v; draw(); }));
+    if (!formData.dayTimesOn) return;
+    for (const day of days) {
+      const t = formDayTimes(formData, day);
+      const row = new Setting(box).setName(day);
+      row.settingEl.addClass('hc-day-times-row');
+      buildTimePicker(row.controlEl, `${day} start time`, t.start, v => setFormDayTime(formData, day, 'start', v));
+      row.controlEl.createSpan({ cls: 'hc-day-times-dash', text: '–' });
+      buildTimePicker(row.controlEl, `${day} end time`, t.end, v => setFormDayTime(formData, day, 'end', v));
+    }
+  };
+  draw();
+  return draw;
 }
 
 const CLASS_MODAL_TABS = ['Details', 'People', 'Schedule'];
@@ -10832,6 +12766,7 @@ class AddClassModal extends Modal {
       taName: '', taEmail: '', taOfficeHours: '',
       meetingDays: [],
       location: '', startDate: '', endDate: '', meetingStartTime: '', meetingEndTime: '',
+      dayTimesOn: false, dayTimes: {}, // 1.16.0
       trackGrades: true,
       credits: '', finalGrade: '',               // #67
       trackAttendance: false, attendanceMin: '', // #72
@@ -10977,8 +12912,9 @@ class AddClassModal extends Modal {
 
     if (online) return;
 
-    renderTimePicker(contentEl, 'Start time', this.formData.meetingStartTime, v => this.formData.meetingStartTime = v);
-    renderTimePicker(contentEl, 'End time', this.formData.meetingEndTime, v => this.formData.meetingEndTime = v);
+    renderTimePicker(contentEl, 'Start time', this.formData.meetingStartTime, v => { this.formData.meetingStartTime = v; this._redrawDayTimes?.(); });
+    renderTimePicker(contentEl, 'End time', this.formData.meetingEndTime, v => { this.formData.meetingEndTime = v; this._redrawDayTimes?.(); });
+    this._redrawDayTimes = renderClassDayTimes(contentEl, this.formData); // 1.16.0
 
     new Setting(contentEl).setName('Meeting link').addText(text => {
       text.setPlaceholder('https://zoom.us/j/...').setValue(this.formData.meetingLink).onChange(v => this.formData.meetingLink = v);
@@ -10999,6 +12935,7 @@ class AddClassModal extends Modal {
         const idx = this.formData.meetingDays.indexOf(day);
         if (idx === -1) { this.formData.meetingDays.push(day); chip.addClass('hc-day-toggle--active'); }
         else { this.formData.meetingDays.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
+        this._redrawDayTimes?.(); // 1.16.0
       });
     }
   }
@@ -11098,6 +13035,7 @@ class EditClassModal extends Modal {
       endDate: cls.endDate || '',
       meetingStartTime: cls.meetingStartTime || '',
       meetingEndTime: cls.meetingEndTime || '',
+      ...classDayTimesFormData(cls), // 1.16.0: dayTimesOn, dayTimes
       trackGrades: isClassGraded(cls),
       // #67: kept while Track grades is off, like #25's hidden schedule fields.
       credits: cls.credits != null ? String(cls.credits) : '',
@@ -11310,8 +13248,9 @@ class EditClassModal extends Modal {
 
     if (online) return;
 
-    renderTimePicker(contentEl, 'Start time', this.formData.meetingStartTime, v => this.formData.meetingStartTime = v);
-    renderTimePicker(contentEl, 'End time', this.formData.meetingEndTime, v => this.formData.meetingEndTime = v);
+    renderTimePicker(contentEl, 'Start time', this.formData.meetingStartTime, v => { this.formData.meetingStartTime = v; this._redrawDayTimes?.(); });
+    renderTimePicker(contentEl, 'End time', this.formData.meetingEndTime, v => { this.formData.meetingEndTime = v; this._redrawDayTimes?.(); });
+    this._redrawDayTimes = renderClassDayTimes(contentEl, this.formData); // 1.16.0
 
     new Setting(contentEl).setName('Meeting link').addText(text => {
       text.setValue(this.formData.meetingLink).onChange(v => this.formData.meetingLink = v);
@@ -11332,6 +13271,7 @@ class EditClassModal extends Modal {
         const idx = this.formData.meetingDays.indexOf(day);
         if (idx === -1) { this.formData.meetingDays.push(day); chip.addClass('hc-day-toggle--active'); }
         else { this.formData.meetingDays.splice(idx, 1); chip.removeClass('hc-day-toggle--active'); }
+        this._redrawDayTimes?.(); // 1.16.0
       });
     }
   }
@@ -11369,6 +13309,10 @@ class EditClassModal extends Modal {
     // #25: presence-based, same as notGraded.
     if (this.formData.online) this.cls.online = true;
     else delete this.cls.online;
+    // 1.16.0: only days that differ from the usual time; none = no key.
+    const dayTimes = classDayTimesForSave(this.formData);
+    if (dayTimes) this.cls.meetingDayTimes = dayTimes;
+    else delete this.cls.meetingDayTimes;
     // 1.14.0: presence-based, same as online.
     if (this.formData.audit) this.cls.audit = true;
     else delete this.cls.audit;
@@ -13196,6 +15140,271 @@ class WritingGoalModal extends Modal {
   onClose() { this.contentEl.empty(); this.onDone(); }
 }
 
+// ─── Recurring assignments (1.16.0) ──────────────────────────────────────────
+
+// The series' name for sentences and tooltips: its title without the number.
+function seriesLabel(series) {
+  return String((series && series.title) || '').replace(/\s*#?\{n\}/g, '').trim() || 'this series';
+}
+
+// The small repeat icon before an occurrence's title on list rows.
+function renderSeriesIcon(parentEl, cls, assignment) {
+  const series = assignment && assignment.seriesId ? findSeries(cls, assignment.seriesId) : null;
+  if (!series) return;
+  const el = parentEl.createSpan({ cls: 'hc-series-icon' });
+  setIcon(el, 'repeat');
+  el.setAttribute('aria-label', `${seriesLabel(series)} · ${describeSeries(series)}`);
+}
+
+// Add or edit a series: the form, then a preview with one row per date
+// (untick to skip). series null = new. opts: { lockedType, excludeTypes,
+// defaultType }, as Add assignment takes them (#9).
+class RecurringAssignmentModal extends Modal {
+  constructor(app, plugin, semesterId, cls, series, opts, onDone) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.cls = cls;
+    this.series = series;
+    this.opts = opts || {};
+    this.onDone = onDone;
+    const exclude = this.opts.excludeTypes || [];
+    let type = this.opts.lockedType || this.opts.defaultType || 'Writing';
+    if (!this.opts.lockedType && exclude.includes(type)) type = ASSIGNMENT_TYPES.find(t => !exclude.includes(t)) || type;
+    this.formData = seriesFormData(cls, series, getTodayISO(), type);
+    this.seriesId = series ? series.id : generateId();
+    this.step = 'form';
+  }
+
+  onOpen() {
+    this._makeDraggable(this);
+    this.contentEl.addClass('hc-modal');
+    this.contentEl.addClass('hc-series-modal');
+    this._draw();
+  }
+
+  _draw() {
+    const el = this.contentEl;
+    const top = el.scrollTop;
+    el.empty();
+    let title = 'Edit series';
+    if (!this.series) title = this.opts.lockedType === 'Reading' ? 'Add recurring reading' : 'Add recurring assignment';
+    el.createEl('h2', { cls: 'hc-modal-title', text: title });
+    if (this.step === 'form') this._drawForm(el);
+    else this._drawPreview(el);
+    el.scrollTop = top;
+  }
+
+  _drawForm(el) {
+    const f = this.formData;
+    const cls = this.cls;
+
+    new Setting(el).setClass('hc-setting-wide-desc').setName('Title').setDesc('Use {n} for the number: Reading response #{n}').addText(text => {
+      text.setPlaceholder('Reading response #{n}').setValue(f.title).onChange(v => f.title = v);
+      if (!this._focused) { text.inputEl.focus(); this._focused = true; }
+    });
+
+    if (this.opts.lockedType) {
+      f.type = this.opts.lockedType;
+    } else {
+      addTypeDropdown(new Setting(el).setName('Type'), this.plugin, {
+        value: f.type,
+        exclude: this.opts.excludeTypes || [],
+        onChange: v => { f.type = v; this._draw(); },
+      });
+    }
+
+    const meetingsOk = seriesMeetingsAvailable(cls);
+    if (!meetingsOk && f.every === 'meetings') f.every = 'week';
+    const rep = new Setting(el).setName('Repeats').addDropdown(dd => {
+      if (meetingsOk) dd.addOption('meetings', 'Every class meeting');
+      dd.addOption('week', 'Weekly');
+      dd.addOption('2weeks', 'Every 2 weeks');
+      dd.setValue(f.every).onChange(v => {
+        f.every = v;
+        if (v !== 'meetings' && f.due === 'class') f.due = 'none';
+        this._draw();
+      });
+    });
+    if (f.every === '2weeks') {
+      rep.setClass('hc-setting-wide-desc').setDesc('Counted from the first day on or after the start date.');
+    }
+    if (f.every !== 'meetings') {
+      const days = new Setting(el).setName('Days');
+      const picker = days.controlEl.createDiv('hc-days-picker');
+      for (const day of DAYS) {
+        const chip = picker.createEl('button', { cls: 'hc-day-toggle', text: day, type: 'button' });
+        const on = f.days.includes(day);
+        chip.toggleClass('hc-day-toggle--active', on);
+        chip.setAttr('aria-pressed', on ? 'true' : 'false');
+        chip.addEventListener('click', () => {
+          const i = f.days.indexOf(day);
+          if (i === -1) f.days.push(day); else f.days.splice(i, 1);
+          chip.toggleClass('hc-day-toggle--active', i === -1);
+          chip.setAttr('aria-pressed', i === -1 ? 'true' : 'false');
+        });
+      }
+    }
+
+    if (f.due === 'class' && f.every !== 'meetings') f.due = 'none';
+    new Setting(el).setName('Due').addDropdown(dd => {
+      dd.addOption('none', 'All day');
+      if (f.every === 'meetings') dd.addOption('class', 'At class start');
+      dd.addOption('time', 'At a time');
+      dd.setValue(f.due).onChange(v => { f.due = v; this._draw(); });
+    });
+    if (f.due === 'time') renderTimePicker(el, 'Due time', f.dueTime, v => f.dueTime = v);
+
+    new Setting(el).setName('Starts').addText(text => {
+      text.inputEl.type = 'date';
+      text.setValue(f.startDate).onChange(v => f.startDate = v);
+    });
+
+    if (f.ends === 'class' && !cls.endDate) f.ends = 'date';
+    new Setting(el).setName('Ends').addDropdown(dd => {
+      if (cls.endDate) dd.addOption('class', `At the end of the class (${formatDateYear(cls.endDate)})`);
+      dd.addOption('date', 'On a date');
+      dd.addOption('count', 'After a number of times');
+      dd.setValue(f.ends).onChange(v => { f.ends = v; this._draw(); });
+    });
+    if (f.ends === 'date') {
+      new Setting(el).setName('End date').addText(text => {
+        text.inputEl.type = 'date';
+        text.setValue(f.endDate).onChange(v => f.endDate = v);
+      });
+    } else if (f.ends === 'count') {
+      new Setting(el).setName('How many times').addText(text => {
+        text.inputEl.type = 'number';
+        text.inputEl.min = '1';
+        text.inputEl.max = String(SERIES_MAX);
+        text.setValue(f.count).onChange(v => f.count = v);
+      });
+    }
+
+    if (f.type === 'Reading') {
+      const sem = (this.plugin.data.semesters || []).find(s => s.id === this.semesterId);
+      const books = sem ? (sem.resources || []).filter(r => (r.classIds || []).includes(cls.id)) : [];
+      if (books.length) {
+        new Setting(el).setName('Linked book').addDropdown(dd => {
+          dd.addOption('', 'None');
+          for (const r of books) dd.addOption(r.id, r.title || 'Untitled');
+          dd.setValue(books.some(r => r.id === f.linkedBook) ? f.linkedBook : '').onChange(v => f.linkedBook = v);
+        });
+      }
+    }
+
+    this._renderFooter(el, 'Preview…', () => {
+      const err = validateSeriesForm(f, cls);
+      if (err) { new Notice(err); return; }
+      this.step = 'preview';
+      this.contentEl.scrollTop = 0;
+      this._draw();
+    });
+  }
+
+  // The series as the form now describes it, and what saving would do.
+  _plan() {
+    const series = { id: this.seriesId, ...seriesFromForm(this.formData, this.cls) };
+    const existing = this.series ? seriesOccurrences(this.cls, this.series.id) : [];
+    return { series, plan: planSeries(series, this.cls, existing) };
+  }
+
+  _drawPreview(el) {
+    const { series, plan } = this._plan();
+    const made = plan.rows.filter(r => !r.skipped);
+    const plural = n => `${n} assignment${n === 1 ? '' : 's'}`;
+    const info = el.createDiv('hc-series-summary');
+    info.createDiv({
+      text: made.length
+        ? `${plural(made.length)}, ${formatDateWithDay(made[0].date)} – ${formatDateWithDay(made[made.length - 1].date)}`
+        : 'No dates to create.',
+    });
+    if (plan.kept.length) info.createDiv({ cls: 'hc-series-note', text: `Unchanged (started or graded): ${plan.kept.length}` });
+    if (plan.remove.length) info.createDiv({ cls: 'hc-series-note', text: `Replaces ${plan.remove.length} not started.` });
+    if (plan.capped) info.createDiv({ cls: 'hc-series-note', text: `Stopped at ${SERIES_MAX}.` });
+    if (plan.rows.length) info.createDiv({ cls: 'hc-series-note', text: 'Untick a date to skip it.' });
+
+    const lectures = getLecturesSorted(this.cls);
+    const list = el.createDiv('hc-series-list');
+    for (const row of plan.rows) {
+      const r = list.createEl('label', { cls: 'hc-series-row' });
+      if (row.skipped) r.addClass('hc-series-row--skipped');
+      const box = r.createEl('input', { type: 'checkbox' });
+      box.checked = !row.skipped;
+      box.addEventListener('change', () => {
+        const set = new Set(this.formData.skipped);
+        if (box.checked) set.delete(row.date); else set.add(row.date);
+        this.formData.skipped = [...set].sort();
+        this._draw();
+      });
+      r.createSpan({ cls: 'hc-series-row-title', text: row.skipped ? 'Skipped' : row.fields.title });
+      r.createSpan({ cls: 'hc-series-row-date', text: formatDateWithDay(row.date) });
+      r.createSpan({
+        cls: 'hc-series-row-time',
+        text: row.skipped ? '' : (row.fields.dueTime ? formatTimeShort(row.fields.dueTime) : 'All day'),
+      });
+      const where = r.createSpan({ cls: 'hc-series-row-where' });
+      if (row.lecture) where.setText(`→ Lecture ${lectures.indexOf(row.lecture) + 1}`);
+      if (row.examDay) where.createSpan({ cls: 'hc-series-exam-tag', text: 'Exam day' });
+    }
+
+    const footer = el.createDiv('hc-modal-footer');
+    const back = footer.createEl('button', { cls: 'hc-btn', text: 'Back' });
+    back.addEventListener('click', () => { this.step = 'form'; this._draw(); });
+    const label = this.series ? 'Save series' : `Create ${plural(made.length)}`;
+    const save = footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: label });
+    if (!this.series && !made.length) save.disabled = true;
+    save.addEventListener('click', () => {
+      if (!this.series && !made.length) return;
+      const created = this.plugin.saveSeries(this.semesterId, this.cls.id, series, plan);
+      new Notice(this.series
+        ? `Series saved: ${created} new, ${plan.kept.length} unchanged.`
+        : `Created ${plural(created)}.`);
+      this.onDone();
+      this.close();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// End series: confirm, naming how many upcoming untouched ones go.
+class EndSeriesModal extends Modal {
+  constructor(app, plugin, semesterId, cls, series, onDone) {
+    super(app);
+    this.plugin = plugin;
+    this.semesterId = semesterId;
+    this.cls = cls;
+    this.series = series;
+    this.onDone = onDone;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'End series' });
+    const today = getTodayISO();
+    const n = this.plugin.countSeriesUntouchedAfter(this.semesterId, this.cls.id, this.series.id, today);
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: n
+        ? `End “${seriesLabel(this.series)}” today? ${n} upcoming assignment${n === 1 ? '' : 's'} that ${n === 1 ? 'isn’t' : 'aren’t'} started will be removed. Started or graded ones stay.`
+        : `End “${seriesLabel(this.series)}” today? Nothing upcoming needs removing.`,
+    });
+    const footer = contentEl.createDiv('hc-modal-footer');
+    footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' }).addEventListener('click', () => this.close());
+    const end = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'End series' });
+    end.addEventListener('click', () => {
+      this.plugin.endSeries(this.semesterId, this.cls.id, this.series.id, today);
+      this.onDone();
+      this.close();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
 class DeleteAssignmentModal extends Modal {
   constructor(app, plugin, semesterId, classId, assignment, onDelete) {
     super(app);
@@ -13216,12 +15425,34 @@ class DeleteAssignmentModal extends Modal {
       text: `Delete "${this.assignment.title}"? This cannot be undone.`,
     });
 
+    // 1.16.0: part of a series: only this one, or this and the later ones
+    // that aren't started.
+    const cls = this.plugin.findClass(this.semesterId, this.classId);
+    const series = this.assignment.seriesId && this.assignment.dueDate ? findSeries(cls, this.assignment.seriesId) : null;
+    this.mode = 'one';
+    if (series) {
+      const later = this.plugin.countSeriesUntouchedAfter(this.semesterId, this.classId, series.id, this.assignment.dueDate);
+      const choices = contentEl.createDiv('hc-delete-choices');
+      const choice = (value, text) => {
+        const label = choices.createEl('label', { cls: 'hc-delete-choice' });
+        const radio = label.createEl('input', { type: 'radio' });
+        radio.name = 'hc-delete-series';
+        radio.value = value;
+        radio.checked = value === this.mode;
+        radio.addEventListener('change', () => { if (radio.checked) this.mode = value; });
+        label.createSpan({ text });
+      };
+      choice('one', 'Only this one');
+      choice('later', `This and later ones that aren’t started (${later} more)`);
+    }
+
     const footer = contentEl.createDiv('hc-modal-footer');
     const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
     cancelBtn.addEventListener('click', () => this.close());
     const deleteBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Delete assignment' });
     deleteBtn.addEventListener('click', () => {
-      this.plugin.deleteAssignment(this.semesterId, this.classId, this.assignment.id);
+      if (series) this.plugin.deleteSeriesOccurrence(this.semesterId, this.classId, this.assignment, this.mode);
+      else this.plugin.deleteAssignment(this.semesterId, this.classId, this.assignment.id);
       this.onDelete();
       this.close();
     });
@@ -13397,6 +15628,116 @@ class MyCopySuggest extends AbstractInputSuggest {
 }
 
 // ─── Vault file suggester ─────────────────────────────────────────────────────
+
+// ─── Backup restore (1.16.0) ─────────────────────────────────────────────────
+
+class BackupPickSuggestModal extends FuzzySuggestModal {
+  constructor(app, files, onChoose) {
+    super(app);
+    this.files = files;
+    this.onChoose = onChoose;
+    this.setPlaceholder('Choose a Hold Course backup to restore…');
+  }
+
+  getItems() { return this.files; }
+  getItemText(file) { return file.path; }
+  onChooseItem(file) { this.onChoose(file); }
+}
+
+// The preview: where the backup came from, what it holds next to what's
+// there now, missing notes, and what Replace does.
+class RestoreBackupModal extends Modal {
+  constructor(app, plugin, file, backup, onDone) {
+    super(app);
+    this.plugin = plugin;
+    this.file = file;
+    this.backup = backup;
+    this.onDone = onDone;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Restore backup' });
+    contentEl.createEl('p', { cls: 'hc-modal-body', text: backupSourceText(this.file.path, this.backup) });
+
+    const now = backupCounts(this.plugin.data);
+    const then = backupCounts(this.backup.data);
+    const table = contentEl.createDiv('hc-restore-counts');
+    table.createDiv({ cls: 'hc-restore-head', text: '' });
+    table.createDiv({ cls: 'hc-restore-head', text: 'Now' });
+    table.createDiv({ cls: 'hc-restore-head', text: 'In the backup' });
+    for (const [key, label] of BACKUP_COUNT_ROWS) {
+      const cls = now[key] !== then[key] ? 'hc-restore-cell hc-restore-diff' : 'hc-restore-cell';
+      table.createDiv({ cls: 'hc-restore-label', text: label });
+      table.createDiv({ cls, text: String(now[key]) });
+      table.createDiv({ cls, text: String(then[key]) });
+    }
+
+    const missing = backupNotePaths(this.backup.data).filter(p => this.plugin.noteIsMissing(p)).length;
+    if (missing) contentEl.createEl('p', { cls: 'hc-modal-body', text: backupMissingNotesText(missing) });
+
+    const folder = this.plugin.exportFolder();
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body hc-modal-warning',
+      text: 'Restoring replaces everything in Hold Course, settings included, with this backup. Your current data is saved first as a new backup in '
+        + (folder ? folder : 'the top of the vault') + ', so you can go back to it.',
+    });
+
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const okBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Replace with backup' });
+    okBtn.addEventListener('click', async () => {
+      okBtn.disabled = true;
+      cancelBtn.disabled = true;
+      const done = await this.plugin.restoreBackup(this.backup);
+      this.close();
+      if (done && this.onDone) this.onDone();
+    });
+  }
+
+  onClose() { this.contentEl.empty(); }
+}
+
+// #73 (1.16.0): turning task sync off. Keep the note (the default) or move it
+// to Obsidian's trash. onChoose('keep' | 'trash'), or null when closed
+// without choosing (sync stays on).
+class TaskSyncOffModal extends Modal {
+  constructor(app, path, onChoose) {
+    super(app);
+    this.path = path;
+    this.onChoose = onChoose;
+    this.choice = null;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass('hc-modal');
+    contentEl.createEl('h2', { cls: 'hc-modal-title', text: 'Stop syncing tasks' });
+    contentEl.createEl('p', {
+      cls: 'hc-modal-body',
+      text: `Hold Course will stop updating "${this.path}". Keep the note as it is, or move it to Obsidian's trash (the .trash folder in your vault, where you can get it back)?`,
+    });
+    const footer = contentEl.createDiv('hc-modal-footer');
+    const cancelBtn = footer.createEl('button', { cls: 'hc-btn', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => this.close());
+    const trashBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--danger', text: 'Move it to trash' });
+    trashBtn.addEventListener('click', () => { this.choice = 'trash'; this.close(); });
+    const keepBtn = footer.createEl('button', { cls: 'hc-btn hc-btn--primary', text: 'Keep the note' });
+    keepBtn.addEventListener('click', () => { this.choice = 'keep'; this.close(); });
+    window.setTimeout(() => keepBtn.focus(), 0);
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    const cb = this.onChoose;
+    this.onChoose = null;
+    if (cb) cb(this.choice);
+  }
+}
 
 class VaultLinkSuggestModal extends FuzzySuggestModal {
   constructor(app, onChoose) {
@@ -14141,7 +16482,7 @@ const DRAGGABLE_MODALS = [
   AddLectureModal, EditLectureModal, BulkAddLecturesModal,
   AddAssignmentModal, BulkAddAssignmentsModal, EditAssignmentModal,
   ReadingPaceSetupModal, ReadingPaceLogModal, WritingGoalModal,
-  AddExamModal, EditExamModal, GroupModal, GroupMeetingModal,
+  AddExamModal, EditExamModal, GroupModal, GroupMeetingModal, RecurringAssignmentModal,
   QuickAddResourceModal, AddResourceModal, EditResourceModal, BulkAddResourcesModal,
 ];
 for (const Cls of DRAGGABLE_MODALS) {
@@ -14167,6 +16508,7 @@ AddResourceModal.prototype._renderFooter    = _renderFooter;
 EditResourceModal.prototype._renderFooter   = _renderFooter;
 GroupModal.prototype._renderFooter          = _renderFooter;
 GroupMeetingModal.prototype._renderFooter   = _renderFooter;
+RecurringAssignmentModal.prototype._renderFooter = _renderFooter;
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 

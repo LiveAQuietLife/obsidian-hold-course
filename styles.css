@@ -537,6 +537,13 @@ body.is-mobile .hc-card-more-btn { opacity: 1; }
 /* 1.14.0: Audit / Self-paced chips after a meeting time get the same space. */
 .hc-class-days-time + .hc-class-mode-chip { margin-left: 4px; }
 
+/* 1.16.0: a class with different times on some days: "·" between time groups. */
+.hc-class-days-sep {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: 0 2px;
+}
+
 .hc-class-schedule-row {
   display: flex;
   gap: 14px;
@@ -1148,6 +1155,28 @@ body:not(.is-mobile) .hc-syllabus-note-setting .setting-item-control {
   gap: 6px;
 }
 
+/* 1.16.0: a day's own time in the class dialog: two pickers, wrapping to a
+   second line on a narrow screen. */
+.hc-day-times-row .setting-item-control {
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.hc-day-times-row .setting-item-name { padding-left: 12px; }
+.hc-day-times-dash { color: var(--text-muted); }
+/* The switch and day rows sit in their own box, and Obsidian's modal rule
+   (.modal:not(.mod-settings) .setting-item:not(.setting-item-heading)
+   :first-child / :last-child) drops the top line and spacing on a box's first
+   row and the bottom spacing on its last. Put them back, with one more class
+   than that rule, so the box reads like the rows around it. */
+.modal:not(.mod-settings) .hc-class-day-times > .setting-item:not(.setting-item-heading):first-child {
+  border-top: var(--border-width) solid var(--background-modifier-border);
+  padding-top: var(--size-4-4);
+}
+.modal:not(.mod-settings) .hc-class-day-times > .setting-item:not(.setting-item-heading):last-child {
+  padding-bottom: var(--size-4-4);
+}
+
 .hc-time-select {
   appearance: none;
   -webkit-appearance: none;
@@ -1257,6 +1286,22 @@ body .modal .setting-item-control .hc-color-swatch.hc-color-swatch--active:not(.
   background: var(--interactive-accent);
   color: var(--text-on-accent);
   border-color: var(--interactive-accent);
+}
+
+/* 1.16.0: in a dialog, Obsidian's and themes' button rules
+   (.modal .setting-item-control button:not(.clickable-icon)) outrank the
+   plain class above, so a picked day looked the same as one not picked
+   (Cosmic), or differed only by its border (Foundation). Matched their
+   specificity, as the color swatches do (#53), rather than !important.
+   Covers the day chips, the class chips, and AM/PM. */
+body .modal .hc-day-toggle.hc-day-toggle--active:not(.clickable-icon),
+body .modal .hc-day-toggle.hc-day-toggle--active:not(.clickable-icon):hover,
+body .modal .hc-time-period-btn.hc-time-period-btn--active:not(.clickable-icon),
+body .modal .hc-time-period-btn.hc-time-period-btn--active:not(.clickable-icon):hover {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border-color: var(--interactive-accent);
+  box-shadow: none;
 }
 
 /* --- Lecture list ---------------------------------------------------------- */
@@ -4245,3 +4290,100 @@ body.is-mobile .hc-modal .hc-setting-wide-desc .setting-item-info { flex: 1 1 au
 .hc-courses-group-name { font-size: 13px; font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
 .hc-courses-group-cell { font-size: 12px; color: var(--text-muted); min-width: 0; }
 body.is-phone .hc-courses-group-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+
+/* 1.16.0 backup restore: the preview's counts, now and in the backup. */
+.hc-restore-counts {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  column-gap: var(--size-4-4);
+  row-gap: var(--size-2-1);
+  margin: var(--size-4-2) 0 var(--size-4-3);
+  font-size: var(--font-ui-small);
+}
+.hc-restore-head {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  text-align: right;
+}
+.hc-restore-label { color: var(--text-muted); }
+.hc-restore-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+.hc-restore-diff {
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
+
+/* ─── Recurring assignments (1.16.0) ─────────────────────────────────────── */
+.hc-series-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.hc-series-icon svg { width: 14px; height: 14px; }
+
+.hc-assign-detail-series {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: -12px 0 20px;
+}
+.hc-assign-detail-series-btns { display: flex; gap: 6px; }
+
+.hc-series-summary { margin-bottom: 10px; }
+.hc-series-note { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+.hc-series-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+}
+.hc-series-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas: "box title date time" ". where where where";
+  column-gap: 10px;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: 13px;
+  cursor: pointer;
+}
+.hc-series-row:last-child { border-bottom: none; }
+.hc-series-row input { grid-area: box; margin: 0; }
+.hc-series-row-title { grid-area: title; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hc-series-row-date { grid-area: date; color: var(--text-muted); white-space: nowrap; }
+.hc-series-row-time { grid-area: time; color: var(--text-muted); white-space: nowrap; }
+.hc-series-row-where { grid-area: where; font-size: 12px; color: var(--text-faint); display: flex; gap: 8px; }
+.hc-series-row-where:empty { display: none; }
+.hc-series-row--skipped .hc-series-row-title,
+.hc-series-row--skipped .hc-series-row-date { color: var(--text-faint); text-decoration: line-through; }
+.hc-series-exam-tag { color: var(--text-warning); font-weight: var(--font-semibold); }
+
+.hc-delete-choices { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 12px; }
+.hc-delete-choice { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+/* #73 (1.16.0): the tasks note hides its ^hc- block IDs in Live Preview.
+   The note sets cssclasses: hc-tasks, so other notes keep showing theirs. */
+.hc-tasks .cm-blockid { display: none; }
+
+/* 1.16.0: reminder notices. They stay until clicked. */
+.hc-reminder .hc-reminder-head { font-weight: var(--font-semibold); }
+.hc-reminder .hc-reminder-line { margin-top: 2px; }
+.hc-reminder .hc-reminder-open { display: block; margin-top: 8px; margin-left: auto; font-size: var(--font-ui-small); }
+
+/* 1.16.0: heavy-week warning. Overview banner, Calendar band and tag. */
+.hc-heavy-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px 14px; border-radius: 8px; background: rgba(var(--color-orange-rgb), 0.1); border-left: 3px solid var(--color-orange); }
+.hc-heavy-banner-text { flex: 1 1 240px; min-width: 0; }
+.hc-heavy-banner-title { font-weight: var(--font-semibold); }
+.hc-heavy-banner-detail, .hc-heavy-banner-more { font-size: var(--font-ui-small); color: var(--text-muted); }
+.hc-heavy-banner-btns { display: flex; gap: 8px; }
+.hc-cal-cell--heavy { box-shadow: inset 0 3px 0 rgba(var(--color-orange-rgb), 0.6); }
+.hc-cal-heavy-tag { display: inline-block; font-size: var(--font-ui-smaller); font-weight: var(--font-semibold); color: var(--color-orange); background: rgba(var(--color-orange-rgb), 0.12); border-radius: 4px; padding: 0 5px; margin-bottom: 2px; }
+.hc-cal-heavy-note { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; font-size: var(--font-ui-small); color: var(--text-muted); }

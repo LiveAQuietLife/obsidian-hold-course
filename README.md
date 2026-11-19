@@ -147,6 +147,9 @@ Hold Course runs on desktop and mobile.
 - [Courses](#courses)
 - [HC Today Sidebar](#hc-today-sidebar)
 - [Daily Note Agenda](#daily-note-agenda)
+- [Reminders](#reminders)
+- [Heavy Weeks](#heavy-weeks)
+- [Task Sync](#task-sync)
 - [Export](#export)
 - [Command Palette Shortcuts](#command-palette-shortcuts)
 - [Linked Notes](#linked-notes)
@@ -204,6 +207,8 @@ The Overview opens with a strip summarizing what needs attention right now, draw
 
 Click any item in the strip to jump straight to its detail screen.
 
+**Heavy weeks:** when one of the next three weeks has more due than usual, a banner above the strip says so. See [Heavy Weeks](#heavy-weeks).
+
 ---
 
 ## Semesters
@@ -243,6 +248,8 @@ Only the class name is required; fill in the rest as you have it. A class withou
 **Editing, copying, or deleting a class:** On the dashboard, hovering near the top right of a class card reveals a menu to **Edit class** and **Delete class**. **Copy to semester…** is on the class's own menu and on its right-click menu in Courses — see [Copying a Class](#copying-a-class). A class can also be edited from the **Edit** button in its detail screen — editing uses the same Details/People/Schedule tabs as adding a class.
 
 **Class schedule:** When a class has meeting days, a start and end time, and a start and end date all set, Hold Course knows exactly when that class meets. Log a lecture on a day that matches, and its meeting time is shown automatically — no need to re-enter it per lecture. Leave any one of those fields blank and nothing changes: this is entirely opt-in, and existing classes are unaffected until you fill them in. Times are entered with a custom picker — hour and minute dropdowns with an AM/PM toggle — to match the rest of the plugin.
+
+**Different times on different days:** for a class that meets at 9:00 on Wednesday and 1:00 on Friday, turn on **Different times on some days** under the usual start and end time, and set each day's times. The switch appears once a class has two or more meeting days. Today, the Calendar, the daily note agenda, the calendar file, [reminders](#reminders), and an exported syllabus use each day's own time. The card and header group days by time, such as `Mon · Wed 9:00–10:15 · Fri 1:00–2:15`. Turn the switch off and every day goes back to the usual time.
 
 **Online classes:** For a class with no live meetings, turn on **Online (no meeting time)** at the top of the Schedule tab. Meeting days, times, location, and meeting link are hidden, and the class shows an **Online** tag on its card and in its header instead. Start and end dates still apply, and the course page URL stays on the Details tab. Anything you'd already entered in the hidden fields is kept, not deleted — turn the toggle off and it comes back.
 
@@ -337,6 +344,17 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 **Bulk adding assignments:** Open a lecture and click **Bulk add** in its Assignments section. One assignment per line — each becomes an assignment attached to that lecture and inherits the lecture's date as its due date. One type applies to the whole batch, so paste one kind at a time. A live preview shows every assignment before anything is added, and the same caution applies: check the rows, because a bulk add can't be undone in a single step.
 
+**Recurring assignments:** For work that repeats, such as weekly responses, discussion posts, quizzes, or problem sets, click **Repeat…** next to **+ Add Assignment** (or run **Add a recurring assignment**). Fill in:
+
+- **Title**, with `{n}` for the number: `Reading response #{n}` gives #1, #2, #3…
+- **Repeats:** weekly or every 2 weeks on the days you pick, or **every class meeting** (shown when the class has meeting days and dates).
+- **Due:** all day or at a time. For every class meeting, also at class start (each day's own time, if the class has [different times on different days](#classes)).
+- **Starts** and **Ends:** at the end of the class (when it has an end date), on a date, or after a number of times.
+
+A preview lists every date before anything is added. Exam days are marked, and you can untick any date to skip it, such as a holiday or an exam week. Each one becomes an ordinary assignment with its own status, grade, and note, placed on the lecture that falls on its date when there is one. A repeat icon marks them in lists.
+
+On one of them, the assignment's page shows **Part of a series** with **Edit series**, which changes the ones you haven't started or graded and leaves the rest alone, and **End series**, which stops it. Deleting one asks whether to delete **only this one** or it and the later ones you haven't started. [Copying a class](#copying-a-class) moves its series with the new dates. Something due on two days, such as a post on Wednesday and replies on Sunday, is two series.
+
 **Assignment types:** Each assignment has a type — Reading, Writing, Project, Discussion, or Other — color-coded throughout the plugin so you can scan quickly.
 
 **Your own types:** Choose **New type…** in the Type menu when adding or editing an assignment (or in Bulk add) and give it a name, such as Lab, Homework, or Presentation. Your types are shared by all your classes and semesters, appear in every type filter, and use the same gray as Other. Rename or delete them under *Settings > Assignment types*: renaming updates every assignment that uses the type, and deleting one changes those assignments to Other.
@@ -359,7 +377,7 @@ Inside a class, the **Assignments** tab lists all logged assignments.
 
 Inside a class, the **Readings** tab lists everything assigned as reading — pulled out of Assignments into its own view, since a reading is prep tied to a lecture rather than graded, deadline-driven work.
 
-**Adding a reading:** Click **+ Add Reading**. Since this tab is reading-only, there's no type to choose — it's locked in for you.
+**Adding a reading:** Click **+ Add Reading**. Since this tab is reading-only, there's no type to choose — it's locked in for you. **Repeat…** next to it adds a [recurring](#assignments) reading, such as a chapter before each class.
 
 **Context:** Each reading shows either **Class-level** or the lecture it's attached to (**Before Lecture 3 — Cell Structure**, for example), so you know what it's tied to at a glance.
 
@@ -608,7 +626,7 @@ The **Calendar** shows all your lectures, assignments, and exams across all clas
 
 **Week and month modes:** Switch between views using the toggle in the upper left.
 
-**Legend:** The top of the calendar shows a color key — lectures listed by class, assignments listed by type (Reading, Writing, Discussion, Project, Exam, Other). Exams from the Exams tab appear in their own color. Meetings are listed by group, each in its group's color.
+**Legend:** The top of the calendar shows a color key — lectures listed by class, assignments listed by type (Reading, Writing, Discussion, Project, Exam, Other). Exams from the Exams tab appear in their own color. Meetings are listed by group, each in its group's color, for the groups with a meeting in view.
 
 **Class filter:** Use the **All classes** dropdown at the bottom to narrow the calendar to a single class. A study group's meetings stay with its class.
 
@@ -617,6 +635,8 @@ The **Calendar** shows all your lectures, assignments, and exams across all clas
 **Type filter:** Appears once the Show filter is narrowed to Assignments, letting you further narrow to a single assignment type (Reading, Writing, Project, Discussion, Other).
 
 **Meeting time on lecture entries:** When a class's schedule fields are filled in (meeting days, start/end time, start/end date) and a lecture falls on a matching day, the calendar shows that meeting time directly on the lecture entry in both week and month view. Assignments with a [due time](#assignments) and exams with a [start time](#exams) show their times the same way.
+
+**Heavy weeks:** in month view, a [heavy week](#heavy-weeks) has an orange band across its days and a **Heavy** tag on Monday; hover over the tag for what's due. In week view, a note above the grid says so.
 
 **In your own calendar app:** see [Export](#export) to put Hold Course's schedule into Google Calendar, Apple Calendar, or Outlook.
 
@@ -705,6 +725,74 @@ date: 2026-10-20
 
 ---
 
+## Reminders
+
+Hold Course can remind you of what's coming with Obsidian notices. Turn on **Settings → Reminders → Show reminders**; it's off by default. There are two kinds, each with its own switch:
+
+- **Daily summary:** once a day, the first time Obsidian is open after the **Summary time** (8:00 AM by default): what's on today and tomorrow, and how many assignments are overdue. Shown later in the day, it leaves out classes, meetings, and exams that have already ended. Its **Open Today** button opens the [Today sidebar](#hc-today-sidebar). If there's a [heavy week](#heavy-weeks) coming, the summary ends with it.
+- **Coming up:** a notice a set time before a class or group meeting (15 minutes by default), a due time (1 hour), or an exam (1 day). Change each one under **Before classes and meetings**, **Before due times**, and **Before exams**. Only items with a time get one: an assignment with a [due time](#assignments), an exam with a start time, a meeting with a time, and a class on a day with a lecture entered, the same rule as Today.
+
+Notices stay until you click them. **Open** goes to the item. When more than three come at once, they're joined into one notice that opens Today. **Play a sound** adds a short chime to coming-up notices, at your device's volume; **Try it** plays it. **Remind me about** turns each kind of item on or off: classes, assignments, exams, and group meetings.
+
+Done items, completed or dropped classes, and skipped meetings don't get reminders. Move an item to a new time and you'll be reminded again.
+
+> **Reminders show only while Obsidian is open**, and on a phone only while it's in front. Something that came due while Obsidian was closed still shows when you open it, if it hasn't started yet. For alerts with Obsidian closed, [export the calendar file](#calendar-file) and use your calendar app's own notifications.
+
+Each reminder shows once on each device. A device keeps its own list of what it has shown, outside `data.json`, so reminders never cause a sync conflict.
+
+---
+
+## Heavy Weeks
+
+Hold Course looks three weeks ahead, Monday to Sunday, for a week with more due than usual, and tells you while there's time to start early.
+
+**How a week is scored:** each assignment due counts 1 point and each exam 2. Only work that isn't done counts, so finishing something early can clear the warning. Lectures and meetings don't count, nor do completed or dropped classes. This week counts only what's due from today on; work already overdue shows as overdue instead.
+
+**When it's heavy:** under **Settings → Coursework → Heavy weeks**, **A heavy week is**:
+
+- **Automatic** (the default): half again your usual week this semester, and at least 5 points. A usual week is the middle of the weeks with anything due.
+- **A fixed number:** the points you choose (6 by default).
+
+**An exam counts as** 1, 2, or 3 points.
+
+**Where it shows:**
+
+- **Overview:** a banner above the [Today strip](#today-strip) with the soonest heavy week, such as "Heavy week: next week (Nov 23–29)" and "4 items due (1 exam), busiest Thu · HIST 210". **Show week** opens that week in the Calendar. **Got it** hides that week's banner on this device.
+- **[Calendar](#calendar-view):** an orange band and a **Heavy** tag in month view, and a note in week view, for every heavy week through the end of the semester, whether or not you've clicked Got it.
+- **[Daily summary](#reminders):** one line, when reminders are on.
+
+It's on by default and shows nothing unless a week is heavy. Turn it off with **Warn about heavy weeks**.
+
+---
+
+## Task Sync
+
+If you keep a to-do list in Obsidian, Hold Course can keep a note with a checkbox for each assignment, reading, and exam in the current semester that isn't done. Tick one in the note and it's done in Hold Course; mark it done in Hold Course and it's ticked in the note.
+
+**Turning it on:** **Settings → Export → Sync tasks to a note**. It's off by default, and no note exists until you turn it on. The note is `Hold Course Tasks.md` at the top of the vault. Change **Note name** or **Note folder** and Hold Course moves the note, so links to it keep working. Renaming or moving the note in Obsidian is followed too.
+
+**What's in it:** the current semester's assignments, readings, and exams that aren't done, plus anything ticked today, so a mistaken tick can be unticked. Ticked items drop out the next day. Completed and dropped classes are left out, and so are groups.
+
+**Group tasks by:** **Due date** (Overdue, Today, Next 7 days, Later, No due date, then Done today) or **Class** (a heading for each class).
+
+**Task format:** how due dates are written, so the note fits the task tool you use:
+
+| Format | Looks like |
+|---|---|
+| Tasks (default) | `- [ ] Response #3 (BIB 101) 📅 2026-11-20` |
+| Dataview | `- [ ] Response #3 (BIB 101) [due:: 2026-11-20]` |
+| Plain | `- [ ] Response #3 (BIB 101) due 2026-11-20` |
+
+Every format syncs the same way, and none needs a plugin. With the Tasks plugin on, work in progress is written `[/]`.
+
+**What Hold Course reads back:** only the checkboxes. Each line ends with a hidden block ID that ties it to its item. Titles, dates, and anything else you type in the note are replaced on the next change, so make those edits in Hold Course. Hold Course writes only a note it made; if a note of yours is already at that path, sync pauses and says so.
+
+**Two devices:** a note that arrives by sync, untouched, isn't read back, so an older copy can't undo a tick made on the other device.
+
+**Turning it off** asks whether to **Keep the note** (the default) or **Move it to trash**.
+
+---
+
 ## Export
 
 **Settings → Export** writes Hold Course's data to files in your vault: a calendar file for your calendar app, a CSV for a spreadsheet, and a backup. The files go in the **Export folder**, or the top of the vault if it's blank.
@@ -732,11 +820,19 @@ The file name never changes, so a subscription keeps working.
 
 ### Backup
 
-**Export backup** writes `Hold Course backup <date>.json`, all of Hold Course's data in one file. Keep a copy somewhere other than this vault. Hold Course doesn't have a way to import it yet; it's there so your data is never only in one place. See also [Data Storage](#data-storage).
+**Export backup** writes `Hold Course backup <date>.json`, all of Hold Course's data in one file. Keep a copy somewhere other than this vault. See also [Data Storage](#data-storage).
+
+**Restoring a backup:** click **Restore…** next to Export backup, or run **Restore backup (JSON)**, and pick a backup from your vault (newest first). To restore one kept elsewhere, put it in the vault first. Before anything changes, a preview shows:
+
+- the backup's date and the Hold Course version that made it;
+- how many semesters, classes, lectures, assignments, exams, resources, groups, and saved meetings it has, next to what you have now;
+- how many of its linked notes aren't in this vault.
+
+**Restoring replaces everything**, settings included. Nothing is merged. Your current data is saved first as `Hold Course backup before restore <date>.json` in the export folder, so you can undo a restore by restoring that file. If that file can't be saved, nothing changes. A backup made by a newer version of Hold Course is refused; update the plugin first.
 
 If a CSV or backup with today's date already exists, the new one gets " 2" (then " 3", and so on) instead of replacing it.
 
-The same three exports are in the [command palette](#command-palette-shortcuts).
+The same three exports, and restore, are in the [command palette](#command-palette-shortcuts). The tasks note is on the same Settings tab; see [Task Sync](#task-sync).
 
 ---
 
@@ -753,12 +849,14 @@ Hold Course registers several commands in Obsidian's command palette (Ctrl/Cmd+P
 - Add a library resource — opens the Add Resource dialog for the active semester
 - Add a lecture — opens the Add Lecture dialog for the current class (requires an open class screen)
 - Add an assignment — opens the Add Assignment dialog for the current class (requires an open class screen)
+- Add a recurring assignment — opens the Repeat dialog for the current class (requires an open class screen; from the Readings tab, it adds readings)
 - Export Hold Course data snapshot — copies `data.json` to a timestamped backup file in the plugin folder
 - Insert live agenda block — adds a `hold-course-agenda` block at the cursor (see [Daily Note Agenda](#daily-note-agenda))
 - Insert agenda as text — writes the note's day's agenda as a plain Markdown list at the cursor
 - Export calendar (.ics) — writes `Hold Course.ics` for the current semester (see [Export](#export))
 - Export items as CSV — writes every lecture, assignment, exam, and meeting with a note or topic to a CSV file
 - Export backup (JSON) — writes all of Hold Course's data to one JSON file
+- Restore backup (JSON) — replaces Hold Course's data with a backup from your vault, after a preview (see [Backup](#backup))
 
 All commands are hotkey-bindable via Settings > Hotkeys.
 
@@ -793,7 +891,7 @@ A linked Markdown note can also be measured: a reading's note for [reading pace 
 
 ## Settings
 
-Hold Course's settings are under *Settings > Community plugins > Hold Course*, on four tabs: **Display**, **Coursework**, **Notes**, and **Export**. Settings reopens on the tab you used last, until Obsidian restarts.
+Hold Course's settings are under *Settings > Community plugins > Hold Course*, on five tabs: **Display**, **Coursework**, **Notes**, **Reminders**, and **Export**. Settings reopens on the tab you used last, until Obsidian restarts.
 
 ### Display
 
@@ -817,15 +915,23 @@ This works on desktop and Android. It has no effect on iOS, which doesn't suppor
 
 **Exam types** — your own exam types, each with how many exams use it, and buttons to rename or delete it. Exam, Midterm, Final, and Quiz are built in. New types are added from the Type menu when adding or editing an exam.
 
+**Heavy weeks** — **Warn about heavy weeks** (on by default), **A heavy week is** (Automatic or A fixed number, with **Points for a heavy week**), and **An exam counts as**. See [Heavy Weeks](#heavy-weeks).
+
 ### Notes
 
 **Notes folder**, **Lecture note name**, **Assignment note name**, **Lecture template**, and **Assignment template** — where **Create** puts new lecture and assignment notes, what it names them, and what goes in them. See [Linked Notes](#linked-notes). Once you have a [group](#groups), this tab also has **Meeting notes folder**, **Meeting note name**, and **Meeting template**.
 
 **Syllabus folder** — where exported syllabi and new syllabus notes are saved. Leave it blank for the top of the vault. See [Syllabus](#syllabus).
 
+### Reminders
+
+**Show reminders** (off by default), then **Daily summary** with its **Summary time**, **Coming up** with how long before classes and meetings, due times, and exams, **Play a sound**, and **Remind me about** for each kind of item. See [Reminders](#reminders).
+
 ### Export
 
-**Export folder**, the calendar file and its **Include** and **Keep the calendar file up to date** toggles (with **Include meetings** once you have a [group](#groups)), **CSV**, and **Backup**. See [Export](#export).
+**Export folder**, the calendar file and its **Include** and **Keep the calendar file up to date** toggles (with **Include meetings** once you have a [group](#groups)), **CSV**, and **Backup** with **Restore…**. See [Export](#export).
+
+**Tasks note** — **Sync tasks to a note** (off by default), then **Note name**, **Note folder**, **Group tasks by**, and **Task format**. See [Task Sync](#task-sync).
 
 ---
 
@@ -835,6 +941,7 @@ Hold Course is built around one person's own coursework, but several features su
 
 - **[Copy a class](#copying-a-class)** for each section or term. Dates move to the new start date in whole weeks, and statuses start over.
 - **[Online classes](#classes)** drop the meeting fields when there's no live session.
+- **[Recurring assignments](#assignments)** set up a weekly quiz or response for the whole term in one step, numbered and skipping the dates you untick.
 - **[Your own assignment types](#assignments)** — Lab, Homework, Presentation, Peer review — are set up once and shared by every class and section, and each one can be filtered on Assignments and Calendar.
 - **[Syllabus export](#syllabus)** turns a class into a syllabus note — your description and policies, the reading list, grade weights, and a week-by-week schedule.
 - **[Bulk add resources](#library)** takes a whole reading list at once, pasted from your syllabus or a spreadsheet.
@@ -856,6 +963,7 @@ A few things work differently by necessity:
 - **No logo on a phone.** The Hold Course name above the breadcrumb is hidden there, since Obsidian's header already shows it, so the breadcrumb gets the whole line. If it still doesn't fit, the semester name is shortened.
 - **Button rows wrap.** When the buttons above a list (such as **Bulk add** and **Add resource** in the Library) don't fit across the screen, they go onto a second line. Sideways scrolling would compete with Obsidian's swipe to open the sidebars.
 - **Interface scale** is worth a look on mobile, and a phone keeps its own — see [Settings](#settings).
+- **Reminders show only while Obsidian is in front.** A phone pauses Obsidian in the background, so a reminder waits until you open it, and the sound may not play. See [Reminders](#reminders).
 
 ---
 
@@ -865,7 +973,9 @@ All plugin data is stored in `data.json` inside the Hold Course plugin folder. T
 
 The **Export Hold Course data snapshot** command copies `data.json` to a timestamped file in the same folder (`hold-course-backup-2026-09-08-14-30-22.json`) — a one-click version of that backup. Every run makes a new file and nothing is ever overwritten or pruned, so clearing out old snapshots is up to you.
 
-The snapshot stays in the plugin folder, which Obsidian keeps out of sight. For a copy you can see and move, use **Export backup** (see [Export](#export)): it writes the same data to a dated JSON file in your export folder.
+The snapshot stays in the plugin folder, which Obsidian keeps out of sight. For a copy you can see and move, use **Export backup** (see [Export](#export)): it writes the same data to a dated JSON file in your export folder, which **Restore…** can read back.
+
+Two things are kept on each device instead of in `data.json`: which [reminders](#reminders) that device has shown, and which [heavy weeks](#heavy-weeks) you've clicked **Got it** on. They don't sync and aren't in backups.
 
 ---
 
