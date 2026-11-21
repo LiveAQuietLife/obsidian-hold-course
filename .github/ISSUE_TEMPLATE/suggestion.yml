@@ -1,0 +1,24 @@
+name: A suggestion
+description: "An idea for Hold Course, especially one that comes from a different way of working."
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: "Hold Course grew out of one person's way of working. If yours is different and the plugin doesn't fit it, that's worth hearing about. Every suggestion is read, though not everything can be built."
+  - type: textarea
+    id: task
+    attributes:
+      label: What are you trying to do with your coursework?
+      description: "Start with what you're doing, not the feature. For example, \"I take two courses at once and want to see both weeks' readings together.\""
+    validations:
+      required: true
+  - type: textarea
+    id: gets-in-the-way
+    attributes:
+      label: What gets in the way now?
+      description: What does Hold Course do, or not do, that makes this harder?
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: Your idea, if you have one. A rough sketch is fine.

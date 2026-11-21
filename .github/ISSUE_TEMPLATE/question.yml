@@ -1,0 +1,18 @@
+name: A question
+description: Not sure how something works, or how to use it.
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: "The [README](https://github.com/LiveAQuietLife/obsidian-hold-course#readme) describes every feature. If it doesn't answer your question, ask here. A question that's hard to answer usually means the README or the plugin should be clearer."
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What you've tried or expected
+      description: Optional. What you did, and what you expected to see.

@@ -1,0 +1,88 @@
+name: "Something isn't working"
+description: "Hold Course shows something wrong, loses or changes data, or throws an error."
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Thanks for taking the time. Please leave out anything private: made-up names and titles that show the problem are just as good."
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What were you doing, what did Hold Course do, and what did you expect instead?
+      placeholder: "I marked Lecture 4 attended and it went back to upcoming after I restarted Obsidian…"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of Hold Course?
+      multiple: true
+      options:
+        - "Today strip or HC Today sidebar"
+        - "Semesters or classes (incl. moving, copying)"
+        - "Lectures"
+        - "Assignments"
+        - "Readings or reading pace"
+        - "Exams, grades or attendance"
+        - "Library"
+        - "Groups"
+        - "Syllabus"
+        - "Calendar view"
+        - "Assignments view or Courses view"
+        - "Daily note agenda"
+        - "Reminders or heavy weeks"
+        - "Task sync"
+        - "Export or backup"
+        - "Linked notes"
+        - "Settings"
+        - "Something else"
+  - type: dropdown
+    id: data
+    attributes:
+      label: Was anything lost or changed that you didn't change?
+      options:
+        - "No"
+        - "Yes, something was lost or changed"
+        - "Not sure"
+    validations:
+      required: true
+  - type: dropdown
+    id: sync
+    attributes:
+      label: Do you use the vault on more than one device?
+      options:
+        - "No, one device"
+        - "Yes, with Obsidian Sync"
+        - "Yes, with iCloud, Dropbox, OneDrive or similar"
+        - "Yes, with Git or Syncthing"
+        - "Yes, another way"
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Hold Course version
+      description: Settings → Community plugins.
+    validations:
+      required: true
+  - type: input
+    id: obsidian-version
+    attributes:
+      label: Obsidian version
+      description: Settings → General.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Device
+      multiple: true
+      options:
+        - "Windows"
+        - "macOS"
+        - "Linux"
+        - "iPhone or iPad"
+        - "Android"
+  - type: textarea
+    id: console
+    attributes:
+      label: Errors in the developer console (optional, desktop)
+      description: Ctrl+Shift+I (Cmd+Option+I on a Mac), then the Console tab. Copy any red lines that mention Hold Course.
+      render: text
